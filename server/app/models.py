@@ -68,6 +68,7 @@ class Note(Base):
     content_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(default=_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     __table_args__ = (

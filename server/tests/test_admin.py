@@ -56,7 +56,7 @@ def test_concurrent_admin_removals_keep_one(client, db):
         results.append(r.status_code)
 
     threads = [threading.Thread(target=attempt, args=(admin2.id, t1)),
-               threading.Thread(target=attempt, args=(seed['id'], t2))]
+               threading.Thread(target=attempt, args=(seed["id"], t2))]
     for th in threads:
         th.start()
     for th in threads:

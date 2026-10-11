@@ -531,3 +531,16 @@ The data model is ready when:
 - Knowledge assertions retain provenance and explicit/inferred status.
 - Schema migrations and integrity tests pass.
 - The API and test plan match the implemented schema.
+
+## 19. Evidence offset convention
+
+`evidence.start_offset` and `evidence.end_offset` are **UTF-16 code unit
+offsets** into `notes.content`. This matches the Dart/JavaScript convention
+(`string.substring(start, end)`) used by the Flutter client that highlights
+evidence spans, so a client can slice `content[start_offset:end_offset]` and
+compare it to `evidence.quoted_text`.
+
+Validation rule: `0 <= start_offset <= end_offset <= len_utf16(content)`, and
+`content[start_offset:end_offset]` must equal `quoted_text`. Vietnamese
+combining marks and emoji are counted as one code unit each, consistent with
+the client. Do not switch to code points or bytes without updating the client.

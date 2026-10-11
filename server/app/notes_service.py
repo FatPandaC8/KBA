@@ -17,11 +17,14 @@ def create_note(db: Session, user: User, content: str,
                             detail="content is required and within the size limit")
     if idempotency_key:
         existing = db.execute(
-            select(Note).where(Note.user_id == user.id, Note.content == content)
+            select(Note).where(
+                Note.user_id == user.id, Note.idempotency_key == idempotency_key
+            )
         ).scalar_one_or_none()
         if existing:
             return existing
-    note = Note(user_id=user.id, content=content, capture_type="text", status="active")
+    note = Note(user_id=user.id, content=content, capture_type="text", status="active",
+               idempotency_key=idempotency_key)
     db.add(note)
     db.flush()
     return note
