@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from app.api.routes import admin as admin_routes
 from app.api.routes import auth as auth_routes
+from app.api.routes import knowledge as knowledge_routes
 from app.api.routes import notes as notes_routes
 
 
@@ -27,6 +28,7 @@ app = FastAPI(title="KBA", version="0.1.0", lifespan=_lifespan)
 app.include_router(auth_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(notes_routes.router)
+app.include_router(knowledge_routes.router)
 
 
 @app.get("/health/live")
