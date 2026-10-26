@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Echo — Server Administration & Operations</title>
+  <style>
+    :root {
+      --bg: #F4F6F4;
+      --card-bg: #FFFFFF;
+      --ink: #19211D;
+      --muted: #5D6660;
+      --forest: #23382B;
+      --forest-light: #EBF1ED;
+      --border: #D8DFD9;
+      --danger: #B33928;
+      --danger-bg: #FDE8E6;
+      --warning: #B38600;
+      --warning-bg: #FFF4E5;
+      --success: #288C48;
+      --success-bg: #EAF7EE;
+      --radius: 12px;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.5;
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* Sidebar Navigation */
+    aside {
+      width: 260px;
+      background: var(--card-bg);
+      border-right: 1px solid var(--border);
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-left: 8px;
+    }
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      background: var(--forest);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: bold;
+    }
+    .brand-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    nav { display: flex; flex-direction: column; gap: 4px; }
+    nav button {
+      background: none;
+      border: none;
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    nav button:hover { background: var(--bg); color: var(--ink); }
+    nav button.active { background: var(--forest-light); color: var(--forest); }
+
+    .auth-box {
+      margin-top: auto;
+      padding: 12px;
+      background: var(--bg);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+    }
+    .auth-box label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); }
+    .auth-box input {
+      width: 100%;
+      margin-top: 4px;
+      padding: 6px 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+    }
+
+    /* Main Content Area */
+    main {
+      flex: 1;
+      padding: 32px;
+      max-width: 1280px;
+      overflow-y: auto;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.6px; }
+    .refresh-badge { font-size: 12px; color: var(--muted); }
+
+    /* Cards & Grids */
+    .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+    }
+    .card-title { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .card-metric { font-size: 28px; font-weight: 700; color: var(--ink); margin: 6px 0 2px; }
+    .card-subtext { font-size: 12px; color: var(--muted); }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .status-ok { background: var(--success-bg); color: var(--success); }
+    .status-warn { background: var(--warning-bg); color: var(--warning); }
+    .status-err { background: var(--danger-bg); color: var(--danger); }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+    th { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+    td { padding: 12px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(0,0,0,0.01); }
+
+    /* Action Buttons */
+    .btn {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: white;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn:hover { background: var(--bg); }
+    .btn-primary { background: var(--forest); color: white; border-color: var(--forest); }
+    .btn-primary:hover { background: #19271E; }
+    .btn-danger { background: var(--danger); color: white; border-color: var(--danger); }
+    .btn-sm { padding: 4px 8px; font-size: 11px; border-radius: 6px; }
+
+    /* Forms */
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+    .form-group input, .form-group select {
+      width: 100%;
+      max-width: 480px;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    /* Logs view */
+    .log-terminal {
+      background: #111413;
+      color: #A9B3AD;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 16px;
+      border-radius: var(--radius);
+      height: 480px;
+      overflow-y: auto;
+      line-height: 1.6;
+    }
+    .log-line { border-bottom: 1px solid #1F2622; padding: 2px 0; }
+    .log-time { color: #5D6B62; }
+    .log-INFO { color: #8BE9FD; }
+    .log-WARNING { color: #F1FA8C; }
+    .log-ERROR { color: #FF5555; }
+
+    /* Comparison / Connected Side-by-Side View */
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-top: 16px;
+    }
+    @media (max-width: 860px) {
+      .comparison-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .panel-box {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      background: #FAFCFA;
+    }
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-tag {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    .tag-original { background: #EAECE9; color: var(--ink); }
+    .tag-resolved { background: var(--forest-light); color: var(--forest); }
+    
+    .audio-player-card {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 14px;
+    }
+    .audio-player-card audio {
+      width: 100%;
+      height: 36px;
+      outline: none;
+    }
+    .transcript-box {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--ink);
+      min-height: 90px;
+    }
+
+    /* Modal / Drawer */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.4);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 20px;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-content {
+      background: white;
+      border-radius: var(--radius);
+      width: 100%;
+      max-width: 900px;
+      max-height: 90vh;
+      overflow-y: auto;
+      padding: 24px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+    }
+
+    /* Sections hidden by default */
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+  </style>
+</head>
+<body>
+  <aside>
+    <div class="brand">
+      <div class="brand-logo">E</div>
+      <div class="brand-title">Echo Admin</div>
+    </div>
+    <nav>
+      <button class="active" onclick="showTab('overview')">Overview</button>
+      <button onclick="showTab('captures')">Captures & Content</button>
+      <button onclick="showTab('jobs')">Pipeline Jobs</button>
+      <button onclick="showTab('knowledge')">Knowledge & Embeddings</button>
+      <button onclick="showTab('config')">Configuration</button>
+      <button onclick="showTab('logs')">Logs & Diagnostics</button>
+    </nav>
+    <div class="auth-box">
+      <label>Admin Access Key</label>
+      <input type="password" id="adminToken" value="echo-admin-secure-key-2026" onchange="saveToken()">
+    </div>
+  </aside>
+
+  <main>
+    <!-- TAB 1: OVERVIEW -->
+    <div id="pane-overview" class="tab-pane active">
+      <header>
+        <div>
+          <h1>System Overview</h1>
+          <span class="refresh-badge" id="lastRefreshed">Updating...</span>
+        </div>
+        <button class="btn btn-primary" onclick="loadDashboard()">Refresh</button>
+      </header>
+
+      <div class="grid-4">
+        <div class="card">
+          <div class="card-title">Backend Status</div>
+          <div class="card-metric" id="statusBadge">—</div>
+          <div class="card-subtext" id="statusDetails">FastAPI + Pipeline</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Knowledge Items</div>
+          <div class="card-metric" id="metricKnowledge">—</div>
+          <div class="card-subtext" id="metricEmbeddings">— with embeddings</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Knowledge Relations</div>
+          <div class="card-metric" id="metricRelations">—</div>
+          <div class="card-subtext">Graph connections</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Retained Audio</div>
+          <div class="card-metric" id="metricStorage">—</div>
+          <div class="card-subtext">Consent-gated files</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom: 24px;">
+        <h3 style="margin-bottom: 12px;">Active Pipeline Components</h3>
+        <table style="width: 100%;">
+          <thead>
+            <tr><th>Component</th><th>Technology</th><th>Status</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Speech Recognition</td>
+              <td>faster-whisper (tiny int8) + remote Whisper fallback</td>
+              <td><span class="status-pill status-ok">Ready</span></td>
+              <td>CPU-optimized, real-time VAD enabled</td>
+            </tr>
+            <tr>
+              <td>Knowledge Extraction</td>
+              <td>Local Semantic Linguistic Engine + GPT-4o-mini fallback</td>
+              <td><span class="status-pill status-ok">Active</span></td>
+              <td>Extracts core idea, concepts, tags, open questions</td>
+            </tr>
+            <tr>
+              <td>Dense Embeddings</td>
+              <td>FastEmbed (BAAI/bge-small-en-v1.5)</td>
+              <td><span class="status-pill status-ok">Ready</span></td>
+              <td>384-dim normalized vector embeddings</td>
+            </tr>
+            <tr>
+              <td>Database</td>
+              <td>SQLite + WAL Mode & Foreign Keys</td>
+              <td><span class="status-pill status-ok" id="dbStatus">Connected</span></td>
+              <td>Optimized B-tree indexes applied</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 2: ORIGINAL RECORDING & RESOLVED CONTENT -->
+    <div id="pane-captures" class="tab-pane">
+      <header>
+        <div>
+          <h1>Voice Captures & Resolved Knowledge</h1>
+          <span class="refresh-badge">Connected end-to-end trace from spoken voice to structured knowledge</span>
+        </div>
+        <button class="btn btn-primary" onclick="loadCaptures()">Refresh Captures</button>
+      </header>
+
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Capture ID</th>
+              <th>Audio Recording</th>
+              <th>Original Speech</th>
+              <th>Resolved Output</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="capturesTableBody">
+            <tr><td colspan="6" style="text-align: center; color: var(--muted);">Loading voice captures...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 3: PIPELINE JOBS -->
+    <div id="pane-jobs" class="tab-pane">
+      <header>
+        <div>
+          <h1>Processing Jobs Audit</h1>
+          <span class="refresh-badge">Live background job lifecycle</span>
+        </div>
+        <button class="btn btn-primary" onclick="loadJobs()">Refresh Jobs</button>
+      </header>
+
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Job ID / Capture ID</th>
+              <th>Stage</th>
+              <th>Status</th>
+              <th>Duration</th>
+              <th>Timestamp</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="jobsTableBody">
+            <tr><td colspan="6" style="text-align: center; color: var(--muted);">Loading jobs...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 4: KNOWLEDGE & EMBEDDINGS -->
+    <div id="pane-knowledge" class="tab-pane">
+      <header>
+        <div>
+          <h1>Knowledge Items & Embeddings Index</h1>
+          <span class="refresh-badge">Manage vector coverage and graph synchronization</span>
+        </div>
+        <button class="btn btn-primary" onclick="triggerBackfill()">Rebuild Missing Embeddings</button>
+      </header>
+
+      <div class="card" style="margin-bottom: 20px;">
+        <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+          <input type="text" id="knowledgeSearchInput" placeholder="Filter by title, tags, or concepts..." style="flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;">
+          <button class="btn btn-primary" onclick="loadKnowledge()">Filter</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Core Idea</th>
+              <th>Concepts & Tags</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="knowledgeTableBody">
+            <tr><td colspan="5" style="text-align: center; color: var(--muted);">Loading knowledge items...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 5: CONFIGURATION -->
+    <div id="pane-config" class="tab-pane">
+      <header>
+        <div>
+          <h1>Server Configuration & Secrets</h1>
+          <span class="refresh-badge">Server-side managed AI credentials and parameters</span>
+        </div>
+      </header>
+
+      <div class="card" style="max-width: 600px;">
+        <form onsubmit="saveConfig(event)">
+          <div class="form-group">
+            <label>OpenAI Model Identifier</label>
+            <input type="text" id="cfgModel" value="gpt-4o-mini">
+          </div>
+          <div class="form-group">
+            <label>OpenAI Base URL</label>
+            <input type="text" id="cfgBaseUrl" value="https://api.openai.com/v1">
+          </div>
+          <div class="form-group">
+            <label>API Key (Optional, fallback to local engines if empty)</label>
+            <input type="password" id="cfgApiKey" placeholder="sk-...">
+            <small style="color: var(--muted); display: block; margin-top: 4px;">Stored in-memory & environment; never returned in client responses.</small>
+          </div>
+          <div class="form-group">
+            <label>Max Audio Duration (Seconds)</label>
+            <input type="text" id="cfgMaxDuration" value="30" disabled>
+          </div>
+          <button type="submit" class="btn btn-primary">Save Configuration</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- TAB 6: LOGS -->
+    <div id="pane-logs" class="tab-pane">
+      <header>
+        <div>
+          <h1>Operational Logs & Diagnostics</h1>
+          <span class="refresh-badge">Sanitized server events and diagnostics</span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <select id="logLevelFilter" onchange="loadLogs()" style="padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border);">
+            <option value="">All Levels</option>
+            <option value="INFO">INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+          <button class="btn btn-primary" onclick="loadLogs()">Refresh</button>
+        </div>
+      </header>
+
+      <div class="log-terminal" id="logTerminal">
+        <div class="log-line">Connecting to log stream...</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- SIDE-BY-SIDE INSPECTION MODAL -->
+  <div class="modal-overlay" id="captureModal" onclick="closeModalOnBg(event)">
+    <div class="modal-content">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+        <div>
+          <h2 style="font-size: 20px; font-weight: 700;" id="modalCaptureTitle">Capture Inspection</h2>
+          <span style="font-size: 12px; color: var(--muted);" id="modalCaptureSubtitle">ID: ...</span>
+        </div>
+        <button class="btn btn-sm" onclick="closeModal()">✕ Close</button>
+      </div>
+
+      <!-- CONNECTED SIDE-BY-SIDE COMPARISON GRID -->
+      <div class="comparison-grid">
+        <!-- LEFT: ORIGINAL RECORDING (IMMUTABLE INPUT) -->
+        <div class="panel-box">
+          <div class="panel-header">
+            <span class="panel-tag tag-original">Original User Input</span>
+            <span style="font-size: 11px; color: var(--muted);" id="modalAudioDuration">Duration: —</span>
+          </div>
+
+          <div style="margin-bottom: 12px;">
+            <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px;">AUDIO RECORDING</div>
+            <div id="modalAudioContainer">
+              <!-- Audio element inserted dynamically -->
+            </div>
+          </div>
+
+          <div>
+            <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px;">RAW SPEECH TRANSCRIPTION</div>
+            <div class="transcript-box" id="modalRawTranscript">
+              No speech transcription recorded.
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: RESOLVED CONTENT (PROCESSED / INFERRED) -->
+        <div class="panel-box">
+          <div class="panel-header">
+            <span class="panel-tag tag-resolved">Resolved Content (AI Processed)</span>
+            <span id="modalResolvedStatus" class="status-pill status-ok">Ready</span>
+          </div>
+
+          <div id="modalResolvedContainer">
+            <!-- Structured knowledge output inserted dynamically -->
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px;">
+        <button class="btn btn-primary" onclick="closeModal()">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let token = localStorage.getItem('echo_admin_token') || 'echo-admin-secure-key-2026';
+    document.getElementById('adminToken').value = token;
+
+    function saveToken() {
+      token = document.getElementById('adminToken').value.trim();
+      localStorage.setItem('echo_admin_token', token);
+      loadDashboard();
+    }
+
+    function authHeaders() {
+      return {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      };
+    }
+
+    function showTab(name) {
+      document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('nav button').forEach(el => el.classList.remove('active'));
+      document.getElementById(`pane-${name}`).classList.add('active');
+      event.target.classList.add('active');
+
+      if (name === 'overview') loadDashboard();
+      if (name === 'captures') loadCaptures();
+      if (name === 'jobs') loadJobs();
+      if (name === 'knowledge') loadKnowledge();
+      if (name === 'config') loadConfig();
+      if (name === 'logs') loadLogs();
+    }
+
+    async function loadDashboard() {
+      try {
+        const res = await fetch('/api/admin/status', { headers: authHeaders() });
+        if (res.status === 401) {
+          alert('Unauthorized: Invalid Admin Token. Please enter a valid token in the sidebar.');
+          return;
+        }
+        const data = await res.json();
+        document.getElementById('statusBadge').innerHTML = `<span class="status-pill status-ok">${data.status.toUpperCase()}</span>`;
+        document.getElementById('metricKnowledge').textContent = data.knowledge_count;
+        document.getElementById('metricEmbeddings').textContent = `${data.embeddings_count} with embeddings`;
+        document.getElementById('metricRelations').textContent = data.relationship_count;
+        document.getElementById('metricStorage').textContent = `${(data.audio_storage_bytes / 1024).toFixed(1)} KB`;
+        document.getElementById('dbStatus').textContent = data.database;
+        document.getElementById('lastRefreshed').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function loadCaptures() {
+      try {
+        const res = await fetch('/api/admin/captures?limit=50', { headers: authHeaders() });
+        const captures = await res.json();
+        const tbody = document.getElementById('capturesTableBody');
+        if (!captures.length) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--muted);">No voice captures recorded yet.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = captures.map(c => {
+          const hasAudio = c.has_audio;
+          const audioPlayerHtml = hasAudio ? `
+            <audio controls preload="none" style="height: 32px; width: 220px;" src="${c.audio_url}?auth=${encodeURIComponent(token)}">
+              Your browser does not support the audio element.
+            </audio>
+          ` : `<span style="color: var(--muted); font-size: 12px;">Purged (No consent)</span>`;
+
+          const rawTranscript = c.original_transcript ? 
+            `<div style="max-width: 260px; font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${c.original_transcript}</div>` : 
+            `<span style="color: var(--muted); font-size: 12px;">—</span>`;
+
+          const resolvedTitle = c.resolved_item ? 
+            `<div style="font-weight: 600; font-size: 13px;">${c.resolved_item.title}</div>
+             <small style="color: var(--muted); font-size: 11px;">${(c.resolved_item.concepts || []).slice(0, 2).join(', ')}</small>` : 
+            `<span style="color: var(--danger); font-size: 12px;">${c.error_message ? 'Failed: ' + c.error_message : 'Not resolved'}</span>`;
+
+          const statusBadge = c.status === 'ready' ? 
+            `<span class="status-pill status-ok">Ready</span>` : 
+            (c.status === 'failed' ? `<span class="status-pill status-err">Failed</span>` : `<span class="status-pill status-warn">${c.status}</span>`);
+
+          return `
+            <tr>
+              <td>
+                <div style="font-family: var(--font-mono); font-size: 12px; font-weight: 600;">${c.capture_id.slice(0, 8)}...</div>
+                <small style="color: var(--muted);">${(c.created_at || '').slice(0, 16).replace('T', ' ')}</small>
+              </td>
+              <td>${audioPlayerHtml}</td>
+              <td>${rawTranscript}</td>
+              <td>${resolvedTitle}</td>
+              <td>${statusBadge}</td>
+              <td>
+                <button class="btn btn-sm btn-primary" onclick="openCaptureDetail('${c.capture_id}')">Inspect Pair</button>
+              </td>
+            </tr>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    let activeCaptureData = null;
+
+    async function openCaptureDetail(captureId) {
+      try {
+        const res = await fetch(`/api/admin/captures/${captureId}`, { headers: authHeaders() });
+        if (!res.ok) {
+          alert('Failed to load capture details');
+          return;
+        }
+        const c = await res.json();
+        activeCaptureData = c;
+
+        document.getElementById('modalCaptureTitle').textContent = c.resolved_item ? c.resolved_item.title : `Voice Capture ${c.capture_id.slice(0, 8)}`;
+        document.getElementById('modalCaptureSubtitle').textContent = `Capture ID: ${c.capture_id} • Created: ${c.created_at || '—'}`;
+        document.getElementById('modalAudioDuration').textContent = `Duration: ${(c.duration_ms / 1000).toFixed(1)}s`;
+
+        // Original Audio Player
+        const audioContainer = document.getElementById('modalAudioContainer');
+        if (c.has_audio) {
+          audioContainer.innerHTML = `
+            <div class="audio-player-card">
+              <audio controls autoplay style="width: 100%;" src="${c.audio_url}?auth=${encodeURIComponent(token)}"></audio>
+              <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 4px;">
+                <span>Original AAC/M4A Audio</span>
+                <span>Immutable Source</span>
+              </div>
+            </div>
+          `;
+        } else {
+          audioContainer.innerHTML = `
+            <div class="audio-player-card" style="background: var(--bg); color: var(--muted); font-size: 13px;">
+              Recording audio purged immediately after processing per default-deny user privacy consent policy.
+            </div>
+          `;
+        }
+
+        // Original Speech Transcript
+        const transcriptEl = document.getElementById('modalRawTranscript');
+        transcriptEl.textContent = c.original_transcript || 'No speech transcript extracted (silence, unintelligible recording, or pending).';
+
+        // Resolved Content
+        const resolvedContainer = document.getElementById('modalResolvedContainer');
+        const resolvedStatusEl = document.getElementById('modalResolvedStatus');
+
+        if (c.status === 'ready' && c.resolved_item) {
+          resolvedStatusEl.className = 'status-pill status-ok';
+          resolvedStatusEl.textContent = 'Completed';
+
+          const k = c.resolved_item;
+          resolvedContainer.innerHTML = `
+            <div style="margin-bottom: 12px;">
+              <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px;">TITLE</div>
+              <div style="font-size: 15px; font-weight: 700; color: var(--ink);">${k.title}</div>
+            </div>
+
+            <div style="margin-bottom: 12px;">
+              <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px;">CORE IDEA</div>
+              <div style="font-size: 13px; color: var(--ink); line-height: 1.5; background: white; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">${k.core_idea}</div>
+            </div>
+
+            ${k.details && k.details !== k.core_idea ? `
+              <div style="margin-bottom: 12px;">
+                <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px;">DETAILS</div>
+                <div style="font-size: 12px; color: var(--muted); line-height: 1.5;">${k.details}</div>
+              </div>
+            ` : ''}
+
+            <div style="margin-bottom: 12px;">
+              <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px;">CONCEPTS & TAGS</div>
+              <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                ${(k.concepts || []).map(c => `<span class="status-pill status-ok" style="font-size: 11px;">${c}</span>`).join('')}
+                ${(k.tags || []).map(t => `<span class="status-pill status-warn" style="font-size: 11px;">#${t}</span>`).join('')}
+              </div>
+            </div>
+
+            ${(k.open_questions && k.open_questions.length) ? `
+              <div style="margin-bottom: 8px;">
+                <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px;">OPEN QUESTIONS</div>
+                <ul style="padding-left: 18px; font-size: 12px; color: var(--muted);">
+                  ${k.open_questions.map(q => `<li>${q}</li>`).join('')}
+                </ul>
+              </div>
+            ` : ''}
+
+            <div style="font-size: 11px; color: var(--muted); margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 8px;">
+              Provenance: <code>${k.provenance}</code>
+            </div>
+          `;
+        } else {
+          resolvedStatusEl.className = c.status === 'failed' ? 'status-pill status-err' : 'status-pill status-warn';
+          resolvedStatusEl.textContent = c.status.toUpperCase();
+
+          resolvedContainer.innerHTML = `
+            <div style="padding: 16px; background: white; border: 1px solid var(--border); border-radius: 8px; text-align: center;">
+              <div style="font-weight: 600; color: var(--danger); margin-bottom: 4px;">
+                ${c.status === 'failed' ? 'Processing Failed' : 'Processing in Progress'}
+              </div>
+              <div style="font-size: 12px; color: var(--muted); margin-bottom: 12px;">
+                ${c.error_message || 'Pipeline did not produce resolved knowledge.'}
+              </div>
+              ${c.has_audio ? `<button class="btn btn-sm btn-primary" onclick="retryJob('${c.capture_id}')">Retry Processing Pipeline</button>` : ''}
+            </div>
+          `;
+        }
+
+        document.getElementById('captureModal').classList.add('open');
+      } catch (e) {
+        alert(`Error inspecting capture: ${e}`);
+      }
+    }
+
+    function closeModal() {
+      // Pause any running audio
+      const audio = document.querySelector('#modalAudioContainer audio');
+      if (audio) audio.pause();
+      document.getElementById('captureModal').classList.remove('open');
+    }
+
+    function closeModalOnBg(e) {
+      if (e.target.id === 'captureModal') closeModal();
+    }
+
+    async function loadJobs() {
+      try {
+        const res = await fetch('/api/admin/jobs?limit=50', { headers: authHeaders() });
+        const jobs = await res.json();
+        const tbody = document.getElementById('jobsTableBody');
+        if (!jobs.length) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--muted);">No jobs recorded yet.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = jobs.map(j => `
+          <tr>
+            <td>
+              <div style="font-weight: 600;">${j.capture_id}</div>
+              <small style="color: var(--muted);">${j.id.slice(0, 8)}</small>
+            </td>
+            <td><span class="status-pill status-ok">${j.stage}</span></td>
+            <td><span class="status-pill ${j.status === 'ready' ? 'status-ok' : (j.status === 'failed' ? 'status-err' : 'status-warn')}">${j.status}</span></td>
+            <td>${j.duration_ms} ms</td>
+            <td>${j.created_at || '—'}</td>
+            <td>
+              ${j.status === 'failed' ? `<button class="btn btn-sm btn-primary" onclick="retryJob('${j.capture_id}')">Retry</button>` : '—'}
+            </td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function retryJob(captureId) {
+      if (!confirm(`Retry processing job for capture ${captureId}?`)) return;
+      try {
+        const res = await fetch(`/api/admin/jobs/${captureId}/retry`, {
+          method: 'POST',
+          headers: authHeaders()
+        });
+        if (res.ok) {
+          alert('Job queued and processed successfully.');
+          loadJobs();
+          if (activeCaptureData) openCaptureDetail(captureId);
+        } else {
+          const err = await res.json();
+          alert(`Retry failed: ${err.detail}`);
+        }
+      } catch (e) {
+        alert(`Error: ${e}`);
+      }
+    }
+
+    async function loadKnowledge() {
+      const q = document.getElementById('knowledgeSearchInput').value.trim();
+      try {
+        const res = await fetch(`/api/admin/knowledge?q=${encodeURIComponent(q)}&limit=50`, { headers: authHeaders() });
+        const items = await res.json();
+        const tbody = document.getElementById('knowledgeTableBody');
+        if (!items.length) {
+          tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--muted);">No matching knowledge records.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = items.map(k => `
+          <tr>
+            <td style="font-weight: 600;">${k.title}</td>
+            <td style="max-width: 300px; color: var(--muted);">${k.core_idea}</td>
+            <td>
+              ${k.concepts.map(c => `<span class="status-pill status-ok" style="margin-right: 4px; font-size: 10px;">${c}</span>`).join('')}
+              ${k.tags.map(t => `<span class="status-pill status-warn" style="margin-right: 4px; font-size: 10px;">#${t}</span>`).join('')}
+            </td>
+            <td>${(k.created_at || '').slice(0, 10)}</td>
+            <td>
+              <button class="btn btn-sm btn-danger" onclick="deleteKnowledge('${k.id}')">Delete</button>
+            </td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function deleteKnowledge(id) {
+      if (!confirm('Permanently delete this knowledge item, its embedding, and related edges?')) return;
+      await fetch(`/api/knowledge/${id}`, { method: 'DELETE', headers: authHeaders() });
+      loadKnowledge();
+      loadDashboard();
+    }
+
+    async function triggerBackfill() {
+      if (!confirm('Calculate and index embeddings for all items lacking vector representations?')) return;
+      try {
+        const res = await fetch('/api/admin/embeddings/backfill', { method: 'POST', headers: authHeaders() });
+        const data = await res.json();
+        alert(`Embedding Backfill Completed:\nTotal items evaluated: ${data.total_items}\nNewly indexed: ${data.newly_indexed}\nFailed: ${data.failed}`);
+        loadDashboard();
+      } catch (e) {
+        alert(`Backfill error: ${e}`);
+      }
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/admin/config', { headers: authHeaders() });
+        const cfg = await res.json();
+        document.getElementById('cfgModel').value = cfg.model;
+        document.getElementById('cfgBaseUrl').value = cfg.base_url;
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function saveConfig(e) {
+      e.preventDefault();
+      const model = document.getElementById('cfgModel').value.trim();
+      const baseUrl = document.getElementById('cfgBaseUrl').value.trim();
+      const apiKey = document.getElementById('cfgApiKey').value.trim();
+
+      const res = await fetch('/api/admin/config', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ model, base_url: baseUrl, api_key: apiKey || undefined })
+      });
+      if (res.ok) {
+        alert('Configuration updated successfully.');
+        document.getElementById('cfgApiKey').value = '';
+      } else {
+        alert('Failed to update configuration.');
+      }
+    }
+
+    async function loadLogs() {
+      const lvl = document.getElementById('logLevelFilter').value;
+      try {
+        const res = await fetch(`/api/admin/logs?limit=100${lvl ? `&level=${lvl}` : ''}`, { headers: authHeaders() });
+        const data = await res.json();
+        const term = document.getElementById('logTerminal');
+        if (!data.logs.length) {
+          term.innerHTML = '<div class="log-line">No recent log entries matching filter.</div>';
+          return;
+        }
+        term.innerHTML = data.logs.map(l => `
+          <div class="log-line">
+            <span class="log-time">[${l.timestamp}]</span>
+            <span class="log-${l.level}">[${l.level}]</span>
+            <span style="color: #6272A4;">[${l.logger}]</span>
+            <span>${l.message}</span>
+          </div>
+        `).join('');
+        term.scrollTop = term.scrollHeight;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    // Auto-load overview on boot
+    loadDashboard();
+  </script>
+</body>
+</html>

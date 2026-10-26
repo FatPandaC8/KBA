@@ -1,0 +1,48 @@
+import pytest
+from fastapi.testclient import TestClient
+from server.app.main import app
+from server.app.infrastructure.config import get_settings
+
+client = TestClient(app)
+
+def test_admin_endpoints_require_authorization():
+    # Attempting to access admin without credentials yields 401 Unauthorized
+    resp = client.get("/api/admin/status")
+    assert resp.status_code == 401
+
+    resp_jobs = client.get("/api/admin/jobs")
+    assert resp_jobs.status_code == 401
+
+def test_admin_status_with_valid_token():
+    settings = get_settings()
+    token = settings.admin_token
+
+    # Test using Bearer Token
+    resp = client.get(
+        "/api/admin/status",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert "knowledge_count" in data
+    assert "embeddings_count" in data
+    assert data["database"] == "connected"
+
+def test_admin_config_get_and_update():
+    settings = get_settings()
+    token = settings.admin_token
+
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = client.get("/api/admin/config", headers=headers)
+    assert resp.status_code == 200
+    cfg = resp.json()
+    assert cfg["model"] == settings.openai_model
+    # Ensure secrets are never returned
+    assert "api_key" not in cfg or cfg.get("has_api_key") is not None
+
+def test_admin_ui_page_serves():
+    resp = client.get("/admin")
+    assert resp.status_code == 200
+    assert "Echo Admin" in resp.text
+    assert "System Overview" in resp.text
