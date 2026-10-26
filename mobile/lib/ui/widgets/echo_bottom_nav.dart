@@ -5,36 +5,119 @@ import 'package:mobile/core/theme/echo_colors.dart';
 class EchoBottomNav extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
+  final VoidCallback onCenterCapture;
 
   const EchoBottomNav({
     super.key,
     required this.currentIndex,
     required this.onTap,
+    required this.onCenterCapture,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: EchoColors.surface,
-        border: Border(top: BorderSide(color: EchoColors.border, width: 1)),
-      ),
-      padding: EdgeInsets.only(
-        top: 6,
-        bottom: MediaQuery.of(context).padding.bottom + 6,
-        left: 24,
-        right: 24,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
+    const double fabDiameter = 58.0;
+    const double barHeight = 72.0;
+    final bottomPadding = MediaQuery.of(context).padding.bottom;
+
+    return SizedBox(
+      height: barHeight + bottomPadding,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.bottomCenter,
         children: [
-          _buildNavItem(0, 'Home', Icons.home_outlined, Icons.home),
-          _buildNavItem(1, 'Recall', Icons.search_outlined, Icons.search),
-          _buildNavItem(
-            2,
-            'Library',
-            Icons.library_books_outlined,
-            Icons.library_books,
+          // Background Bar Surface with Top Divider aligned to center of FAB
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: barHeight + bottomPadding - 18,
+            child: Container(
+              decoration: const BoxDecoration(
+                color: EchoColors.surface,
+                border: Border(top: BorderSide(color: EchoColors.border, width: 1.0)),
+              ),
+            ),
+          ),
+
+          // Main Navigation Row
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: bottomPadding,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // Left Action: Recall
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: _buildNavItem(
+                      1,
+                      'Recall',
+                      Icons.search_outlined,
+                      Icons.search,
+                    ),
+                  ),
+
+                  // Center Prominent Capture FAB
+                  GestureDetector(
+                    onTap: onCenterCapture,
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: fabDiameter,
+                            height: fabDiameter,
+                            decoration: BoxDecoration(
+                              color: EchoColors.forest,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: EchoColors.forest.withValues(alpha: 0.35),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.mic,
+                              color: Colors.white,
+                              size: 30,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          const Text(
+                            'Capture',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: EchoColors.forest,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // Right Action: Library
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: _buildNavItem(
+                      2,
+                      'Library',
+                      Icons.library_books_outlined,
+                      Icons.library_books,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
@@ -55,8 +138,8 @@ class EchoBottomNav extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            height: 32,
-            width: 56,
+            height: 36,
+            width: 60,
             decoration: BoxDecoration(
               color: active ? EchoColors.sageSoft : Colors.transparent,
               borderRadius: BorderRadius.circular(20),
@@ -64,7 +147,7 @@ class EchoBottomNav extends StatelessWidget {
             child: Icon(
               active ? activeIcon : icon,
               color: active ? EchoColors.forest : EchoColors.muted,
-              size: 21,
+              size: 22,
             ),
           ),
           const SizedBox(height: 3),
@@ -81,3 +164,4 @@ class EchoBottomNav extends StatelessWidget {
     );
   }
 }
+

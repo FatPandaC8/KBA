@@ -16,7 +16,12 @@ void main() async {
   final noteRepository = NoteRepository();
   final aiService = AIService(settingsService);
   final backendService = BackendService(settingsService);
-  final noteProvider = NoteProvider(noteRepository, aiService, backendService);
+  final noteProvider = NoteProvider(
+    noteRepository,
+    aiService,
+    backendService,
+    settingsService,
+  );
   final audioService = AudioService();
 
   runApp(

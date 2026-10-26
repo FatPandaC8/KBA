@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'package:mobile/core/theme/echo_colors.dart';
-import 'package:mobile/core/theme/echo_theme.dart';
 import 'package:mobile/state/note_provider.dart';
 import 'package:mobile/ui/widgets/echo_app_bar.dart';
 import 'package:mobile/ui/widgets/note_card.dart';
-import 'package:mobile/ui/screens/home/widgets/text_capture_dialog.dart';
 
 import 'widgets/knowledge_graph_widget.dart';
 
@@ -36,20 +34,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
     super.dispose();
   }
 
-  void _openTextCapture() {
-    showDialog(
-      context: context,
-      builder: (_) => TextCaptureDialog(
-        onSave: (text) async {
-          final note = await widget.noteProvider.createTextNote(text);
-          if (mounted) {
-            widget.onOpenDetail(note.id);
-          }
-        },
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -77,23 +61,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('YOUR KNOWLEDGE', style: EchoTheme.eyebrow),
-                          const SizedBox(height: 4),
-                          Text(
-                            _activeView == 'list'
-                                ? 'All captures'
-                                : 'Connected ideas',
-                            style: const TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.w700,
-                              color: EchoColors.ink,
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                        ],
+                      Text(
+                        _activeView == 'list'
+                            ? 'All captures'
+                            : 'Connected ideas',
+                        style: const TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w700,
+                          color: EchoColors.ink,
+                          letterSpacing: -0.5,
+                        ),
                       ),
 
                       // Figma View Toggle (List vs Graph)
@@ -271,103 +248,112 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
                   const SizedBox(height: 14),
 
-                  // Content Body: List View or Graph View
-                  if (_activeView == 'graph') ...[
-                    KnowledgeGraphWidget(
-                      noteProvider: widget.noteProvider,
-                      onOpenDetail: widget.onOpenDetail,
-                      searchQuery: _filter,
-                    ),
-                  ] else ...[
-                    Text(
-                      '${filteredNotes.length} ITEMS · NEWEST FIRST',
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.1,
-                        color: EchoColors.muted,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    filteredNotes.isEmpty
-                        ? Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 60),
-                            child: Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Container(
-                                    width: 56,
-                                    height: 56,
-                                    decoration: const BoxDecoration(
-                                      color: EchoColors.sageSoft,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(
-                                      Icons.library_books_outlined,
-                                      color: EchoColors.forest,
-                                      size: 28,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  Text(
-                                    _filter.isEmpty
-                                        ? 'No captures yet'
-                                        : 'No matching captures',
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: EchoColors.ink,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    _filter.isEmpty
-                                        ? 'Record audio or type a note to begin.'
-                                        : 'Try another search term.',
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      color: EchoColors.muted,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                  // Content Body: List View or Graph View with animated transition
+                  AnimatedSwitcher(
+                    duration: MediaQuery.of(context).disableAnimations
+                        ? Duration.zero
+                        : const Duration(milliseconds: 250),
+                    switchInCurve: Curves.easeOut,
+                    switchOutCurve: Curves.easeIn,
+                    child: _activeView == 'graph'
+                        ? KeyedSubtree(
+                            key: const ValueKey('graph_view'),
+                            child: KnowledgeGraphWidget(
+                              noteProvider: widget.noteProvider,
+                              onOpenDetail: widget.onOpenDetail,
+                              searchQuery: _filter,
                             ),
                           )
-                        : ListView.separated(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: filteredNotes.length,
-                            separatorBuilder: (_, _) =>
+                        : KeyedSubtree(
+                            key: const ValueKey('list_view'),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${filteredNotes.length} ITEMS · NEWEST FIRST',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 1.1,
+                                    color: EchoColors.muted,
+                                  ),
+                                ),
                                 const SizedBox(height: 12),
-                            itemBuilder: (context, index) {
-                              final note = filteredNotes[index];
-                              return NoteCard(
-                                note: note,
-                                onTap: () => widget.onOpenDetail(note.id),
-                                onRetry: () => widget.noteProvider
-                                    .syncCaptureToBackend(note.id),
-                              );
-                            },
+                                filteredNotes.isEmpty
+                                    ? Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 60,
+                                        ),
+                                        child: Center(
+                                          child: Column(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Container(
+                                                width: 56,
+                                                height: 56,
+                                                decoration: const BoxDecoration(
+                                                  color: EchoColors.sageSoft,
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: const Icon(
+                                                  Icons.library_books_outlined,
+                                                  color: EchoColors.forest,
+                                                  size: 28,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 16),
+                                              Text(
+                                                _filter.isEmpty
+                                                    ? 'No captures yet'
+                                                    : 'No matching captures',
+                                                style: const TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: EchoColors.ink,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 6),
+                                              Text(
+                                                _filter.isEmpty
+                                                    ? 'Record audio or type a note to begin.'
+                                                    : 'Try another search term.',
+                                                style: const TextStyle(
+                                                  fontSize: 13,
+                                                  color: EchoColors.muted,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      )
+                                    : ListView.separated(
+                                        shrinkWrap: true,
+                                        physics:
+                                            const NeverScrollableScrollPhysics(),
+                                        itemCount: filteredNotes.length,
+                                        separatorBuilder: (_, _) =>
+                                            const SizedBox(height: 12),
+                                        itemBuilder: (context, index) {
+                                          final note = filteredNotes[index];
+                                          return NoteCard(
+                                            note: note,
+                                            onTap: () =>
+                                                widget.onOpenDetail(note.id),
+                                            onRetry: () => widget.noteProvider
+                                                .syncCaptureToBackend(note.id),
+                                          );
+                                        },
+                                      ),
+                              ],
+                            ),
                           ),
-                  ],
+                  ),
                 ],
               ),
             ),
           );
         },
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: EchoColors.forest,
-        foregroundColor: Colors.white,
-        elevation: 4,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        icon: const Icon(Icons.add, size: 20),
-        label: const Text(
-          'Capture',
-          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-        ),
-        onPressed: _openTextCapture,
       ),
     );
   }

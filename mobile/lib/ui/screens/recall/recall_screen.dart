@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import 'package:mobile/core/theme/echo_colors.dart';
-import 'package:mobile/core/theme/echo_theme.dart';
 import 'package:mobile/state/note_provider.dart';
 
 import 'package:mobile/ui/widgets/echo_app_bar.dart';
@@ -50,8 +49,6 @@ class _RecallScreenState extends State<RecallScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('SEARCH BY MEANING', style: EchoTheme.eyebrow),
-                  const SizedBox(height: 6),
                   const Text(
                     'What do you want to remember?',
                     style: TextStyle(
@@ -61,7 +58,7 @@ class _RecallScreenState extends State<RecallScreen> {
                       letterSpacing: -0.6,
                     ),
                   ),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 16),
 
                   // Search Box matching Figma
                   Container(

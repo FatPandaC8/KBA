@@ -13,6 +13,19 @@ from .schemas import KnowledgeItem, KnowledgeRelationship
 PIPELINE_VERSION = "v1.2-echo-real"
 
 _GLOBAL_WHISPER_MODEL = None
+_GLOBAL_EMBED_MODEL = None
+
+def get_embed_model():
+    """Lazily load fastembed bge-small-en-v1.5 model on CPU for local embeddings."""
+    global _GLOBAL_EMBED_MODEL
+    if _GLOBAL_EMBED_MODEL is None:
+        try:
+            from fastembed import TextEmbedding
+            _GLOBAL_EMBED_MODEL = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+        except Exception as e:
+            print(f"[Embedding] Warning: Failed to load fastembed model: {e}")
+            _GLOBAL_EMBED_MODEL = None
+    return _GLOBAL_EMBED_MODEL
 
 def get_whisper_model():
     """Lazily load faster-whisper tiny model on CPU for local STT."""
@@ -197,6 +210,7 @@ class ExtractionPipeline:
         candidate_relations = [f"Related to: {c}" for c in concepts[:3]]
 
         item = KnowledgeItem(
+            id=capture_id,
             capture_id=capture_id,
             title=title,
             core_idea=core_idea,
@@ -328,3 +342,34 @@ class ExtractionPipeline:
                 ))
 
         return relationships
+
+    def embed_text(self, text: str) -> np.ndarray:
+        """Generates normalized dense embedding vector for given text."""
+        clean = text.strip()
+        if not clean:
+            return np.zeros(384, dtype=np.float32)
+
+        model = get_embed_model()
+        if model is None:
+            raise RuntimeError("Embedding model is not available")
+
+        # fastembed returns generator of numpy arrays
+        embeddings = list(model.embed([clean]))
+        vec = embeddings[0].astype(np.float32)
+        norm = np.linalg.norm(vec)
+        if norm > 0:
+            vec = vec / norm
+        return vec
+
+    def embed_knowledge_item(self, item: KnowledgeItem) -> np.ndarray:
+        """Creates semantic representation of KnowledgeItem combining title, core_idea, transcript, details, and concepts."""
+        parts = [item.title, item.core_idea]
+        if item.details and item.details != item.core_idea:
+            parts.append(item.details)
+        if item.concepts:
+            parts.append("Concepts: " + ", ".join(item.concepts))
+        if item.tags:
+            parts.append("Tags: " + ", ".join(item.tags))
+        text = "\n".join(parts)
+        return self.embed_text(text)
+

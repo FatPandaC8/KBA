@@ -5,18 +5,25 @@ import 'package:mobile/data/models/note.dart';
 import 'package:mobile/data/repositories/note_repository.dart';
 import 'package:mobile/services/ai_service.dart';
 import 'package:mobile/services/backend_service.dart';
+import 'package:mobile/services/settings_service.dart';
 
 class NoteProvider extends ChangeNotifier {
   final NoteRepository _repository;
   final AIService _aiService;
   final BackendService _backendService;
+  final SettingsService? _settingsService;
 
   List<Note> _notes = [];
   bool _isLoading = false;
   String _searchQuery = '';
   List<Note> _searchResults = [];
 
-  NoteProvider(this._repository, this._aiService, this._backendService) {
+  NoteProvider(
+    this._repository,
+    this._aiService,
+    this._backendService, [
+    this._settingsService,
+  ]) {
     loadNotes();
   }
 
@@ -25,6 +32,7 @@ class NoteProvider extends ChangeNotifier {
   String get searchQuery => _searchQuery;
   List<Note> get searchResults => _searchResults;
   BackendService get backendService => _backendService;
+  SettingsService? get settingsService => _settingsService;
 
   Future<void> loadNotes() async {
     _isLoading = true;
@@ -119,7 +127,7 @@ class NoteProvider extends ChangeNotifier {
     return note;
   }
 
-  /// Syncs an audio capture to the backend with offline queue support
+  /// Processes an audio capture via backend pipeline
   Future<void> syncCaptureToBackend(String noteId) async {
     final note = await _repository.getNoteById(noteId);
     if (note == null || note.audioPath == null) return;
@@ -128,9 +136,7 @@ class NoteProvider extends ChangeNotifier {
       // Check backend health
       final isOnline = await _backendService.checkHealth();
       if (!isOnline) {
-        // Leave in 'queued' state for offline sync
-        debugPrint('Backend offline. Note $noteId queued for later sync.');
-        return;
+        throw Exception('Backend server is unreachable');
       }
 
       await _repository.updateNote(
@@ -141,11 +147,14 @@ class NoteProvider extends ChangeNotifier {
       );
       await loadNotes();
 
+      final consentGiven = _settingsService?.evalConsent ?? false;
+
       final result = await _backendService.uploadCapture(
         captureId: note.id,
         idempotencyKey: note.id,
         audioPath: note.audioPath!,
         durationMs: note.audioDurationMs ?? 0,
+        consentGiven: consentGiven,
       );
 
       final updated = note.copyWith(
@@ -162,10 +171,10 @@ class NoteProvider extends ChangeNotifier {
 
       await _repository.updateNote(updated);
     } catch (e) {
-      debugPrint('Sync error on note $noteId: $e');
+      debugPrint('Processing error on note $noteId: $e');
       final current = await _repository.getNoteById(noteId);
       if (current != null) {
-        // Fall back to direct local AI if configured, otherwise mark failed
+        // Fall back to direct client AI if configured, otherwise mark failed
         if (_aiService.isConfigured) {
           await processNoteAI(noteId);
         } else {
@@ -180,22 +189,6 @@ class NoteProvider extends ChangeNotifier {
       }
     } finally {
       await loadNotes();
-    }
-  }
-
-  /// Retry all queued notes (called when network returns)
-  Future<void> retryQueuedNotes() async {
-    final queued = _notes
-        .where(
-          (n) =>
-              n.status == ProcessingStatus.queued ||
-              n.status == ProcessingStatus.failed,
-        )
-        .toList();
-    for (final note in queued) {
-      if (note.audioPath != null) {
-        await syncCaptureToBackend(note.id);
-      }
     }
   }
 
@@ -293,13 +286,34 @@ class NoteProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // 1. Attempt Embedding-based Semantic Recall from Backend
+      final semanticMatches = await _backendService.searchSemantic(query);
+      if (semanticMatches.isNotEmpty) {
+        final Map<String, Note> noteMap = {
+          for (final n in _notes) n.id: n,
+        };
+        final List<Note> ranked = [];
+        for (final match in semanticMatches) {
+          final note = noteMap[match.id];
+          if (note != null) {
+            ranked.add(note);
+          }
+        }
+        if (ranked.isNotEmpty) {
+          _searchResults = ranked;
+          return;
+        }
+      }
+
+      // 2. Fallback to Local Substring Keyword Search if offline or no semantic match
       _searchResults = await _repository.searchNotes(query);
     } catch (e) {
-      debugPrint('Search error: $e');
-      _searchResults = [];
+      debugPrint('Semantic search error, falling back to keyword: $e');
+      _searchResults = await _repository.searchNotes(query);
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
 }
+

@@ -20,46 +20,16 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late TextEditingController _apiKeyController;
-  late TextEditingController _baseUrlController;
-  late TextEditingController _modelController;
   late bool _keepAudio;
   late bool _wifiOnly;
+  late bool _evalConsent;
 
   @override
   void initState() {
     super.initState();
-    _apiKeyController = TextEditingController(
-      text: widget.settingsService.apiKey,
-    );
-    _baseUrlController = TextEditingController(
-      text: widget.settingsService.baseUrl,
-    );
-    _modelController = TextEditingController(
-      text: widget.settingsService.model,
-    );
     _keepAudio = widget.settingsService.keepAudio;
     _wifiOnly = widget.settingsService.wifiOnly;
-  }
-
-  @override
-  void dispose() {
-    _apiKeyController.dispose();
-    _baseUrlController.dispose();
-    _modelController.dispose();
-    super.dispose();
-  }
-
-  void _saveSettings() {
-    widget.settingsService.apiKey = _apiKeyController.text.trim();
-    widget.settingsService.baseUrl = _baseUrlController.text.trim();
-    widget.settingsService.model = _modelController.text.trim();
-    widget.settingsService.keepAudio = _keepAudio;
-    widget.settingsService.wifiOnly = _wifiOnly;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Settings saved successfully!')),
-    );
+    _evalConsent = widget.settingsService.evalConsent;
   }
 
   @override
@@ -82,136 +52,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(height: 20),
 
-              // AI Configuration section
-              const Text(
-                'AI CONFIGURATION (OPTIONAL)',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.2,
-                  color: EchoColors.muted,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: EchoColors.border),
-                ),
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'API Key',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: _apiKeyController,
-                      obscureText: true,
-                      decoration: InputDecoration(
-                        hintText: 'sk-... (leave empty for local-only)',
-                        hintStyle: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF9A9D97),
-                        ),
-                        filled: true,
-                        fillColor: EchoColors.surface,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(
-                            color: EchoColors.border,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Base URL',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: _baseUrlController,
-                      decoration: InputDecoration(
-                        hintText: 'https://api.openai.com/v1',
-                        filled: true,
-                        fillColor: EchoColors.surface,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(
-                            color: EchoColors.border,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Model',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: _modelController,
-                      decoration: InputDecoration(
-                        hintText: 'gpt-4o-mini',
-                        filled: true,
-                        fillColor: EchoColors.surface,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(
-                            color: EchoColors.border,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: EchoColors.forest,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          elevation: 0,
-                        ),
-                        onPressed: _saveSettings,
-                        child: const Text(
-                          'Save AI Credentials',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
               const SizedBox(height: 24),
 
               // Audio & Network Preferences
@@ -225,12 +65,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               const SizedBox(height: 10),
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
+              Material(
+                color: Colors.white,
+                shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: EchoColors.border),
+                  side: const BorderSide(color: EchoColors.border),
                 ),
+                clipBehavior: Clip.antiAlias,
                 child: Column(
                   children: [
                     SwitchListTile(
@@ -272,6 +113,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         widget.settingsService.wifiOnly = val;
                       },
                     ),
+                    const Divider(height: 1, color: EchoColors.border),
+                    SwitchListTile(
+                      activeThumbColor: EchoColors.forest,
+                      title: const Text(
+                        'Evaluation dataset participation',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: const Text(
+                        'Explicit opt-in: Allow server to retain audio recordings for offline pipeline quality evaluation. Disabled by default.',
+                        style: TextStyle(fontSize: 11, color: EchoColors.muted),
+                      ),
+                      value: _evalConsent,
+                      onChanged: (val) {
+                        setState(() => _evalConsent = val);
+                        widget.settingsService.evalConsent = val;
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -280,7 +141,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
               // Privacy card matching Figma
               const Text(
-                'PRIVACY',
+                'PRIVACY & PROCESSING',
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w700,
@@ -301,7 +162,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Your data stays yours',
+                      'Transparent Processing',
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
@@ -309,7 +170,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     SizedBox(height: 6),
                     Text(
-                      'Echo stores your original recordings and notes directly on your device. Original audio and text are never modified during AI organization.',
+                      'Echo stores your source notes on-device and uses the server for transcription, structured knowledge extraction, and embedding-based semantic recall. Audio is not retained on the server unless you opt in to evaluation participation.',
                       style: TextStyle(
                         fontSize: 11,
                         color: EchoColors.muted,

@@ -73,8 +73,40 @@ def init_db():
         created_at TEXT
     )
     """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS knowledge_embeddings (
+        item_id TEXT PRIMARY KEY,
+        embedding BLOB,
+        updated_at TEXT
+    )
+    """)
     conn.commit()
     conn.close()
+
+def save_embedding(item_id: str, vector_bytes: bytes):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+    INSERT OR REPLACE INTO knowledge_embeddings (item_id, embedding, updated_at)
+    VALUES (?, ?, datetime('now'))
+    """, (item_id, vector_bytes))
+    conn.commit()
+    conn.close()
+
+def get_all_embeddings():
+    conn = get_connection()
+    c = conn.cursor()
+    rows = c.execute("SELECT item_id, embedding FROM knowledge_embeddings").fetchall()
+    conn.close()
+    return [(r["item_id"], r["embedding"]) for r in rows]
+
+def delete_embedding(item_id: str):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM knowledge_embeddings WHERE item_id = ?", (item_id,))
+    conn.commit()
+    conn.close()
+
 
 def save_capture(capture_id: str, idempotency_key: str, audio_path: str, duration_ms: int, status: str = "received"):
     conn = get_connection()
@@ -206,6 +238,7 @@ def delete_knowledge_item(item_id: str):
     for tid in target_ids:
         c.execute("DELETE FROM knowledge_items WHERE id = ?", (tid,))
         c.execute("DELETE FROM relationships WHERE from_id = ? OR to_id = ?", (tid, tid))
+        c.execute("DELETE FROM knowledge_embeddings WHERE item_id = ?", (tid,))
     conn.commit()
     conn.close()
 

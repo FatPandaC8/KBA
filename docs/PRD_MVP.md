@@ -1,4 +1,12 @@
-# PRD — Personal Knowledge Capture & Recall (MVP)
+> [!WARNING]
+> **SUPERSEDED DOCUMENT**
+> This initial MVP draft has been superseded by the updated technical documentation suite:
+> - Product overview, current status, setup: [README.md](../README.md)
+> - Technical architecture, schemas, and API: [docs/ARCHITECTURE.md](ARCHITECTURE.md)
+> - Voice pipeline, extraction, and evaluation: [docs/AI_PIPELINE.md](AI_PIPELINE.md)
+> - Verified status, gaps, and roadmap milestones: [docs/ROADMAP.md](ROADMAP.md)
+
+# PRD — Personal Knowledge Capture & Recall (MVP) [Historical Reference]
 
 Version 0.2 · Flutter · Mobile app · Researcher / Research Student
 

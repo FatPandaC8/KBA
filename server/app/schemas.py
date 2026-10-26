@@ -57,3 +57,11 @@ class EvalExportRecord(BaseModel):
     structured_knowledge: dict
     user_corrected: bool = False
     pipeline_version: str = "v1.0"
+
+class ScoredKnowledgeItem(BaseModel):
+    item: KnowledgeItem
+    similarity_score: float
+
+class ConsentUpdateRequest(BaseModel):
+    consent_given: bool
+

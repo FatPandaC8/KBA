@@ -30,6 +30,27 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
   @override
   void initState() {
     super.initState();
+    widget.noteProvider.addListener(_onProviderChanged);
+    _loadRelationships();
+  }
+
+  @override
+  void didUpdateWidget(KnowledgeGraphWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.noteProvider != widget.noteProvider) {
+      oldWidget.noteProvider.removeListener(_onProviderChanged);
+      widget.noteProvider.addListener(_onProviderChanged);
+      _loadRelationships();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.noteProvider.removeListener(_onProviderChanged);
+    super.dispose();
+  }
+
+  void _onProviderChanged() {
     _loadRelationships();
   }
 
@@ -234,7 +255,7 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
 
         // Interactive Canvas Container
         Container(
-          height: 340,
+          height: 490,
           width: double.infinity,
           decoration: BoxDecoration(
             color: const Color(0xFFF1F3EE),
@@ -295,6 +316,9 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
                                     setState(() {
                                       _selectedNodeId = note.id;
                                     });
+                                  },
+                                  onDoubleTap: () {
+                                    widget.onOpenDetail(note.id);
                                   },
                                   child: Container(
                                     width: posNode.width,
@@ -399,110 +423,66 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
                 ),
               ),
 
-              // Pan Hint Label
+              // Quick open selected node banner
               Positioned(
                 bottom: 8,
-                left: 0,
-                right: 0,
-                child: Center(
+                left: 12,
+                right: 12,
+                child: GestureDetector(
+                  onTap: () => widget.onOpenDetail(selectedNote.id),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
+                      horizontal: 12,
+                      vertical: 8,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.85),
-                      borderRadius: BorderRadius.circular(10),
+                      color: Colors.white.withValues(alpha: 0.94),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: EchoColors.border),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color.fromRGBO(35, 42, 37, 0.06),
+                          blurRadius: 8,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
                     ),
-                    child: const Text(
-                      'Drag to pan · Tap node to focus connections',
-                      style: TextStyle(fontSize: 9, color: EchoColors.muted),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                selectedNote.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: EchoColors.ink,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${neighborIds.length} connected ideas · Tap to open',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  color: EchoColors.muted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.arrow_forward_ios,
+                          size: 12,
+                          color: EchoColors.forest,
+                        ),
+                      ],
                     ),
                   ),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 12),
-
-        // Node Inspector Card matching Figma design
-        Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: EchoColors.border),
-            boxShadow: const [
-              BoxShadow(
-                color: Color.fromRGBO(35, 42, 37, 0.04),
-                blurRadius: 10,
-                offset: Offset(0, 3),
-              ),
-            ],
-          ),
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    selectedNote.audioPath != null ? 'VOICE CAPTURE' : 'TEXT NOTE',
-                    style: const TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 1.1,
-                      color: EchoColors.forest2,
-                    ),
-                  ),
-                  if (neighborIds.isNotEmpty)
-                    Text(
-                      '${neighborIds.length} connected ${neighborIds.length == 1 ? "idea" : "ideas"}',
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: EchoColors.forest,
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                selectedNote.title,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: EchoColors.ink,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                selectedNote.summary ?? selectedNote.originalContent,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12, color: EchoColors.muted),
-              ),
-              const SizedBox(height: 12),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: EchoColors.forest,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 8,
-                  ),
-                ),
-                onPressed: () => widget.onOpenDetail(selectedNote.id),
-                child: const Text(
-                  'Open full item',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
                 ),
               ),
             ],

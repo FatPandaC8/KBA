@@ -28,7 +28,7 @@ class EchoAppBar extends StatelessWidget implements PreferredSizeWidget {
         height: 52,
         child: Row(
           children: [
-            // Left: Back button or Brand 'E' mark
+            // Left: Back button if present
             if (onBack != null)
               IconButton(
                 icon: const Icon(
@@ -40,28 +40,7 @@ class EchoAppBar extends StatelessWidget implements PreferredSizeWidget {
                 splashRadius: 20,
               )
             else
-              Container(
-                width: 30,
-                height: 30,
-                decoration: const BoxDecoration(
-                  color: EchoColors.forest,
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(10),
-                    topRight: Radius.circular(10),
-                    bottomRight: Radius.circular(10),
-                    bottomLeft: Radius.circular(3),
-                  ),
-                ),
-                alignment: Alignment.center,
-                child: const Text(
-                  'E',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
-                ),
-              ),
+              const SizedBox(width: 24),
 
             // Middle: Title
             Expanded(

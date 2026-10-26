@@ -42,4 +42,35 @@ void main() {
       }
     }
   });
+
+  test('DeterministicGraphLayout handles connected vs disconnected nodes and invalid relationship targets', () {
+    final nodes = [
+      GraphNodeModel(id: 'node-A', title: 'Connected Node A', kind: 'capture', x: 0, y: 0),
+      GraphNodeModel(id: 'node-B', title: 'Connected Node B', kind: 'idea', x: 0, y: 0),
+      GraphNodeModel(id: 'node-isolated', title: 'Isolated Node', kind: 'idea', x: 0, y: 0),
+    ];
+
+    final edges = [
+      // Valid edge
+      GraphEdgeModel(id: 'e-valid', fromNode: 'node-A', toNode: 'node-B', type: 'Supports', status: 'suggested'),
+      // Invalid edge with non-existent target
+      GraphEdgeModel(id: 'e-invalid-target', fromNode: 'node-A', toNode: 'node-ghost-404', type: 'Related to', status: 'suggested'),
+      // Invalid edge with non-existent source
+      GraphEdgeModel(id: 'e-invalid-source', fromNode: 'node-ghost-999', toNode: 'node-isolated', type: 'Related to', status: 'suggested'),
+    ];
+
+    // Filter valid edges like KnowledgeGraphWidget does
+    final nodeIds = nodes.map((n) => n.id).toSet();
+    final validEdges = edges.where((e) => nodeIds.contains(e.fromNode) && nodeIds.contains(e.toNode)).toList();
+
+    expect(validEdges.length, 1);
+    expect(validEdges.first.id, 'e-valid');
+
+    final layout = DeterministicGraphLayout.computeLayout(nodes: nodes, edges: validEdges);
+
+    expect(layout.length, 3);
+    expect(layout.containsKey('node-A'), isTrue);
+    expect(layout.containsKey('node-B'), isTrue);
+    expect(layout.containsKey('node-isolated'), isTrue);
+  });
 }

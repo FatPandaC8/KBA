@@ -7,6 +7,7 @@ class SettingsService {
   static const _keyMaxVoiceSeconds = 'max_voice_seconds';
   static const _keyKeepAudio = 'keep_original_audio';
   static const _keyWifiOnly = 'wifi_only';
+  static const _keyEvalConsent = 'evaluation_dataset_consent';
 
   final SharedPreferences _prefs;
 
@@ -40,4 +41,9 @@ class SettingsService {
 
   bool get wifiOnly => _prefs.getBool(_keyWifiOnly) ?? false;
   set wifiOnly(bool value) => _prefs.setBool(_keyWifiOnly, value);
+
+  // Evaluation consent: strictly default to FALSE (opt-in only)
+  bool get evalConsent => _prefs.getBool(_keyEvalConsent) ?? false;
+  set evalConsent(bool value) => _prefs.setBool(_keyEvalConsent, value);
 }
+

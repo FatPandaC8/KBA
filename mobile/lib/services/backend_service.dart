@@ -104,12 +104,14 @@ class BackendService {
     required String idempotencyKey,
     required String audioPath,
     required int durationMs,
+    bool consentGiven = false,
   }) async {
     final uri = Uri.parse('$baseUrl/api/captures/upload');
     final request = http.MultipartRequest('POST', uri)
       ..fields['capture_id'] = captureId
       ..fields['idempotency_key'] = idempotencyKey
       ..fields['duration_ms'] = durationMs.toString()
+      ..fields['consent_given'] = consentGiven ? 'true' : 'false'
       ..files.add(await http.MultipartFile.fromPath('file', audioPath));
 
     final streamedRes = await _client.send(request);
@@ -137,6 +139,34 @@ class BackendService {
     } else {
       throw Exception('Server upload failed (${res.statusCode}): ${res.body}');
     }
+  }
+
+  Future<List<({String id, double score})>> searchSemantic(
+    String query, {
+    int limit = 20,
+  }) async {
+    final uri = Uri.parse(
+      '$baseUrl/api/knowledge/semantic-search?q=${Uri.encodeComponent(query)}&limit=$limit',
+    );
+    final res = await _client.get(uri);
+    if (res.statusCode == 200) {
+      final List data = jsonDecode(utf8.decode(res.bodyBytes));
+      return data.map((entry) {
+        final item = entry['item'] as Map<String, dynamic>;
+        final score = (entry['similarity_score'] as num).toDouble();
+        return (id: item['id'] as String, score: score);
+      }).toList();
+    }
+    return [];
+  }
+
+  Future<void> updateConsent(bool consentGiven) async {
+    final uri = Uri.parse('$baseUrl/api/eval/consent');
+    await _client.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'consent_given': consentGiven}),
+    );
   }
 
   Future<({List<GraphNodeModel> nodes, List<GraphEdgeModel> edges})>
