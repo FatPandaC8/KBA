@@ -1,30 +1,33 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:mobile/main.dart';
+import 'package:mobile/data/models/note.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  test('Note model serialization and deserialization', () {
+    final now = DateTime.now();
+    final note = Note(
+      id: 'test-uuid-123',
+      originalContent: 'Vector search trade-offs',
+      title: 'Vector Search',
+      summary: 'ANN methods gain speed for slight recall loss.',
+      keyFacts: ['Fast query', 'Memory footprint'],
+      openQuestions: ['How to handle memory?'],
+      tags: ['search', 'ai'],
+      status: ProcessingStatus.ready,
+      createdAt: now,
+      updatedAt: now,
+    );
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    final map = note.toMap();
+    expect(map['id'], 'test-uuid-123');
+    expect(map['title'], 'Vector Search');
+    expect(map['status'], 'ready');
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    final reconstructed = Note.fromMap(map);
+    expect(reconstructed.id, note.id);
+    expect(reconstructed.title, note.title);
+    expect(reconstructed.summary, note.summary);
+    expect(reconstructed.keyFacts.length, 2);
+    expect(reconstructed.tags, ['search', 'ai']);
+    expect(reconstructed.status, ProcessingStatus.ready);
   });
 }
