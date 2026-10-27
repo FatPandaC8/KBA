@@ -146,7 +146,7 @@ flutter analyze
 
 ---
 
-## 7. Documentation Index
+## 7. Documentation Index 
 
 - [Architecture Reference](docs/ARCHITECTURE.md): Component diagrams, data contracts, SQLite schemas, and layout mechanics.
 - [AI Pipeline & Evaluation](docs/AI_PIPELINE.md): Audio decoding, STT models, extraction prompts, and evaluation dataset specifications.
