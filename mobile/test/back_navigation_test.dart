@@ -114,7 +114,9 @@ void main() {
     );
   }
 
-  testWidgets('1. Back from detail screen returns to calling screen', (tester) async {
+  testWidgets('1. Back from detail screen returns to calling screen', (
+    tester,
+  ) async {
     await tester.pumpWidget(createTestWidget());
     await tester.pumpAndSettle();
 
@@ -139,7 +141,9 @@ void main() {
     expect(find.byType(HomeScreen), findsOneWidget);
   });
 
-  testWidgets('2. Back from settings modal/screen dismisses it', (tester) async {
+  testWidgets('2. Back from settings modal/screen dismisses it', (
+    tester,
+  ) async {
     await tester.pumpWidget(createTestWidget());
     await tester.pumpAndSettle();
 
@@ -159,7 +163,9 @@ void main() {
     expect(find.byType(HomeScreen), findsOneWidget);
   });
 
-  testWidgets('3. Back after switching main tabs returns to previous tab', (tester) async {
+  testWidgets('3. Back after switching main tabs returns to previous tab', (
+    tester,
+  ) async {
     await tester.pumpWidget(createTestWidget());
     await tester.pumpAndSettle();
 
@@ -184,7 +190,9 @@ void main() {
     expect(find.byType(HomeScreen), findsOneWidget);
   });
 
-  testWidgets('4. Back at root screen (Home tab) allows pop / exit', (tester) async {
+  testWidgets('4. Back at root screen (Home tab) allows pop / exit', (
+    tester,
+  ) async {
     await tester.pumpWidget(createTestWidget());
     await tester.pumpAndSettle();
 
@@ -204,35 +212,38 @@ void main() {
     expect(result, isFalse);
   });
 
-  testWidgets('5. Repeated tab switching followed by Back traverses history correctly', (tester) async {
-    await tester.pumpWidget(createTestWidget());
-    await tester.pumpAndSettle();
+  testWidgets(
+    '5. Repeated tab switching followed by Back traverses history correctly',
+    (tester) async {
+      await tester.pumpWidget(createTestWidget());
+      await tester.pumpAndSettle();
 
-    // Sequence: Home(0) -> Recall(1) -> Library(2)
-    await tester.tap(find.text('Recall'));
-    await tester.pumpAndSettle();
-    expect(find.byType(RecallScreen), findsOneWidget);
+      // Sequence: Home(0) -> Recall(1) -> Library(2)
+      await tester.tap(find.text('Recall'));
+      await tester.pumpAndSettle();
+      expect(find.byType(RecallScreen), findsOneWidget);
 
-    await tester.tap(find.text('Library'));
-    await tester.pumpAndSettle();
-    expect(find.byType(LibraryScreen), findsOneWidget);
+      await tester.tap(find.text('Library'));
+      await tester.pumpAndSettle();
+      expect(find.byType(LibraryScreen), findsOneWidget);
 
-    final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
+      final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
 
-    // First Back -> should go back to Recall
-    await widgetsAppState.didPopRoute();
-    await tester.pumpAndSettle();
-    expect(find.byType(RecallScreen), findsOneWidget);
+      // First Back -> should go back to Recall
+      await widgetsAppState.didPopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byType(RecallScreen), findsOneWidget);
 
-    // Second Back -> should go back to Home
-    await widgetsAppState.didPopRoute();
-    await tester.pumpAndSettle();
-    expect(find.byType(HomeScreen), findsOneWidget);
+      // Second Back -> should go back to Home
+      await widgetsAppState.didPopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeScreen), findsOneWidget);
 
-    // Now at Home, popScope should allow exit
-    final popScopeFinder = find.byWidgetPredicate((w) => w is PopScope);
-    expect(popScopeFinder, findsOneWidget);
-    final popScopeWidget = tester.widget(popScopeFinder) as dynamic;
-    expect(popScopeWidget.canPop, isTrue);
-  });
+      // Now at Home, popScope should allow exit
+      final popScopeFinder = find.byWidgetPredicate((w) => w is PopScope);
+      expect(popScopeFinder, findsOneWidget);
+      final popScopeWidget = tester.widget(popScopeFinder) as dynamic;
+      expect(popScopeWidget.canPop, isTrue);
+    },
+  );
 }

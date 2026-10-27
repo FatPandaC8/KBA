@@ -108,16 +108,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     } catch (e) {
       if (mounted) {
-        setState(
-          () => _errorMessage = 'Microphone access failed: $e',
-        );
+        setState(() => _errorMessage = 'Microphone access failed: $e');
       }
     }
   }
 
   int _currentRecordDurationMs() {
     if (_recordingStartTime == null) return 0;
-    final realElapsed = DateTime.now().difference(_recordingStartTime!).inMilliseconds;
+    final realElapsed = DateTime.now()
+        .difference(_recordingStartTime!)
+        .inMilliseconds;
     final timerElapsed = _recordSeconds * 1000;
     return realElapsed > timerElapsed ? realElapsed : timerElapsed;
   }
@@ -140,7 +140,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await widget.audioService.cancelRecording();
       if (mounted) {
         setState(() {
-          _errorMessage = 'Recording too short. Hold the button while speaking.';
+          _errorMessage =
+              'Recording too short. Hold the button while speaking.';
         });
       }
       return;
@@ -232,7 +233,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     SliverFillRemaining(
                       hasScrollBody: false,
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 8,
+                        ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
@@ -269,7 +273,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 const SizedBox(width: 8),
                                 const Text(
                                   'Personal Knowledge',
-                                  style: TextStyle(fontSize: 12, color: EchoColors.muted),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: EchoColors.muted,
+                                  ),
                                 ),
                               ],
                             ),
@@ -284,132 +291,141 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 vertical: availableHeight < 600 ? 16 : 28,
                                 horizontal: 20,
                               ),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(24),
-                            border: Border.all(color: EchoColors.border),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Color.fromRGBO(35, 42, 37, 0.04),
-                                blurRadius: 14,
-                                offset: Offset(0, 4),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(24),
+                                border: Border.all(color: EchoColors.border),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Color.fromRGBO(35, 42, 37, 0.04),
+                                    blurRadius: 14,
+                                    offset: Offset(0, 4),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
-                          child: Column(
-                            children: [
-                        if (_isRecording) ...[
-                          const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.fiber_manual_record,
-                                color: EchoColors.danger,
-                                size: 14,
-                              ),
-                              SizedBox(width: 6),
-                              Text(
-                                'RECORDING',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: EchoColors.danger,
-                                  letterSpacing: 0.8,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                          const WaveformWidget(isRecording: true),
-                          const SizedBox(height: 12),
-                          Text(
-                            '0:${_recordSeconds.toString().padLeft(2, '0')} / 0:$maxVoiceSeconds',
-                            style: const TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.w600,
-                              fontFeatures: [FontFeature.tabularFigures()],
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                        ],
+                              child: Column(
+                                children: [
+                                  if (_isRecording) ...[
+                                    const Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.fiber_manual_record,
+                                          color: EchoColors.danger,
+                                          size: 14,
+                                        ),
+                                        SizedBox(width: 6),
+                                        Text(
+                                          'RECORDING',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: EchoColors.danger,
+                                            letterSpacing: 0.8,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 16),
+                                    const WaveformWidget(isRecording: true),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      '0:${_recordSeconds.toString().padLeft(2, '0')} / 0:$maxVoiceSeconds',
+                                      style: const TextStyle(
+                                        fontSize: 26,
+                                        fontWeight: FontWeight.w600,
+                                        fontFeatures: [
+                                          FontFeature.tabularFigures(),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 24),
+                                  ],
 
-                        MicHaloButton(
-                          isRecording: _isRecording,
-                          isProcessing: _isProcessing,
-                          onStartRecord: _startRecording,
-                          onStopRecord: _stopRecordingAndSubmit,
-                          onCancelRecord: _cancelRecording,
-                        ),
-                        const SizedBox(height: 20),
-                        Text(
-                          _isProcessing
-                              ? 'Organizing thoughts…'
-                              : (_isRecording
-                                  ? 'Listening… Release to save'
-                                  : 'Hold to talk · Release to save'),
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            color: EchoColors.ink,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          _isRecording
-                              ? 'Release anytime to finish recording.'
-                              : 'Your original capture is always safe.',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: EchoColors.muted,
-                          ),
-                        ),
+                                  MicHaloButton(
+                                    isRecording: _isRecording,
+                                    isProcessing: _isProcessing,
+                                    onStartRecord: _startRecording,
+                                    onStopRecord: _stopRecordingAndSubmit,
+                                    onCancelRecord: _cancelRecording,
+                                  ),
+                                  const SizedBox(height: 20),
+                                  Text(
+                                    _isProcessing
+                                        ? 'Organizing thoughts…'
+                                        : (_isRecording
+                                              ? 'Listening… Release to save'
+                                              : 'Hold to talk · Release to save'),
+                                    style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w600,
+                                      color: EchoColors.ink,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    _isRecording
+                                        ? 'Release anytime to finish recording.'
+                                        : 'Your original capture is always safe.',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: EchoColors.muted,
+                                    ),
+                                  ),
 
-                        if (!_isRecording && !_isProcessing) ...[
-                          const SizedBox(height: 20),
-                          OutlinedButton.icon(
-                            icon: const Icon(
-                              Icons.edit_note,
-                              size: 18,
-                              color: EchoColors.forest,
-                            ),
-                            label: const Text(
-                              'Or type text note',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w600,
-                                color: EchoColors.forest,
-                              ),
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              side: const BorderSide(color: EchoColors.sage),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 18,
-                                vertical: 12,
-                              ),
-                            ),
-                            onPressed: _openTextCapture,
-                          ),
-                        ],
+                                  if (!_isRecording && !_isProcessing) ...[
+                                    const SizedBox(height: 20),
+                                    OutlinedButton.icon(
+                                      icon: const Icon(
+                                        Icons.edit_note,
+                                        size: 18,
+                                        color: EchoColors.forest,
+                                      ),
+                                      label: const Text(
+                                        'Or type text note',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          color: EchoColors.forest,
+                                        ),
+                                      ),
+                                      style: OutlinedButton.styleFrom(
+                                        side: const BorderSide(
+                                          color: EchoColors.sage,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 18,
+                                          vertical: 12,
+                                        ),
+                                      ),
+                                      onPressed: _openTextCapture,
+                                    ),
+                                  ],
 
-                        if (_errorMessage != null) ...[
-                          const SizedBox(height: 12),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 20),
-                            child: Text(
-                              _errorMessage!,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: EchoColors.danger,
+                                  if (_errorMessage != null) ...[
+                                    const SizedBox(height: 12),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 20,
+                                      ),
+                                      child: Text(
+                                        _errorMessage!,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: EchoColors.danger,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
                             ),
-                          ),
-                        ],
-                        ],
-                      ),
-                    ),
 
                             // Bottom spacing: keeps enough space before the bottom nav bar
                             const SizedBox(height: 16),

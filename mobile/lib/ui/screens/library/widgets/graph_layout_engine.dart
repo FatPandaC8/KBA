@@ -1,4 +1,5 @@
 import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:mobile/services/backend_service.dart';
 
@@ -18,7 +19,8 @@ class PositionedNode {
   });
 
   Rect get rect => Rect.fromLTWH(position.dx, position.dy, width, height);
-  Offset get center => Offset(position.dx + width / 2, position.dy + height / 2);
+  Offset get center =>
+      Offset(position.dx + width / 2, position.dy + height / 2);
 }
 
 class DeterministicGraphLayout {
@@ -145,7 +147,9 @@ class DeterministicGraphLayout {
 
       // 4. Force-directed relaxation step (50 iterations) to minimize edge crossings & node overlaps
       for (int step = 0; step < 40; step++) {
-        final Map<String, Offset> forces = {for (final id in compNodeIds) id: Offset.zero};
+        final Map<String, Offset> forces = {
+          for (final id in compNodeIds) id: Offset.zero,
+        };
 
         // Repulsion between all nodes in component
         for (int i = 0; i < count; i++) {

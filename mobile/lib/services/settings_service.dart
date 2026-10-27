@@ -46,4 +46,3 @@ class SettingsService {
   bool get evalConsent => _prefs.getBool(_keyEvalConsent) ?? false;
   set evalConsent(bool value) => _prefs.setBool(_keyEvalConsent, value);
 }
-

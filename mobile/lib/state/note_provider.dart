@@ -289,9 +289,7 @@ class NoteProvider extends ChangeNotifier {
       // 1. Attempt Embedding-based Semantic Recall from Backend
       final semanticMatches = await _backendService.searchSemantic(query);
       if (semanticMatches.isNotEmpty) {
-        final Map<String, Note> noteMap = {
-          for (final n in _notes) n.id: n,
-        };
+        final Map<String, Note> noteMap = {for (final n in _notes) n.id: n};
         final List<Note> ranked = [];
         for (final match in semanticMatches) {
           final note = noteMap[match.id];
@@ -316,4 +314,3 @@ class NoteProvider extends ChangeNotifier {
     }
   }
 }
-

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:mobile/core/theme/echo_colors.dart';
 import 'package:mobile/services/backend_service.dart';
 import 'package:mobile/state/note_provider.dart';
+
 import 'graph_layout_engine.dart';
 
 class KnowledgeGraphWidget extends StatefulWidget {
@@ -60,7 +61,8 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
     });
 
     try {
-      final rels = await widget.noteProvider.backendService.fetchAllRelationships();
+      final rels = await widget.noteProvider.backendService
+          .fetchAllRelationships();
       if (mounted) {
         setState(() {
           _relationships = rels;
@@ -166,7 +168,8 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
     // Map relationships where both endpoints exist
     final visibleNoteIds = visibleNotes.map((n) => n.id).toSet();
     final visibleEdges = _relationships.where((e) {
-      return visibleNoteIds.contains(e.fromNode) && visibleNoteIds.contains(e.toNode);
+      return visibleNoteIds.contains(e.fromNode) &&
+          visibleNoteIds.contains(e.toNode);
     }).toList();
 
     // Run deterministic layout engine
@@ -176,7 +179,8 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
     );
 
     // Selected node handling: default to first if none or selected removed
-    final selectedId = (_selectedNodeId != null && visibleNoteIds.contains(_selectedNodeId))
+    final selectedId =
+        (_selectedNodeId != null && visibleNoteIds.contains(_selectedNodeId))
         ? _selectedNodeId!
         : visibleNotes.first.id;
 
@@ -228,11 +232,7 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
                 style: TextStyle(fontSize: 10, color: EchoColors.muted),
               ),
               const SizedBox(width: 14),
-              Container(
-                width: 14,
-                height: 2,
-                color: const Color(0xFF6B8A7A),
-              ),
+              Container(width: 14, height: 2, color: const Color(0xFF6B8A7A)),
               const SizedBox(width: 5),
               Text(
                 '${visibleEdges.length} connections',
@@ -302,7 +302,10 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
                             final isNeighbor = neighborIds.contains(note.id);
                             final isCapture = note.audioPath != null;
 
-                            final opacity = (_selectedNodeId == null || isSelected || isNeighbor)
+                            final opacity =
+                                (_selectedNodeId == null ||
+                                    isSelected ||
+                                    isNeighbor)
                                 ? 1.0
                                 : 0.45;
 
@@ -335,14 +338,25 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
                                       border: Border.all(
                                         color: isSelected
                                             ? EchoColors.forest
-                                            : (isNeighbor ? const Color(0xFF6B8A7A) : EchoColors.sage),
-                                        width: isSelected ? 2.5 : (isNeighbor ? 2.0 : 1.2),
+                                            : (isNeighbor
+                                                  ? const Color(0xFF6B8A7A)
+                                                  : EchoColors.sage),
+                                        width: isSelected
+                                            ? 2.5
+                                            : (isNeighbor ? 2.0 : 1.2),
                                       ),
                                       boxShadow: [
                                         BoxShadow(
                                           color: isSelected
-                                              ? EchoColors.forest.withValues(alpha: 0.25)
-                                              : const Color.fromRGBO(35, 42, 37, 0.06),
+                                              ? EchoColors.forest.withValues(
+                                                  alpha: 0.25,
+                                                )
+                                              : const Color.fromRGBO(
+                                                  35,
+                                                  42,
+                                                  37,
+                                                  0.06,
+                                                ),
                                           blurRadius: isSelected ? 12 : 6,
                                           offset: const Offset(0, 3),
                                         ),
@@ -532,7 +546,10 @@ class _GraphEdgePainter extends CustomPainter {
       final dist = (dx * dx + dy * dy);
       final offsetDist = dist > 400 ? 12.0 : 0.0;
 
-      final controlPoint = Offset(midX - (dy / 25).clamp(-offsetDist, offsetDist), midY + (dx / 25).clamp(-offsetDist, offsetDist));
+      final controlPoint = Offset(
+        midX - (dy / 25).clamp(-offsetDist, offsetDist),
+        midY + (dx / 25).clamp(-offsetDist, offsetDist),
+      );
       final path = Path()
         ..moveTo(p1.dx, p1.dy)
         ..quadraticBezierTo(controlPoint.dx, controlPoint.dy, p2.dx, p2.dy);
@@ -549,10 +566,8 @@ class _GraphEdgePainter extends CustomPainter {
             fontWeight: FontWeight.w700,
           ),
         );
-        final tp = TextPainter(
-          text: textSpan,
-          textDirection: TextDirection.ltr,
-        )..layout();
+        final tp = TextPainter(text: textSpan, textDirection: TextDirection.ltr)
+          ..layout();
 
         final badgeRect = RRect.fromRectAndRadius(
           Rect.fromCenter(
@@ -571,7 +586,13 @@ class _GraphEdgePainter extends CustomPainter {
 
         canvas.drawRRect(badgeRect, badgePaint);
         canvas.drawRRect(badgeRect, badgeBorder);
-        tp.paint(canvas, Offset(controlPoint.dx - tp.width / 2, controlPoint.dy - tp.height / 2));
+        tp.paint(
+          canvas,
+          Offset(
+            controlPoint.dx - tp.width / 2,
+            controlPoint.dy - tp.height / 2,
+          ),
+        );
       }
     }
   }

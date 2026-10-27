@@ -35,7 +35,9 @@ class EchoBottomNav extends StatelessWidget {
             child: Container(
               decoration: const BoxDecoration(
                 color: EchoColors.surface,
-                border: Border(top: BorderSide(color: EchoColors.border, width: 1.0)),
+                border: Border(
+                  top: BorderSide(color: EchoColors.border, width: 1.0),
+                ),
               ),
             ),
           ),
@@ -79,7 +81,9 @@ class EchoBottomNav extends StatelessWidget {
                               shape: BoxShape.circle,
                               boxShadow: [
                                 BoxShadow(
-                                  color: EchoColors.forest.withValues(alpha: 0.35),
+                                  color: EchoColors.forest.withValues(
+                                    alpha: 0.35,
+                                  ),
                                   blurRadius: 10,
                                   offset: const Offset(0, 4),
                                 ),
@@ -164,4 +168,3 @@ class EchoBottomNav extends StatelessWidget {
     );
   }
 }
-

@@ -153,13 +153,12 @@ class _AppShellState extends State<AppShell> {
         _handlePop();
       },
       child: AnimatedSwitcher(
-        duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 200),
+        duration: reduceMotion
+            ? Duration.zero
+            : const Duration(milliseconds: 200),
         switchInCurve: Curves.easeOut,
         switchOutCurve: Curves.easeIn,
-        child: KeyedSubtree(
-          key: ValueKey(screenKey),
-          child: activeScreen,
-        ),
+        child: KeyedSubtree(key: ValueKey(screenKey), child: activeScreen),
       ),
     );
   }
