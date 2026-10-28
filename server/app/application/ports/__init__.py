@@ -105,6 +105,18 @@ class CaptureRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    def list_all(self) -> List[CaptureEntity]:
+        pass
+
+    @abstractmethod
+    def delete(self, capture_id: str) -> None:
+        pass
+
+    @abstractmethod
+    def clear_audio_path(self, capture_id: str) -> None:
+        pass
+
+    @abstractmethod
     def count(self) -> int:
         pass
 
@@ -119,6 +131,14 @@ class EvalRecordRepositoryPort(ABC):
 
     @abstractmethod
     def purge_unconsented(self) -> int:
+        pass
+
+    @abstractmethod
+    def purge_all(self) -> int:
+        pass
+
+    @abstractmethod
+    def delete_by_capture_id(self, capture_id: str) -> int:
         pass
 
 class AudioTranscriptionPort(ABC):
@@ -163,5 +183,9 @@ class JobStatusRepositoryPort(ABC):
 
     @abstractmethod
     def get_by_capture_id(self, capture_id: str) -> Optional[ProcessingJobDTO]:
+        pass
+
+    @abstractmethod
+    def delete_by_capture_id(self, capture_id: str) -> int:
         pass
 

@@ -2,10 +2,12 @@ import os
 import json
 import uuid
 import datetime
+import logging
 from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, Depends
 
-from server.app.api.dependencies import Container, get_container
+from server.app.api.dependencies import Container, get_container, verify_client_auth
+from server.app.domain.errors import AudioProcessingError, ValidationError
 from server.app.adapters.inbound.http.schemas import (
     KnowledgeItem,
     KnowledgeRelationship,
@@ -19,7 +21,10 @@ from server.app.adapters.inbound.http.schemas import (
 from server.app.application.dto import KnowledgeItemDTO, RelationshipDTO
 from server.app.domain.entities import EvalRecordEntity
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api")
+protected_router = APIRouter(prefix="/api", dependencies=[Depends(verify_client_auth)])
 
 @router.get("/health")
 def health(container: Container = Depends(get_container)):
@@ -30,7 +35,25 @@ def health(container: Container = Depends(get_container)):
         "pipeline_version": health_dto.pipeline_version,
     }
 
-@router.post("/captures/upload", response_model=CaptureUploadResponse)
+def _to_knowledge_item(k) -> KnowledgeItem:
+    return KnowledgeItem(
+        id=k.id,
+        capture_id=k.capture_id,
+        title=k.title,
+        core_idea=k.core_idea,
+        details=k.details,
+        transcript=k.transcript,
+        concepts=k.concepts,
+        tags=k.tags,
+        open_questions=k.open_questions,
+        candidate_relations=k.candidate_relations,
+        provenance=k.provenance,
+        created_at=k.created_at,
+        updated_at=k.updated_at,
+    )
+
+
+@protected_router.post("/captures/upload", response_model=CaptureUploadResponse)
 async def upload_capture(
     file: UploadFile = File(...),
     capture_id: str = Form(...),
@@ -39,14 +62,64 @@ async def upload_capture(
     consent_given: bool = Form(default=False),
     container: Container = Depends(get_container),
 ):
-    upload_dir = container.settings.upload_dir
-    os.makedirs(upload_dir, exist_ok=True)
-    filename = f"{capture_id}.m4a"
-    audio_path = os.path.join(upload_dir, filename)
+    try:
+        parsed_id = uuid.UUID(capture_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="capture_id must be a valid UUID")
+    if str(parsed_id) != capture_id:
+        raise HTTPException(status_code=400, detail="capture_id must be a canonical UUID")
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise HTTPException(status_code=400, detail="idempotency_key is invalid")
+    if duration_ms < 0 or duration_ms > container.settings.max_voice_seconds * 2000:
+        raise HTTPException(status_code=400, detail="duration_ms is out of range")
 
-    contents = await file.read()
-    with open(audio_path, "wb") as f:
-        f.write(contents)
+    upload_dir = os.path.realpath(container.settings.upload_dir)
+    os.makedirs(upload_dir, exist_ok=True)
+    audio_path = os.path.join(upload_dir, f"{capture_id}.m4a")
+    if not audio_path.startswith(upload_dir + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid capture identifier")
+
+    total_bytes = 0
+    try:
+        with open(audio_path, "wb") as destination:
+            while True:
+                chunk = await file.read(64 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > container.settings.max_upload_bytes:
+                    destination.close()
+                    os.remove(audio_path)
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Audio upload exceeds the configured size limit",
+                    )
+                destination.write(chunk)
+    except HTTPException:
+        raise
+    except Exception:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+        logger.exception("Failed to store uploaded audio for capture %s", capture_id)
+        raise HTTPException(status_code=500, detail="Failed to store audio upload")
+
+    if total_bytes == 0:
+        os.remove(audio_path)
+        raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
+
+    # Idempotent retry: return the already processed result instead of
+    # re-running transcription and creating duplicate jobs.
+    existing_item = container.knowledge_repo.get_by_capture_id(capture_id)
+    existing_capture = container.capture_repo.get_by_id(capture_id)
+    if existing_item and existing_capture and existing_capture.status == "ready":
+        if os.path.exists(audio_path) and not consent_given:
+            os.remove(audio_path)
+        return CaptureUploadResponse(
+            capture_id=capture_id,
+            status="ready",
+            knowledge_item=_to_knowledge_item(existing_item),
+            relationships=[],
+        )
 
     try:
         result = container.process_audio_uc.execute(
@@ -59,22 +132,7 @@ async def upload_capture(
 
         k_item = None
         if result.knowledge_item:
-            k = result.knowledge_item
-            k_item = KnowledgeItem(
-                id=k.id,
-                capture_id=k.capture_id,
-                title=k.title,
-                core_idea=k.core_idea,
-                details=k.details,
-                transcript=k.transcript,
-                concepts=k.concepts,
-                tags=k.tags,
-                open_questions=k.open_questions,
-                candidate_relations=k.candidate_relations,
-                provenance=k.provenance,
-                created_at=k.created_at,
-                updated_at=k.updated_at,
-            )
+            k_item = _to_knowledge_item(result.knowledge_item)
 
         rels = [
             KnowledgeRelationship(
@@ -93,13 +151,36 @@ async def upload_capture(
             knowledge_item=k_item,
             relationships=rels,
         )
-    except Exception as e:
+    except (ValidationError, AudioProcessingError):
+        logger.warning("Rejected audio capture %s", capture_id)
         raise HTTPException(
-            status_code=422 if isinstance(e, ValueError) else 500,
-            detail=str(e),
+            status_code=422,
+            detail="Audio could not be processed. The recording may be silent or corrupted.",
+        )
+    except Exception:
+        logger.exception("Audio capture processing failed for %s", capture_id)
+        raise HTTPException(
+            status_code=500,
+            detail="Audio processing failed on the server.",
         )
 
-@router.get("/knowledge", response_model=List[KnowledgeItem])
+@protected_router.delete("/captures/{capture_id}")
+def delete_capture(capture_id: str, container: Container = Depends(get_container)):
+    try:
+        uuid.UUID(capture_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="capture_id must be a valid UUID")
+    try:
+        return container.delete_capture_uc.execute(capture_id)
+    except Exception:
+        logger.exception("Capture deletion failed for %s", capture_id)
+        raise HTTPException(
+            status_code=500,
+            detail="Capture deletion failed. No success was reported.",
+        )
+
+
+@protected_router.get("/knowledge", response_model=List[KnowledgeItem])
 def list_knowledge(q: str = Query(default=""), container: Container = Depends(get_container)):
     items = container.manage_knowledge_uc.list_knowledge(query=q)
     return [
@@ -121,7 +202,7 @@ def list_knowledge(q: str = Query(default=""), container: Container = Depends(ge
         for i in items
     ]
 
-@router.get("/knowledge/semantic-search", response_model=List[ScoredKnowledgeItem])
+@protected_router.get("/knowledge/semantic-search", response_model=List[ScoredKnowledgeItem])
 def semantic_search(
     q: str = Query(...),
     limit: int = Query(default=20, ge=1, le=100),
@@ -150,7 +231,7 @@ def semantic_search(
         for s in scored_dtos
     ]
 
-@router.get("/knowledge/{item_id}", response_model=KnowledgeItem)
+@protected_router.get("/knowledge/{item_id}", response_model=KnowledgeItem)
 def get_knowledge(item_id: str, container: Container = Depends(get_container)):
     try:
         i = container.manage_knowledge_uc.get_knowledge(item_id)
@@ -172,7 +253,7 @@ def get_knowledge(item_id: str, container: Container = Depends(get_container)):
     except Exception as e:
         raise HTTPException(status_code=404, detail="Knowledge item not found")
 
-@router.post("/knowledge", response_model=KnowledgeItem)
+@protected_router.post("/knowledge", response_model=KnowledgeItem)
 def create_or_sync_knowledge(item: KnowledgeItem, container: Container = Depends(get_container)):
     dto = KnowledgeItemDTO(
         id=item.id,
@@ -206,13 +287,12 @@ def create_or_sync_knowledge(item: KnowledgeItem, container: Container = Depends
         updated_at=saved.updated_at,
     )
 
-@router.delete("/api/knowledge/{item_id}")
-@router.delete("/knowledge/{item_id}")
+@protected_router.delete("/knowledge/{item_id}")
 def delete_knowledge(item_id: str, container: Container = Depends(get_container)):
     container.manage_knowledge_uc.delete_knowledge(item_id)
     return {"deleted": True, "id": item_id}
 
-@router.get("/graph", response_model=GraphData)
+@protected_router.get("/graph", response_model=GraphData)
 def get_graph(container: Container = Depends(get_container)):
     graph_dto = container.manage_relationships_uc.get_graph()
     return GraphData(
@@ -220,7 +300,7 @@ def get_graph(container: Container = Depends(get_container)):
         edges=[GraphEdge(id=e.id, from_node=e.from_node, to_node=e.to_node, type=e.type, status=e.status) for e in graph_dto.edges],
     )
 
-@router.patch("/relationships/{rel_id}")
+@protected_router.patch("/relationships/{rel_id}")
 def update_relationship(
     rel_id: str,
     status: str = Query(...),
@@ -230,12 +310,12 @@ def update_relationship(
     container.manage_relationships_uc.update_relationship(rel_id, status=status, relation_type=relation_type)
     return {"updated": True, "id": rel_id, "status": status}
 
-@router.delete("/relationships/{rel_id}")
+@protected_router.delete("/relationships/{rel_id}")
 def remove_relationship(rel_id: str, container: Container = Depends(get_container)):
     container.manage_relationships_uc.delete_relationship(rel_id)
     return {"deleted": True, "id": rel_id}
 
-@router.post("/eval/record")
+@protected_router.post("/eval/record")
 def record_evaluation(
     capture_id: str = Form(...),
     transcript: str = Form(...),
@@ -260,7 +340,7 @@ def record_evaluation(
     container.eval_repo.save(record)
     return {"recorded": True}
 
-@router.get("/eval/export")
+@protected_router.get("/eval/export")
 def export_evaluation_dataset(container: Container = Depends(get_container)):
     records = container.eval_repo.get_all_consented()
     dataset = []
@@ -276,11 +356,26 @@ def export_evaluation_dataset(container: Container = Depends(get_container)):
         })
     return {"version": container.settings.pipeline_version, "count": len(dataset), "data": dataset}
 
-@router.post("/eval/consent")
+@protected_router.post("/eval/consent")
 def update_consent_withdrawal(
     req: ConsentUpdateRequest,
     container: Container = Depends(get_container),
 ):
     if not req.consent_given:
-        container.eval_repo.purge_unconsented()
-    return {"status": "ok", "consent_given": req.consent_given}
+        purged_audio = 0
+        try:
+            purged_audio = container.purge_audio_uc.execute()
+            purged_records = container.eval_repo.purge_all()
+        except Exception:
+            logger.exception("Consent withdrawal purge failed")
+            raise HTTPException(
+                status_code=500,
+                detail="Consent withdrawal could not be completed.",
+            )
+        return {
+            "status": "ok",
+            "consent_given": False,
+            "purged_audio_files": purged_audio,
+            "purged_eval_records": purged_records,
+        }
+    return {"status": "ok", "consent_given": True}

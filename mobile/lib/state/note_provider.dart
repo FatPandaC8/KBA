@@ -17,6 +17,12 @@ class NoteProvider extends ChangeNotifier {
   bool _isLoading = false;
   String _searchQuery = '';
   List<Note> _searchResults = [];
+  int _searchRequestId = 0;
+  final Set<String> _syncInFlight = {};
+  bool _resumeStarted = false;
+
+  static const int maxRetryAttempts = 3;
+  static const Duration retryBaseDelay = Duration(seconds: 2);
 
   NoteProvider(
     this._repository,
@@ -93,9 +99,30 @@ class NoteProvider extends ChangeNotifier {
         tags: note.tags,
         openQuestions: note.openQuestions,
       );
+      final current = await _repository.getNoteById(note.id);
+      if (current != null && current.failureReason != null) {
+        await _repository.updateNote(
+          current.copyWith(failureReason: null, updatedAt: DateTime.now()),
+        );
+        await loadNotes();
+      }
     } catch (e) {
-      debugPrint('Background sync to server skipped or failed: $e');
+      final current = await _repository.getNoteById(note.id);
+      if (current != null) {
+        await _repository.updateNote(
+          current.copyWith(
+            failureReason: 'Server sync failed: ${_friendlyError(e)}',
+            updatedAt: DateTime.now(),
+          ),
+        );
+        await loadNotes();
+      }
     }
+  }
+
+  String _friendlyError(Object error) {
+    final text = error.toString().replaceFirst('Exception: ', '');
+    return text.length > 180 ? '${text.substring(0, 180)}…' : text;
   }
 
   /// Create an audio note with persistent queue and automatic server sync
@@ -127,68 +154,125 @@ class NoteProvider extends ChangeNotifier {
     return note;
   }
 
-  /// Processes an audio capture via backend pipeline
+  /// Processes an audio capture via backend pipeline.
+  ///
+  /// Retries are guarded so a note is never processed twice concurrently.
   Future<void> syncCaptureToBackend(String noteId) async {
-    final note = await _repository.getNoteById(noteId);
-    if (note == null || note.audioPath == null) return;
-
+    if (_syncInFlight.contains(noteId)) return;
+    _syncInFlight.add(noteId);
     try {
-      // Check backend health
-      final isOnline = await _backendService.checkHealth();
-      if (!isOnline) {
-        throw Exception('Backend server is unreachable');
+      final note = await _repository.getNoteById(noteId);
+      if (note == null || note.audioPath == null || note.audioPath!.isEmpty) {
+        return;
       }
 
-      await _repository.updateNote(
-        note.copyWith(
-          status: ProcessingStatus.uploading,
-          updatedAt: DateTime.now(),
-        ),
-      );
-      await loadNotes();
-
-      final consentGiven = _settingsService?.evalConsent ?? false;
-
-      final result = await _backendService.uploadCapture(
-        captureId: note.id,
-        idempotencyKey: note.id,
-        audioPath: note.audioPath!,
-        durationMs: note.audioDurationMs ?? 0,
-        consentGiven: consentGiven,
-      );
-
-      final updated = note.copyWith(
-        title: result.title.isNotEmpty ? result.title : note.title,
-        summary: result.coreIdea,
-        transcript: result.transcript,
-        keyFacts: result.concepts,
-        openQuestions: result.openQuestions,
-        tags: result.tags,
-        status: ProcessingStatus.ready,
-        failureReason: null,
-        updatedAt: DateTime.now(),
-      );
-
-      await _repository.updateNote(updated);
-    } catch (e) {
-      debugPrint('Processing error on note $noteId: $e');
-      final current = await _repository.getNoteById(noteId);
-      if (current != null) {
-        // Fall back to direct client AI if configured, otherwise mark failed
-        if (_aiService.isConfigured) {
-          await processNoteAI(noteId);
-        } else {
-          await _repository.updateNote(
-            current.copyWith(
-              status: ProcessingStatus.failed,
-              failureReason: e.toString(),
-              updatedAt: DateTime.now(),
-            ),
+      try {
+        final isOnline = await _backendService.checkHealth();
+        if (!isOnline) {
+          throw BackendException(
+            'Backend server is unreachable. Check the server URL in Settings.',
           );
+        }
+
+        await _repository.updateNote(
+          note.copyWith(
+            status: ProcessingStatus.uploading,
+            failureReason: null,
+            updatedAt: DateTime.now(),
+          ),
+        );
+        await loadNotes();
+
+        final consentGiven = _settingsService?.evalConsent ?? false;
+
+        final result = await _backendService.uploadCapture(
+          captureId: note.id,
+          idempotencyKey: note.id,
+          audioPath: note.audioPath!,
+          durationMs: note.audioDurationMs ?? 0,
+          consentGiven: consentGiven,
+        );
+
+        final current = await _repository.getNoteById(noteId) ?? note;
+        final updated = current.copyWith(
+          title: result.title.isNotEmpty ? result.title : current.title,
+          summary: result.coreIdea,
+          transcript: result.transcript,
+          keyFacts: result.concepts,
+          openQuestions: result.openQuestions,
+          tags: result.tags,
+          status: ProcessingStatus.ready,
+          failureReason: null,
+          retryCount: 0,
+          updatedAt: DateTime.now(),
+        );
+
+        await _repository.updateNote(updated);
+      } catch (e) {
+        debugPrint('Processing error on note $noteId: $e');
+        final current = await _repository.getNoteById(noteId);
+        if (current != null) {
+          if (_aiService.isConfigured && current.retryCount == 0) {
+            await processNoteAI(noteId);
+          } else {
+            await _repository.updateNote(
+              current.copyWith(
+                status: ProcessingStatus.failed,
+                failureReason: _friendlyError(e),
+                retryCount: current.retryCount + 1,
+                updatedAt: DateTime.now(),
+              ),
+            );
+          }
         }
       }
     } finally {
+      _syncInFlight.remove(noteId);
       await loadNotes();
+    }
+  }
+
+  /// Resumes eligible captures after app start without duplicating work.
+  Future<void> retryPendingWork() async {
+    if (_resumeStarted) return;
+    _resumeStarted = true;
+    final candidates = _notes.where((note) {
+      if (note.audioPath == null || note.audioPath!.isEmpty) return false;
+      if (note.retryCount >= maxRetryAttempts) return false;
+      return note.status == ProcessingStatus.queued ||
+          note.status == ProcessingStatus.uploading ||
+          note.status == ProcessingStatus.failed;
+    }).toList();
+
+    for (var i = 0; i < candidates.length; i++) {
+      final note = candidates[i];
+      if (i > 0) {
+        await Future<void>.delayed(retryBaseDelay);
+      }
+      syncCaptureToBackend(note.id);
+    }
+  }
+
+  /// User-triggered retry. Resets the attempt budget for an explicit action.
+  Future<void> retryNote(String noteId) async {
+    final note = await _repository.getNoteById(noteId);
+    if (note == null) return;
+    final reset = note.copyWith(
+      retryCount: 0,
+      failureReason: null,
+      status: note.audioPath == null || note.audioPath!.isEmpty
+          ? note.status
+          : ProcessingStatus.queued,
+      updatedAt: DateTime.now(),
+    );
+    await _repository.updateNote(reset);
+    await loadNotes();
+    if (reset.audioPath != null && reset.audioPath!.isNotEmpty) {
+      await syncCaptureToBackend(noteId);
+    } else if (_aiService.isConfigured) {
+      await processNoteAI(noteId);
+    } else {
+      await _syncNoteToBackend(reset);
     }
   }
 
@@ -227,15 +311,17 @@ class NoteProvider extends ChangeNotifier {
         contentToStructure,
       );
 
-      final updated = note.copyWith(
+      final current = await _repository.getNoteById(noteId) ?? note;
+      final updated = current.copyWith(
         transcript: transcript,
-        title: structured.title.isNotEmpty ? structured.title : note.title,
+        title: structured.title.isNotEmpty ? structured.title : current.title,
         summary: structured.summary,
         keyFacts: structured.keyFacts,
         openQuestions: structured.openQuestions,
         tags: structured.tags,
         status: ProcessingStatus.ready,
         failureReason: null,
+        retryCount: 0,
         updatedAt: DateTime.now(),
       );
 
@@ -247,7 +333,8 @@ class NoteProvider extends ChangeNotifier {
         await _repository.updateNote(
           current.copyWith(
             status: ProcessingStatus.failed,
-            failureReason: e.toString(),
+            failureReason: _friendlyError(e),
+            retryCount: current.retryCount + 1,
             updatedAt: DateTime.now(),
           ),
         );
@@ -260,24 +347,30 @@ class NoteProvider extends ChangeNotifier {
   Future<void> updateNote(Note note) async {
     final updated = note.copyWith(updatedAt: DateTime.now());
     await _repository.updateNote(updated);
-    _syncNoteToBackend(updated);
     await loadNotes();
+    await _syncNoteToBackend(updated);
   }
 
+  /// Deletes locally only after the server confirmed the full capture cleanup.
+  /// A server failure keeps the note so the user can retry rather than being
+  /// told deletion succeeded when retained data still exists.
   Future<void> deleteNote(String id) async {
-    await _repository.deleteNote(id);
     try {
-      await _backendService.client.delete(
-        Uri.parse('${_backendService.baseUrl}/api/knowledge/$id'),
-      );
-    } catch (_) {}
+      await _backendService.deleteCapture(id);
+    } catch (e) {
+      throw Exception('Could not delete from server: ${_friendlyError(e)}');
+    }
+    await _repository.deleteNote(id);
     await loadNotes();
   }
 
   Future<void> search(String query) async {
     _searchQuery = query;
+    final requestId = ++_searchRequestId;
+
     if (query.trim().isEmpty) {
       _searchResults = [];
+      _isLoading = false;
       notifyListeners();
       return;
     }
@@ -288,6 +381,7 @@ class NoteProvider extends ChangeNotifier {
     try {
       // 1. Attempt Embedding-based Semantic Recall from Backend
       final semanticMatches = await _backendService.searchSemantic(query);
+      if (requestId != _searchRequestId) return;
       if (semanticMatches.isNotEmpty) {
         final Map<String, Note> noteMap = {for (final n in _notes) n.id: n};
         final List<Note> ranked = [];
@@ -304,13 +398,19 @@ class NoteProvider extends ChangeNotifier {
       }
 
       // 2. Fallback to Local Substring Keyword Search if offline or no semantic match
-      _searchResults = await _repository.searchNotes(query);
+      final local = await _repository.searchNotes(query);
+      if (requestId != _searchRequestId) return;
+      _searchResults = local;
     } catch (e) {
       debugPrint('Semantic search error, falling back to keyword: $e');
-      _searchResults = await _repository.searchNotes(query);
+      final local = await _repository.searchNotes(query);
+      if (requestId != _searchRequestId) return;
+      _searchResults = local;
     } finally {
-      _isLoading = false;
-      notifyListeners();
+      if (requestId == _searchRequestId) {
+        _isLoading = false;
+        notifyListeners();
+      }
     }
   }
 }

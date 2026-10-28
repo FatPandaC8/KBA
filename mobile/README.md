@@ -1,17 +1,39 @@
-# mobile
+# Echo Mobile (Android)
 
-A new Flutter project.
+Flutter client for Echo. Android is the actively supported target; the iOS
+scaffold is preserved but not built or verified in this phase.
 
-## Getting Started
+## Run
 
-This project is a starting point for a Flutter application.
+```bash
+flutter pub get
+flutter run -d <android-device-id>
+```
 
-A few resources to get you started if this is your first Flutter project:
+The backend must be running and protected by `ECHO_CLIENT_TOKEN`. In the app,
+open **Settings**, set the backend URL, enter the client token, and use
+**Test connection**.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+For USB development the default URL `http://127.0.0.1:8000` requires:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+adb reverse tcp:8000 tcp:8000
+```
+
+Debug builds allow cleartext HTTP for local development. Release builds keep
+Android's secure default and require HTTPS.
+
+## Verify
+
+```bash
+flutter analyze
+flutter test
+flutter build apk --debug
+```
+
+## Signing
+
+Release builds use `android/key.properties` and the referenced keystore only
+when the owner supplies them. Otherwise they fall back to the debug key and are
+not production artifacts. The application ID `dev.echo.notes.dev` is
+provisional.

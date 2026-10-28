@@ -17,113 +17,126 @@ class EchoBottomNav extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const double fabDiameter = 58.0;
-    const double barHeight = 72.0;
+    // Grow the bar slightly with the system font scale instead of letting
+    // labels overflow the fixed template height.
+    final textScale = MediaQuery.textScalerOf(context)
+        .scale(1.0)
+        .clamp(0.8, 1.4);
+    final barHeight = 72.0 + (textScale - 1.0) * 26.0;
     final bottomPadding = MediaQuery.of(context).padding.bottom;
 
-    return SizedBox(
-      height: barHeight + bottomPadding,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.bottomCenter,
-        children: [
-          // Background Bar Surface with Top Divider aligned to center of FAB
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: barHeight + bottomPadding - 18,
-            child: Container(
-              decoration: const BoxDecoration(
-                color: EchoColors.surface,
-                border: Border(
-                  top: BorderSide(color: EchoColors.border, width: 1.0),
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: 1.3,
+      child: SizedBox(
+        height: barHeight + bottomPadding,
+        child: Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.bottomCenter,
+          children: [
+            // Background Bar Surface with Top Divider aligned to center of FAB
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: barHeight + bottomPadding - 18,
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: EchoColors.surface,
+                  border: Border(
+                    top: BorderSide(color: EchoColors.border, width: 1.0),
+                  ),
                 ),
               ),
             ),
-          ),
 
-          // Main Navigation Row
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: bottomPadding,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  // Left Action: Recall
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: _buildNavItem(
-                      1,
-                      'Recall',
-                      Icons.search_outlined,
-                      Icons.search,
-                    ),
-                  ),
-
-                  // Center Prominent Capture FAB
-                  GestureDetector(
-                    onTap: onCenterCapture,
-                    behavior: HitTestBehavior.opaque,
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: fabDiameter,
-                            height: fabDiameter,
-                            decoration: BoxDecoration(
-                              color: EchoColors.forest,
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: EchoColors.forest.withValues(
-                                    alpha: 0.35,
-                                  ),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: const Icon(
-                              Icons.mic,
-                              color: Colors.white,
-                              size: 30,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          const Text(
-                            'Capture',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: EchoColors.forest,
-                            ),
-                          ),
-                        ],
+            // Main Navigation Row
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: bottomPadding,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    // Left Action: Recall
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: _buildNavItem(
+                        1,
+                        'Recall',
+                        Icons.search_outlined,
+                        Icons.search,
                       ),
                     ),
-                  ),
 
-                  // Right Action: Library
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: _buildNavItem(
-                      2,
-                      'Library',
-                      Icons.library_books_outlined,
-                      Icons.library_books,
+                    // Center Prominent Capture FAB
+                    Semantics(
+                      button: true,
+                      label: 'Start voice capture',
+                      excludeSemantics: true,
+                      child: GestureDetector(
+                        onTap: onCenterCapture,
+                        behavior: HitTestBehavior.opaque,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: fabDiameter,
+                                height: fabDiameter,
+                                decoration: BoxDecoration(
+                                  color: EchoColors.forest,
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: EchoColors.forest.withValues(
+                                        alpha: 0.35,
+                                      ),
+                                      blurRadius: 10,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: const Icon(
+                                  Icons.mic,
+                                  color: Colors.white,
+                                  size: 30,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              const Text(
+                                'Capture',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: EchoColors.forest,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
-                ],
+
+                    // Right Action: Library
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: _buildNavItem(
+                        2,
+                        'Library',
+                        Icons.library_books_outlined,
+                        Icons.library_books,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -135,35 +148,41 @@ class EchoBottomNav extends StatelessWidget {
     IconData activeIcon,
   ) {
     final active = currentIndex == index;
-    return GestureDetector(
-      onTap: () => onTap(index),
-      behavior: HitTestBehavior.opaque,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            height: 36,
-            width: 60,
-            decoration: BoxDecoration(
-              color: active ? EchoColors.sageSoft : Colors.transparent,
-              borderRadius: BorderRadius.circular(20),
+    return Semantics(
+      button: true,
+      selected: active,
+      label: label,
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: () => onTap(index),
+        behavior: HitTestBehavior.opaque,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              height: 36,
+              width: 60,
+              decoration: BoxDecoration(
+                color: active ? EchoColors.sageSoft : Colors.transparent,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Icon(
+                active ? activeIcon : icon,
+                color: active ? EchoColors.forest : EchoColors.muted,
+                size: 22,
+              ),
             ),
-            child: Icon(
-              active ? activeIcon : icon,
-              color: active ? EchoColors.forest : EchoColors.muted,
-              size: 22,
+            const SizedBox(height: 3),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                color: active ? EchoColors.forest : EchoColors.muted,
+              ),
             ),
-          ),
-          const SizedBox(height: 3),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-              color: active ? EchoColors.forest : EchoColors.muted,
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

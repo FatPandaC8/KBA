@@ -31,6 +31,7 @@ class EchoAppBar extends StatelessWidget implements PreferredSizeWidget {
             // Left: Back button if present
             if (onBack != null)
               IconButton(
+                tooltip: 'Back',
                 icon: const Icon(
                   Icons.arrow_back_ios_new,
                   size: 20,
@@ -59,6 +60,7 @@ class EchoAppBar extends StatelessWidget implements PreferredSizeWidget {
             // Right: Settings or spacer
             if (onSettings != null)
               IconButton(
+                tooltip: 'Settings',
                 icon: const Icon(
                   Icons.settings_outlined,
                   size: 22,

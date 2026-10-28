@@ -293,16 +293,16 @@
       <div class="brand-title">Echo Admin</div>
     </div>
     <nav>
-      <button class="active" onclick="showTab('overview')">Overview</button>
-      <button onclick="showTab('captures')">Captures & Content</button>
-      <button onclick="showTab('jobs')">Pipeline Jobs</button>
-      <button onclick="showTab('knowledge')">Knowledge & Embeddings</button>
-      <button onclick="showTab('config')">Configuration</button>
-      <button onclick="showTab('logs')">Logs & Diagnostics</button>
+      <button class="active" data-tab="overview">Overview</button>
+      <button data-tab="captures">Captures & Content</button>
+      <button data-tab="jobs">Pipeline Jobs</button>
+      <button data-tab="knowledge">Knowledge & Embeddings</button>
+      <button data-tab="config">Configuration</button>
+      <button data-tab="logs">Logs & Diagnostics</button>
     </nav>
     <div class="auth-box">
       <label>Admin Access Key</label>
-      <input type="password" id="adminToken" value="echo-admin-secure-key-2026" onchange="saveToken()">
+      <input type="password" id="adminToken" autocomplete="off" placeholder="Required">
     </div>
   </aside>
 
@@ -314,7 +314,7 @@
           <h1>System Overview</h1>
           <span class="refresh-badge" id="lastRefreshed">Updating...</span>
         </div>
-        <button class="btn btn-primary" onclick="loadDashboard()">Refresh</button>
+        <button class="btn btn-primary" id="btnRefreshDashboard">Refresh</button>
       </header>
 
       <div class="grid-4">
@@ -383,7 +383,7 @@
           <h1>Voice Captures & Resolved Knowledge</h1>
           <span class="refresh-badge">Connected end-to-end trace from spoken voice to structured knowledge</span>
         </div>
-        <button class="btn btn-primary" onclick="loadCaptures()">Refresh Captures</button>
+        <button class="btn btn-primary" id="btnRefreshCaptures">Refresh Captures</button>
       </header>
 
       <div class="card">
@@ -412,7 +412,7 @@
           <h1>Processing Jobs Audit</h1>
           <span class="refresh-badge">Live background job lifecycle</span>
         </div>
-        <button class="btn btn-primary" onclick="loadJobs()">Refresh Jobs</button>
+        <button class="btn btn-primary" id="btnRefreshJobs">Refresh Jobs</button>
       </header>
 
       <div class="card">
@@ -441,13 +441,13 @@
           <h1>Knowledge Items & Embeddings Index</h1>
           <span class="refresh-badge">Manage vector coverage and graph synchronization</span>
         </div>
-        <button class="btn btn-primary" onclick="triggerBackfill()">Rebuild Missing Embeddings</button>
+        <button class="btn btn-primary" id="btnBackfill">Rebuild Missing Embeddings</button>
       </header>
 
       <div class="card" style="margin-bottom: 20px;">
         <div style="display: flex; gap: 12px; margin-bottom: 16px;">
           <input type="text" id="knowledgeSearchInput" placeholder="Filter by title, tags, or concepts..." style="flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;">
-          <button class="btn btn-primary" onclick="loadKnowledge()">Filter</button>
+          <button class="btn btn-primary" id="btnKnowledgeFilter">Filter</button>
         </div>
         <table>
           <thead>
@@ -476,7 +476,7 @@
       </header>
 
       <div class="card" style="max-width: 600px;">
-        <form onsubmit="saveConfig(event)">
+        <form id="configForm">
           <div class="form-group">
             <label>OpenAI Model Identifier</label>
             <input type="text" id="cfgModel" value="gpt-4o-mini">
@@ -507,13 +507,13 @@
           <span class="refresh-badge">Sanitized server events and diagnostics</span>
         </div>
         <div style="display: flex; gap: 8px;">
-          <select id="logLevelFilter" onchange="loadLogs()" style="padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border);">
+          <select id="logLevelFilter" style="padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border);">
             <option value="">All Levels</option>
             <option value="INFO">INFO</option>
             <option value="WARNING">WARNING</option>
             <option value="ERROR">ERROR</option>
           </select>
-          <button class="btn btn-primary" onclick="loadLogs()">Refresh</button>
+          <button class="btn btn-primary" id="btnRefreshLogs">Refresh</button>
         </div>
       </header>
 
@@ -524,14 +524,14 @@
   </main>
 
   <!-- SIDE-BY-SIDE INSPECTION MODAL -->
-  <div class="modal-overlay" id="captureModal" onclick="closeModalOnBg(event)">
+  <div class="modal-overlay" id="captureModal">
     <div class="modal-content">
       <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
         <div>
           <h2 style="font-size: 20px; font-weight: 700;" id="modalCaptureTitle">Capture Inspection</h2>
           <span style="font-size: 12px; color: var(--muted);" id="modalCaptureSubtitle">ID: ...</span>
         </div>
-        <button class="btn btn-sm" onclick="closeModal()">✕ Close</button>
+        <button class="btn btn-sm" id="btnCloseModal">✕ Close</button>
       </div>
 
       <!-- CONNECTED SIDE-BY-SIDE COMPARISON GRID -->
@@ -572,33 +572,70 @@
       </div>
 
       <div style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px;">
-        <button class="btn btn-primary" onclick="closeModal()">Done</button>
+        <button class="btn btn-primary" id="btnDoneModal">Done</button>
       </div>
     </div>
   </div>
 
   <script>
-    let token = localStorage.getItem('echo_admin_token') || 'echo-admin-secure-key-2026';
-    document.getElementById('adminToken').value = token;
+    const adminState = {
+      token: '',
+      activeCaptureId: null,
+      audioObjectUrl: null,
+    };
 
-    function saveToken() {
-      token = document.getElementById('adminToken').value.trim();
-      localStorage.setItem('echo_admin_token', token);
-      loadDashboard();
+    const byId = (id) => document.getElementById(id);
+
+    // Every value that originated from the database or a log record is treated
+    // as untrusted and escaped before being interpolated into markup.
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      }[ch]));
     }
 
     function authHeaders() {
-      return {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      };
+      const headers = { 'Content-Type': 'application/json' };
+      if (adminState.token) {
+        headers['Authorization'] = `Bearer ${adminState.token}`;
+      }
+      return headers;
     }
 
-    function showTab(name) {
-      document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
-      document.querySelectorAll('nav button').forEach(el => el.classList.remove('active'));
-      document.getElementById(`pane-${name}`).classList.add('active');
-      event.target.classList.add('active');
+    async function apiFetch(url, options = {}) {
+      const response = await fetch(url, {
+        ...options,
+        headers: { ...authHeaders(), ...(options.headers || {}) },
+      });
+      if (response.status === 401) {
+        throw new Error('Unauthorized: enter a valid admin token in the sidebar.');
+      }
+      if (response.status === 503) {
+        throw new Error('Admin authentication is not configured on this server.');
+      }
+      return response;
+    }
+
+    function saveToken() {
+      const input = byId('adminToken');
+      adminState.token = input.value.trim();
+      if (adminState.token) {
+        localStorage.setItem('echo_admin_token', adminState.token);
+      } else {
+        localStorage.removeItem('echo_admin_token');
+      }
+      loadDashboard();
+    }
+
+    function showTab(name, button) {
+      document.querySelectorAll('.tab-pane').forEach((el) => el.classList.remove('active'));
+      document.querySelectorAll('nav button').forEach((el) => el.classList.remove('active'));
+      byId(`pane-${name}`).classList.add('active');
+      if (button) button.classList.add('active');
 
       if (name === 'overview') loadDashboard();
       if (name === 'captures') loadCaptures();
@@ -608,149 +645,195 @@
       if (name === 'logs') loadLogs();
     }
 
+    function revokeActiveAudio() {
+      const audio = document.querySelector('#modalAudioContainer audio');
+      if (audio) audio.pause();
+      if (adminState.audioObjectUrl) {
+        URL.revokeObjectURL(adminState.audioObjectUrl);
+        adminState.audioObjectUrl = null;
+      }
+    }
+
+    // Audio endpoints require an Authorization header, so tokens can no longer
+    // be placed in query strings. Fetch the bytes and play a local blob URL.
+    async function buildAuthenticatedAudio(url, autoplay = false) {
+      const response = await apiFetch(url);
+      if (!response.ok) {
+        throw new Error(`Audio request failed (HTTP ${response.status}).`);
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      adminState.audioObjectUrl = objectUrl;
+
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.autoplay = autoplay;
+      audio.preload = 'none';
+      audio.style.width = '100%';
+      audio.src = objectUrl;
+      return audio;
+    }
+
     async function loadDashboard() {
+      if (!adminState.token) return;
       try {
-        const res = await fetch('/api/admin/status', { headers: authHeaders() });
-        if (res.status === 401) {
-          alert('Unauthorized: Invalid Admin Token. Please enter a valid token in the sidebar.');
-          return;
-        }
+        const res = await apiFetch('/api/admin/status');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        document.getElementById('statusBadge').innerHTML = `<span class="status-pill status-ok">${data.status.toUpperCase()}</span>`;
-        document.getElementById('metricKnowledge').textContent = data.knowledge_count;
-        document.getElementById('metricEmbeddings').textContent = `${data.embeddings_count} with embeddings`;
-        document.getElementById('metricRelations').textContent = data.relationship_count;
-        document.getElementById('metricStorage').textContent = `${(data.audio_storage_bytes / 1024).toFixed(1)} KB`;
-        document.getElementById('dbStatus').textContent = data.database;
-        document.getElementById('lastRefreshed').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+        byId('statusBadge').innerHTML =
+          `<span class="status-pill status-ok">${escapeHtml(String(data.status || '').toUpperCase())}</span>`;
+        byId('metricKnowledge').textContent = data.knowledge_count;
+        byId('metricEmbeddings').textContent = `${data.embeddings_count} with embeddings`;
+        byId('metricRelations').textContent = data.relationship_count;
+        byId('metricStorage').textContent = `${(data.audio_storage_bytes / 1024).toFixed(1)} KB`;
+        byId('dbStatus').textContent = data.database;
+        byId('lastRefreshed').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
       } catch (err) {
         console.error(err);
+        byId('lastRefreshed').textContent = err.message;
       }
     }
 
     async function loadCaptures() {
+      if (!adminState.token) return;
       try {
-        const res = await fetch('/api/admin/captures?limit=50', { headers: authHeaders() });
+        const res = await apiFetch('/api/admin/captures?limit=50');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const captures = await res.json();
-        const tbody = document.getElementById('capturesTableBody');
+        const tbody = byId('capturesTableBody');
         if (!captures.length) {
           tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--muted);">No voice captures recorded yet.</td></tr>';
           return;
         }
-        tbody.innerHTML = captures.map(c => {
-          const hasAudio = c.has_audio;
-          const audioPlayerHtml = hasAudio ? `
-            <audio controls preload="none" style="height: 32px; width: 220px;" src="${c.audio_url}?auth=${encodeURIComponent(token)}">
-              Your browser does not support the audio element.
-            </audio>
-          ` : `<span style="color: var(--muted); font-size: 12px;">Purged (No consent)</span>`;
+        tbody.innerHTML = captures.map((c) => {
+          const captureId = String(c.capture_id || '');
+          const audioPlayerHtml = c.has_audio
+            ? `<button class="btn btn-sm" data-audio-url="${escapeHtml(c.audio_url || '')}">Load audio</button>`
+            : '<span style="color: var(--muted); font-size: 12px;">Purged (No consent)</span>';
 
-          const rawTranscript = c.original_transcript ? 
-            `<div style="max-width: 260px; font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${c.original_transcript}</div>` : 
-            `<span style="color: var(--muted); font-size: 12px;">—</span>`;
+          const rawTranscript = c.original_transcript
+            ? `<div style="max-width: 260px; font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(c.original_transcript)}</div>`
+            : '<span style="color: var(--muted); font-size: 12px;">—</span>';
 
-          const resolvedTitle = c.resolved_item ? 
-            `<div style="font-weight: 600; font-size: 13px;">${c.resolved_item.title}</div>
-             <small style="color: var(--muted); font-size: 11px;">${(c.resolved_item.concepts || []).slice(0, 2).join(', ')}</small>` : 
-            `<span style="color: var(--danger); font-size: 12px;">${c.error_message ? 'Failed: ' + c.error_message : 'Not resolved'}</span>`;
+          const resolvedTitle = c.resolved_item
+            ? `<div style="font-weight: 600; font-size: 13px;">${escapeHtml(c.resolved_item.title)}</div>
+               <small style="color: var(--muted); font-size: 11px;">${escapeHtml((c.resolved_item.concepts || []).slice(0, 2).join(', '))}</small>`
+            : `<span style="color: var(--danger); font-size: 12px;">${c.error_message ? `Failed: ${escapeHtml(c.error_message)}` : 'Not resolved'}</span>`;
 
-          const statusBadge = c.status === 'ready' ? 
-            `<span class="status-pill status-ok">Ready</span>` : 
-            (c.status === 'failed' ? `<span class="status-pill status-err">Failed</span>` : `<span class="status-pill status-warn">${c.status}</span>`);
+          const statusBadge = c.status === 'ready'
+            ? '<span class="status-pill status-ok">Ready</span>'
+            : (c.status === 'failed'
+              ? '<span class="status-pill status-err">Failed</span>'
+              : `<span class="status-pill status-warn">${escapeHtml(c.status)}</span>`);
 
           return `
             <tr>
               <td>
-                <div style="font-family: var(--font-mono); font-size: 12px; font-weight: 600;">${c.capture_id.slice(0, 8)}...</div>
-                <small style="color: var(--muted);">${(c.created_at || '').slice(0, 16).replace('T', ' ')}</small>
+                <div style="font-family: var(--font-mono); font-size: 12px; font-weight: 600;">${escapeHtml(captureId.slice(0, 8))}...</div>
+                <small style="color: var(--muted);">${escapeHtml((c.created_at || '').slice(0, 16).replace('T', ' '))}</small>
               </td>
               <td>${audioPlayerHtml}</td>
               <td>${rawTranscript}</td>
               <td>${resolvedTitle}</td>
               <td>${statusBadge}</td>
               <td>
-                <button class="btn btn-sm btn-primary" onclick="openCaptureDetail('${c.capture_id}')">Inspect Pair</button>
+                <button class="btn btn-sm btn-primary" data-inspect="${escapeHtml(captureId)}">Inspect Pair</button>
               </td>
             </tr>
           `;
         }).join('');
       } catch (err) {
         console.error(err);
+        byId('capturesTableBody').innerHTML =
+          `<tr><td colspan="6" style="text-align: center; color: var(--danger);">${escapeHtml(err.message)}</td></tr>`;
       }
     }
 
-    let activeCaptureData = null;
-
     async function openCaptureDetail(captureId) {
       try {
-        const res = await fetch(`/api/admin/captures/${captureId}`, { headers: authHeaders() });
+        const res = await apiFetch(`/api/admin/captures/${encodeURIComponent(captureId)}`);
         if (!res.ok) {
           alert('Failed to load capture details');
           return;
         }
         const c = await res.json();
-        activeCaptureData = c;
+        adminState.activeCaptureId = captureId;
 
-        document.getElementById('modalCaptureTitle').textContent = c.resolved_item ? c.resolved_item.title : `Voice Capture ${c.capture_id.slice(0, 8)}`;
-        document.getElementById('modalCaptureSubtitle').textContent = `Capture ID: ${c.capture_id} • Created: ${c.created_at || '—'}`;
-        document.getElementById('modalAudioDuration').textContent = `Duration: ${(c.duration_ms / 1000).toFixed(1)}s`;
+        byId('modalCaptureTitle').textContent = c.resolved_item
+          ? c.resolved_item.title
+          : `Voice Capture ${String(c.capture_id || '').slice(0, 8)}`;
+        byId('modalCaptureSubtitle').textContent =
+          `Capture ID: ${c.capture_id || '—'} • Created: ${c.created_at || '—'}`;
+        byId('modalAudioDuration').textContent =
+          `Duration: ${((c.duration_ms || 0) / 1000).toFixed(1)}s`;
 
-        // Original Audio Player
-        const audioContainer = document.getElementById('modalAudioContainer');
-        if (c.has_audio) {
-          audioContainer.innerHTML = `
-            <div class="audio-player-card">
-              <audio controls autoplay style="width: 100%;" src="${c.audio_url}?auth=${encodeURIComponent(token)}"></audio>
-              <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 4px;">
-                <span>Original AAC/M4A Audio</span>
-                <span>Immutable Source</span>
-              </div>
-            </div>
-          `;
+        const audioContainer = byId('modalAudioContainer');
+        audioContainer.replaceChildren();
+        revokeActiveAudio();
+        if (c.has_audio && c.audio_url) {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'audio-player-card';
+          try {
+            const audio = await buildAuthenticatedAudio(c.audio_url, true);
+            wrapper.appendChild(audio);
+          } catch (audioError) {
+            const message = document.createElement('div');
+            message.textContent = `Audio could not be loaded: ${audioError.message}`;
+            wrapper.appendChild(message);
+          }
+          const meta = document.createElement('div');
+          meta.style.cssText =
+            'display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 4px;';
+          const source = document.createElement('span');
+          source.textContent = 'Original AAC/M4A Audio';
+          const immutable = document.createElement('span');
+          immutable.textContent = 'Immutable Source';
+          meta.append(source, immutable);
+          wrapper.appendChild(meta);
+          audioContainer.appendChild(wrapper);
         } else {
-          audioContainer.innerHTML = `
-            <div class="audio-player-card" style="background: var(--bg); color: var(--muted); font-size: 13px;">
-              Recording audio purged immediately after processing per default-deny user privacy consent policy.
-            </div>
-          `;
+          const empty = document.createElement('div');
+          empty.className = 'audio-player-card';
+          empty.style.cssText = 'background: var(--bg); color: var(--muted); font-size: 13px;';
+          empty.textContent =
+            'Recording audio purged immediately after processing per default-deny user privacy consent policy.';
+          audioContainer.appendChild(empty);
         }
 
-        // Original Speech Transcript
-        const transcriptEl = document.getElementById('modalRawTranscript');
-        transcriptEl.textContent = c.original_transcript || 'No speech transcript extracted (silence, unintelligible recording, or pending).';
+        byId('modalRawTranscript').textContent =
+          c.original_transcript ||
+          'No speech transcript extracted (silence, unintelligible recording, or pending).';
 
-        // Resolved Content
-        const resolvedContainer = document.getElementById('modalResolvedContainer');
-        const resolvedStatusEl = document.getElementById('modalResolvedStatus');
+        const resolvedContainer = byId('modalResolvedContainer');
+        const resolvedStatusEl = byId('modalResolvedStatus');
 
         if (c.status === 'ready' && c.resolved_item) {
           resolvedStatusEl.className = 'status-pill status-ok';
           resolvedStatusEl.textContent = 'Completed';
-
           const k = c.resolved_item;
           resolvedContainer.innerHTML = `
             <div style="margin-bottom: 12px;">
               <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px;">TITLE</div>
-              <div style="font-size: 15px; font-weight: 700; color: var(--ink);">${k.title}</div>
+              <div style="font-size: 15px; font-weight: 700; color: var(--ink);">${escapeHtml(k.title)}</div>
             </div>
 
             <div style="margin-bottom: 12px;">
               <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px;">CORE IDEA</div>
-              <div style="font-size: 13px; color: var(--ink); line-height: 1.5; background: white; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">${k.core_idea}</div>
+              <div style="font-size: 13px; color: var(--ink); line-height: 1.5; background: white; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">${escapeHtml(k.core_idea)}</div>
             </div>
 
             ${k.details && k.details !== k.core_idea ? `
               <div style="margin-bottom: 12px;">
                 <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px;">DETAILS</div>
-                <div style="font-size: 12px; color: var(--muted); line-height: 1.5;">${k.details}</div>
+                <div style="font-size: 12px; color: var(--muted); line-height: 1.5;">${escapeHtml(k.details)}</div>
               </div>
             ` : ''}
 
             <div style="margin-bottom: 12px;">
               <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px;">CONCEPTS & TAGS</div>
               <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                ${(k.concepts || []).map(c => `<span class="status-pill status-ok" style="font-size: 11px;">${c}</span>`).join('')}
-                ${(k.tags || []).map(t => `<span class="status-pill status-warn" style="font-size: 11px;">#${t}</span>`).join('')}
+                ${(k.concepts || []).map((concept) => `<span class="status-pill status-ok" style="font-size: 11px;">${escapeHtml(concept)}</span>`).join('')}
+                ${(k.tags || []).map((tag) => `<span class="status-pill status-warn" style="font-size: 11px;">#${escapeHtml(tag)}</span>`).join('')}
               </div>
             </div>
 
@@ -758,18 +841,18 @@
               <div style="margin-bottom: 8px;">
                 <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px;">OPEN QUESTIONS</div>
                 <ul style="padding-left: 18px; font-size: 12px; color: var(--muted);">
-                  ${k.open_questions.map(q => `<li>${q}</li>`).join('')}
+                  ${k.open_questions.map((question) => `<li>${escapeHtml(question)}</li>`).join('')}
                 </ul>
               </div>
             ` : ''}
 
             <div style="font-size: 11px; color: var(--muted); margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 8px;">
-              Provenance: <code>${k.provenance}</code>
+              Provenance: <code>${escapeHtml(k.provenance)}</code>
             </div>
           `;
         } else {
           resolvedStatusEl.className = c.status === 'failed' ? 'status-pill status-err' : 'status-pill status-warn';
-          resolvedStatusEl.textContent = c.status.toUpperCase();
+          resolvedStatusEl.textContent = String(c.status || '').toUpperCase();
 
           resolvedContainer.innerHTML = `
             <div style="padding: 16px; background: white; border: 1px solid var(--border); border-radius: 8px; text-align: center;">
@@ -777,51 +860,47 @@
                 ${c.status === 'failed' ? 'Processing Failed' : 'Processing in Progress'}
               </div>
               <div style="font-size: 12px; color: var(--muted); margin-bottom: 12px;">
-                ${c.error_message || 'Pipeline did not produce resolved knowledge.'}
+                ${escapeHtml(c.error_message || 'Pipeline did not produce resolved knowledge.')}
               </div>
-              ${c.has_audio ? `<button class="btn btn-sm btn-primary" onclick="retryJob('${c.capture_id}')">Retry Processing Pipeline</button>` : ''}
+              ${c.has_audio ? `<button class="btn btn-sm btn-primary" data-retry="${escapeHtml(captureId)}">Retry Processing Pipeline</button>` : ''}
             </div>
           `;
         }
 
-        document.getElementById('captureModal').classList.add('open');
+        byId('captureModal').classList.add('open');
       } catch (e) {
-        alert(`Error inspecting capture: ${e}`);
+        alert(`Error inspecting capture: ${e.message}`);
       }
     }
 
     function closeModal() {
-      // Pause any running audio
-      const audio = document.querySelector('#modalAudioContainer audio');
-      if (audio) audio.pause();
-      document.getElementById('captureModal').classList.remove('open');
-    }
-
-    function closeModalOnBg(e) {
-      if (e.target.id === 'captureModal') closeModal();
+      revokeActiveAudio();
+      byId('captureModal').classList.remove('open');
     }
 
     async function loadJobs() {
+      if (!adminState.token) return;
       try {
-        const res = await fetch('/api/admin/jobs?limit=50', { headers: authHeaders() });
+        const res = await apiFetch('/api/admin/jobs?limit=50');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const jobs = await res.json();
-        const tbody = document.getElementById('jobsTableBody');
+        const tbody = byId('jobsTableBody');
         if (!jobs.length) {
           tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--muted);">No jobs recorded yet.</td></tr>';
           return;
         }
-        tbody.innerHTML = jobs.map(j => `
+        tbody.innerHTML = jobs.map((j) => `
           <tr>
             <td>
-              <div style="font-weight: 600;">${j.capture_id}</div>
-              <small style="color: var(--muted);">${j.id.slice(0, 8)}</small>
+              <div style="font-weight: 600;">${escapeHtml(j.capture_id)}</div>
+              <small style="color: var(--muted);">${escapeHtml(String(j.id || '').slice(0, 8))}</small>
             </td>
-            <td><span class="status-pill status-ok">${j.stage}</span></td>
-            <td><span class="status-pill ${j.status === 'ready' ? 'status-ok' : (j.status === 'failed' ? 'status-err' : 'status-warn')}">${j.status}</span></td>
-            <td>${j.duration_ms} ms</td>
-            <td>${j.created_at || '—'}</td>
+            <td><span class="status-pill status-ok">${escapeHtml(j.stage)}</span></td>
+            <td><span class="status-pill ${j.status === 'ready' ? 'status-ok' : (j.status === 'failed' ? 'status-err' : 'status-warn')}">${escapeHtml(j.status)}</span></td>
+            <td>${escapeHtml(j.duration_ms)} ms</td>
+            <td>${escapeHtml(j.created_at || '—')}</td>
             <td>
-              ${j.status === 'failed' ? `<button class="btn btn-sm btn-primary" onclick="retryJob('${j.capture_id}')">Retry</button>` : '—'}
+              ${j.status === 'failed' ? `<button class="btn btn-sm btn-primary" data-retry="${escapeHtml(j.capture_id)}">Retry</button>` : '—'}
             </td>
           </tr>
         `).join('');
@@ -833,44 +912,45 @@
     async function retryJob(captureId) {
       if (!confirm(`Retry processing job for capture ${captureId}?`)) return;
       try {
-        const res = await fetch(`/api/admin/jobs/${captureId}/retry`, {
+        const res = await apiFetch(`/api/admin/jobs/${encodeURIComponent(captureId)}/retry`, {
           method: 'POST',
-          headers: authHeaders()
         });
         if (res.ok) {
           alert('Job queued and processed successfully.');
           loadJobs();
-          if (activeCaptureData) openCaptureDetail(captureId);
+          if (adminState.activeCaptureId === captureId) openCaptureDetail(captureId);
         } else {
-          const err = await res.json();
-          alert(`Retry failed: ${err.detail}`);
+          const err = await res.json().catch(() => ({}));
+          alert(`Retry failed: ${err.detail || res.status}`);
         }
       } catch (e) {
-        alert(`Error: ${e}`);
+        alert(`Error: ${e.message}`);
       }
     }
 
     async function loadKnowledge() {
-      const q = document.getElementById('knowledgeSearchInput').value.trim();
+      if (!adminState.token) return;
+      const q = byId('knowledgeSearchInput').value.trim();
       try {
-        const res = await fetch(`/api/admin/knowledge?q=${encodeURIComponent(q)}&limit=50`, { headers: authHeaders() });
+        const res = await apiFetch(`/api/admin/knowledge?q=${encodeURIComponent(q)}&limit=50`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const items = await res.json();
-        const tbody = document.getElementById('knowledgeTableBody');
+        const tbody = byId('knowledgeTableBody');
         if (!items.length) {
           tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--muted);">No matching knowledge records.</td></tr>';
           return;
         }
-        tbody.innerHTML = items.map(k => `
+        tbody.innerHTML = items.map((k) => `
           <tr>
-            <td style="font-weight: 600;">${k.title}</td>
-            <td style="max-width: 300px; color: var(--muted);">${k.core_idea}</td>
+            <td style="font-weight: 600;">${escapeHtml(k.title)}</td>
+            <td style="max-width: 300px; color: var(--muted);">${escapeHtml(k.core_idea)}</td>
             <td>
-              ${k.concepts.map(c => `<span class="status-pill status-ok" style="margin-right: 4px; font-size: 10px;">${c}</span>`).join('')}
-              ${k.tags.map(t => `<span class="status-pill status-warn" style="margin-right: 4px; font-size: 10px;">#${t}</span>`).join('')}
+              ${(k.concepts || []).map((concept) => `<span class="status-pill status-ok" style="margin-right: 4px; font-size: 10px;">${escapeHtml(concept)}</span>`).join('')}
+              ${(k.tags || []).map((tag) => `<span class="status-pill status-warn" style="margin-right: 4px; font-size: 10px;">#${escapeHtml(tag)}</span>`).join('')}
             </td>
-            <td>${(k.created_at || '').slice(0, 10)}</td>
+            <td>${escapeHtml((k.created_at || '').slice(0, 10))}</td>
             <td>
-              <button class="btn btn-sm btn-danger" onclick="deleteKnowledge('${k.id}')">Delete</button>
+              <button class="btn btn-sm btn-danger" data-delete="${escapeHtml(k.id)}">Delete</button>
             </td>
           </tr>
         `).join('');
@@ -881,69 +961,81 @@
 
     async function deleteKnowledge(id) {
       if (!confirm('Permanently delete this knowledge item, its embedding, and related edges?')) return;
-      await fetch(`/api/knowledge/${id}`, { method: 'DELETE', headers: authHeaders() });
-      loadKnowledge();
-      loadDashboard();
+      try {
+        const res = await apiFetch(`/api/admin/knowledge/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        loadKnowledge();
+        loadDashboard();
+      } catch (err) {
+        alert(`Delete failed: ${err.message}`);
+      }
     }
 
     async function triggerBackfill() {
       if (!confirm('Calculate and index embeddings for all items lacking vector representations?')) return;
       try {
-        const res = await fetch('/api/admin/embeddings/backfill', { method: 'POST', headers: authHeaders() });
+        const res = await apiFetch('/api/admin/embeddings/backfill', { method: 'POST' });
         const data = await res.json();
         alert(`Embedding Backfill Completed:\nTotal items evaluated: ${data.total_items}\nNewly indexed: ${data.newly_indexed}\nFailed: ${data.failed}`);
         loadDashboard();
       } catch (e) {
-        alert(`Backfill error: ${e}`);
+        alert(`Backfill error: ${e.message}`);
       }
     }
 
     async function loadConfig() {
+      if (!adminState.token) return;
       try {
-        const res = await fetch('/api/admin/config', { headers: authHeaders() });
+        const res = await apiFetch('/api/admin/config');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const cfg = await res.json();
-        document.getElementById('cfgModel').value = cfg.model;
-        document.getElementById('cfgBaseUrl').value = cfg.base_url;
+        byId('cfgModel').value = cfg.model;
+        byId('cfgBaseUrl').value = cfg.base_url;
       } catch (err) {
         console.error(err);
       }
     }
 
-    async function saveConfig(e) {
-      e.preventDefault();
-      const model = document.getElementById('cfgModel').value.trim();
-      const baseUrl = document.getElementById('cfgBaseUrl').value.trim();
-      const apiKey = document.getElementById('cfgApiKey').value.trim();
+    async function saveConfig(event) {
+      event.preventDefault();
+      const model = byId('cfgModel').value.trim();
+      const baseUrl = byId('cfgBaseUrl').value.trim();
+      const apiKey = byId('cfgApiKey').value.trim();
 
-      const res = await fetch('/api/admin/config', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ model, base_url: baseUrl, api_key: apiKey || undefined })
-      });
-      if (res.ok) {
-        alert('Configuration updated successfully.');
-        document.getElementById('cfgApiKey').value = '';
-      } else {
-        alert('Failed to update configuration.');
+      try {
+        const res = await apiFetch('/api/admin/config', {
+          method: 'POST',
+          body: JSON.stringify({ model, base_url: baseUrl, api_key: apiKey || undefined }),
+        });
+        if (res.ok) {
+          alert('Configuration updated successfully.');
+          byId('cfgApiKey').value = '';
+        } else {
+          alert(`Failed to update configuration (HTTP ${res.status}).`);
+        }
+      } catch (err) {
+        alert(`Configuration update failed: ${err.message}`);
       }
     }
 
     async function loadLogs() {
-      const lvl = document.getElementById('logLevelFilter').value;
+      if (!adminState.token) return;
+      const lvl = byId('logLevelFilter').value;
       try {
-        const res = await fetch(`/api/admin/logs?limit=100${lvl ? `&level=${lvl}` : ''}`, { headers: authHeaders() });
+        const res = await apiFetch(`/api/admin/logs?limit=100${lvl ? `&level=${encodeURIComponent(lvl)}` : ''}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        const term = document.getElementById('logTerminal');
+        const term = byId('logTerminal');
         if (!data.logs.length) {
           term.innerHTML = '<div class="log-line">No recent log entries matching filter.</div>';
           return;
         }
-        term.innerHTML = data.logs.map(l => `
+        term.innerHTML = data.logs.map((l) => `
           <div class="log-line">
-            <span class="log-time">[${l.timestamp}]</span>
-            <span class="log-${l.level}">[${l.level}]</span>
-            <span style="color: #6272A4;">[${l.logger}]</span>
-            <span>${l.message}</span>
+            <span class="log-time">[${escapeHtml(l.timestamp)}]</span>
+            <span class="log-${escapeHtml(l.level)}">[${escapeHtml(l.level)}]</span>
+            <span style="color: #6272A4;">[${escapeHtml(l.logger)}]</span>
+            <span>${escapeHtml(l.message)}</span>
           </div>
         `).join('');
         term.scrollTop = term.scrollHeight;
@@ -952,8 +1044,72 @@
       }
     }
 
-    // Auto-load overview on boot
-    loadDashboard();
+    function initAdmin() {
+      adminState.token = localStorage.getItem('echo_admin_token') || '';
+      byId('adminToken').value = adminState.token;
+      byId('adminToken').addEventListener('change', saveToken);
+
+      document.querySelectorAll('nav button[data-tab]').forEach((button) => {
+        button.addEventListener('click', () => showTab(button.dataset.tab, button));
+      });
+
+      byId('btnRefreshDashboard').addEventListener('click', loadDashboard);
+      byId('btnRefreshCaptures').addEventListener('click', loadCaptures);
+      byId('btnRefreshJobs').addEventListener('click', loadJobs);
+      byId('btnBackfill').addEventListener('click', triggerBackfill);
+      byId('btnKnowledgeFilter').addEventListener('click', loadKnowledge);
+      byId('btnRefreshLogs').addEventListener('click', loadLogs);
+      byId('btnCloseModal').addEventListener('click', closeModal);
+      byId('btnDoneModal').addEventListener('click', closeModal);
+      byId('configForm').addEventListener('submit', saveConfig);
+      byId('logLevelFilter').addEventListener('change', loadLogs);
+      byId('captureModal').addEventListener('click', (event) => {
+        if (event.target.id === 'captureModal') closeModal();
+      });
+
+      byId('capturesTableBody').addEventListener('click', async (event) => {
+        const inspectButton = event.target.closest('[data-inspect]');
+        if (inspectButton) {
+          openCaptureDetail(inspectButton.dataset.inspect);
+          return;
+        }
+        const audioButton = event.target.closest('[data-audio-url]');
+        if (audioButton) {
+          const slot = audioButton.parentElement;
+          try {
+            audioButton.disabled = true;
+            audioButton.textContent = 'Loading…';
+            const audio = await buildAuthenticatedAudio(audioButton.dataset.audioUrl, false);
+            audio.style.height = '32px';
+            slot.replaceChildren(audio);
+          } catch (err) {
+            audioButton.disabled = false;
+            audioButton.textContent = 'Load audio';
+            alert(`Audio could not be loaded: ${err.message}`);
+          }
+        }
+      });
+
+      const handleRetry = (event) => {
+        const button = event.target.closest('[data-retry]');
+        if (button) retryJob(button.dataset.retry);
+      };
+      byId('jobsTableBody').addEventListener('click', handleRetry);
+      byId('modalResolvedContainer').addEventListener('click', handleRetry);
+
+      byId('knowledgeTableBody').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-delete]');
+        if (button) deleteKnowledge(button.dataset.delete);
+      });
+
+      if (adminState.token) {
+        loadDashboard();
+      } else {
+        byId('lastRefreshed').textContent = 'Enter an admin token to load data.';
+      }
+    }
+
+    initAdmin();
   </script>
 </body>
 </html>

@@ -12,7 +12,16 @@ class ServerSettings:
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     pipeline_version: str = "v1.2-echo-real"
     max_voice_seconds: int = 30
-    admin_token: str = os.getenv("ECHO_ADMIN_TOKEN", "echo-admin-secure-key-2026")
+    # Authentication is explicitly configured. Empty values fail closed.
+    admin_token: str = os.getenv("ECHO_ADMIN_TOKEN", "")
+    client_token: str = os.getenv("ECHO_CLIENT_TOKEN", "")
+    # Comma-separated browser origins. Native Android clients do not need CORS.
+    cors_origins: str = os.getenv("ECHO_CORS_ORIGINS", "")
+    max_upload_bytes: int = int(os.getenv("ECHO_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 _SETTINGS_INSTANCE: Optional[ServerSettings] = None
 

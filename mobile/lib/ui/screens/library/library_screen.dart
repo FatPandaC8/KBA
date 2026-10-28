@@ -341,7 +341,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                             onTap: () =>
                                                 widget.onOpenDetail(note.id),
                                             onRetry: () => widget.noteProvider
-                                                .syncCaptureToBackend(note.id),
+                                                .retryNote(note.id),
                                           );
                                         },
                                       ),

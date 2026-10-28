@@ -78,25 +78,116 @@ class BackendSyncResult {
   });
 }
 
+class BackendConnectionResult {
+  final bool ok;
+  final String message;
+
+  const BackendConnectionResult({required this.ok, required this.message});
+}
+
+class BackendException implements Exception {
+  final int? statusCode;
+  final String message;
+
+  BackendException(this.message, {this.statusCode});
+
+  @override
+  String toString() => message;
+}
+
 class BackendService {
+  static const Duration _readTimeout = Duration(seconds: 45);
+  static const Duration _uploadTimeout = Duration(seconds: 120);
+
   final SettingsService _settings;
   final http.Client _client;
 
-  BackendService(this._settings, {http.Client? client})
-    : _client = client ?? http.Client();
+  BackendService(SettingsService settings, {http.Client? client})
+    : _settings = settings,
+      _client = client ?? http.Client();
 
   http.Client get client => _client;
   String get baseUrl => _settings.serverUrl.replaceAll(RegExp(r'/+$'), '');
+
+  Map<String, String> get _authHeaders {
+    final token = _settings.clientToken.trim();
+    if (token.isEmpty) return const {};
+    return {'Authorization': 'Bearer $token'};
+  }
+
+  Map<String, String> get _jsonHeaders => {
+    ..._authHeaders,
+    'Content-Type': 'application/json',
+  };
 
   Future<bool> checkHealth() async {
     try {
       final res = await _client
           .get(Uri.parse('$baseUrl/api/health'))
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(seconds: 4));
       return res.statusCode == 200;
     } catch (_) {
       return false;
     }
+  }
+
+  /// Verifies both reachability and the configured client token.
+  Future<BackendConnectionResult> testConnection() async {
+    final uri = Uri.tryParse(baseUrl);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      return const BackendConnectionResult(
+        ok: false,
+        message: 'Enter a valid server URL, including http:// or https://.',
+      );
+    }
+    try {
+      final health = await _client
+          .get(Uri.parse('$baseUrl/api/health'))
+          .timeout(const Duration(seconds: 5));
+      if (health.statusCode != 200) {
+        return BackendConnectionResult(
+          ok: false,
+          message: 'Server responded with HTTP ${health.statusCode}.',
+        );
+      }
+      final auth = await _client
+          .get(Uri.parse('$baseUrl/api/knowledge'), headers: _authHeaders)
+          .timeout(const Duration(seconds: 5));
+      if (auth.statusCode == 401) {
+        return const BackendConnectionResult(
+          ok: false,
+          message: 'Server reachable, but the client token was rejected.',
+        );
+      }
+      if (auth.statusCode == 503) {
+        return const BackendConnectionResult(
+          ok: false,
+          message:
+              'Server reachable, but client authentication is not configured.',
+        );
+      }
+      if (auth.statusCode != 200) {
+        return BackendConnectionResult(
+          ok: false,
+          message:
+              'Server reachable, but API returned HTTP ${auth.statusCode}.',
+        );
+      }
+      return const BackendConnectionResult(
+        ok: true,
+        message: 'Connected and authenticated.',
+      );
+    } catch (e) {
+      return BackendConnectionResult(
+        ok: false,
+        message: 'Could not reach server: ${_shortError(e)}',
+      );
+    }
+  }
+
+  String _shortError(Object error) {
+    final text = error.toString();
+    return text.length > 160 ? '${text.substring(0, 160)}…' : text;
   }
 
   Future<BackendSyncResult> uploadCapture({
@@ -108,14 +199,16 @@ class BackendService {
   }) async {
     final uri = Uri.parse('$baseUrl/api/captures/upload');
     final request = http.MultipartRequest('POST', uri)
+      ..headers.addAll(_authHeaders)
       ..fields['capture_id'] = captureId
       ..fields['idempotency_key'] = idempotencyKey
       ..fields['duration_ms'] = durationMs.toString()
       ..fields['consent_given'] = consentGiven ? 'true' : 'false'
       ..files.add(await http.MultipartFile.fromPath('file', audioPath));
 
-    final streamedRes = await _client.send(request);
-    final res = await http.Response.fromStream(streamedRes);
+    final streamedRes = await _client.send(request).timeout(_uploadTimeout);
+    final res = await http.Response.fromStream(streamedRes)
+        .timeout(_uploadTimeout);
 
     if (res.statusCode >= 200 && res.statusCode < 300) {
       final data = jsonDecode(utf8.decode(res.bodyBytes));
@@ -136,9 +229,11 @@ class BackendService {
                 .toList() ??
             [],
       );
-    } else {
-      throw Exception('Server upload failed (${res.statusCode}): ${res.body}');
     }
+    throw BackendException(
+      _serverMessage(res, 'Server upload failed'),
+      statusCode: res.statusCode,
+    );
   }
 
   Future<List<({String id, double score})>> searchSemantic(
@@ -148,7 +243,9 @@ class BackendService {
     final uri = Uri.parse(
       '$baseUrl/api/knowledge/semantic-search?q=${Uri.encodeComponent(query)}&limit=$limit',
     );
-    final res = await _client.get(uri);
+    final res = await _client
+        .get(uri, headers: _authHeaders)
+        .timeout(_readTimeout);
     if (res.statusCode == 200) {
       final List data = jsonDecode(utf8.decode(res.bodyBytes));
       return data.map((entry) {
@@ -157,22 +254,36 @@ class BackendService {
         return (id: item['id'] as String, score: score);
       }).toList();
     }
+    if (res.statusCode == 401 || res.statusCode == 503) {
+      throw BackendException(
+        _serverMessage(res, 'Server authentication failed'),
+        statusCode: res.statusCode,
+      );
+    }
     return [];
   }
 
   Future<void> updateConsent(bool consentGiven) async {
-    final uri = Uri.parse('$baseUrl/api/eval/consent');
-    await _client.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'consent_given': consentGiven}),
-    );
+    final res = await _client
+        .post(
+          Uri.parse('$baseUrl/api/eval/consent'),
+          headers: _jsonHeaders,
+          body: jsonEncode({'consent_given': consentGiven}),
+        )
+        .timeout(_readTimeout);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw BackendException(
+        _serverMessage(res, 'Consent update failed'),
+        statusCode: res.statusCode,
+      );
+    }
   }
 
   Future<({List<GraphNodeModel> nodes, List<GraphEdgeModel> edges})>
   fetchGraph() async {
-    final uri = Uri.parse('$baseUrl/api/graph');
-    final res = await _client.get(uri);
+    final res = await _client
+        .get(Uri.parse('$baseUrl/api/graph'), headers: _authHeaders)
+        .timeout(_readTimeout);
     if (res.statusCode == 200) {
       final data = jsonDecode(utf8.decode(res.bodyBytes));
       final nodes = (data['nodes'] as List)
@@ -183,7 +294,10 @@ class BackendService {
           .toList();
       return (nodes: nodes, edges: edges);
     }
-    throw Exception('Failed to fetch graph (${res.statusCode})');
+    throw BackendException(
+      _serverMessage(res, 'Failed to fetch graph'),
+      statusCode: res.statusCode,
+    );
   }
 
   Future<void> updateRelationship(
@@ -195,7 +309,15 @@ class BackendService {
     if (relationType != null) {
       url += '&relation_type=${Uri.encodeComponent(relationType)}';
     }
-    await _client.patch(Uri.parse(url));
+    final res = await _client
+        .patch(Uri.parse(url), headers: _authHeaders)
+        .timeout(_readTimeout);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw BackendException(
+        _serverMessage(res, 'Failed to update relationship'),
+        statusCode: res.statusCode,
+      );
+    }
   }
 
   Future<void> syncKnowledgeItem({
@@ -209,7 +331,6 @@ class BackendService {
     List<String> tags = const [],
     List<String> openQuestions = const [],
   }) async {
-    final uri = Uri.parse('$baseUrl/api/knowledge');
     final payload = jsonEncode({
       'id': id,
       'capture_id': captureId,
@@ -222,26 +343,74 @@ class BackendService {
       'open_questions': openQuestions,
       'provenance': 'mobile-sync',
     });
-    await _client.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: payload,
-    );
+    final res = await _client
+        .post(
+          Uri.parse('$baseUrl/api/knowledge'),
+          headers: _jsonHeaders,
+          body: payload,
+        )
+        .timeout(_readTimeout);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw BackendException(
+        _serverMessage(res, 'Knowledge sync failed'),
+        statusCode: res.statusCode,
+      );
+    }
   }
 
   Future<List<GraphEdgeModel>> fetchAllRelationships() async {
-    final uri = Uri.parse('$baseUrl/api/graph');
-    final res = await _client.get(uri);
+    final res = await _client
+        .get(Uri.parse('$baseUrl/api/graph'), headers: _authHeaders)
+        .timeout(_readTimeout);
     if (res.statusCode == 200) {
       final data = jsonDecode(utf8.decode(res.bodyBytes));
       return (data['edges'] as List)
           .map((e) => GraphEdgeModel.fromJson(e))
           .toList();
     }
-    return [];
+    throw BackendException(
+      _serverMessage(res, 'Failed to load relationships'),
+      statusCode: res.statusCode,
+    );
   }
 
   Future<void> deleteRelationship(String relId) async {
-    await _client.delete(Uri.parse('$baseUrl/api/relationships/$relId'));
+    final res = await _client
+        .delete(
+          Uri.parse('$baseUrl/api/relationships/$relId'),
+          headers: _authHeaders,
+        )
+        .timeout(_readTimeout);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw BackendException(
+        _serverMessage(res, 'Failed to delete relationship'),
+        statusCode: res.statusCode,
+      );
+    }
+  }
+
+  Future<void> deleteCapture(String captureId) async {
+    final res = await _client
+        .delete(
+          Uri.parse('$baseUrl/api/captures/$captureId'),
+          headers: _authHeaders,
+        )
+        .timeout(_readTimeout);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw BackendException(
+        _serverMessage(res, 'Server deletion failed'),
+        statusCode: res.statusCode,
+      );
+    }
+  }
+
+  String _serverMessage(http.Response res, String fallback) {
+    try {
+      final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+      if (decoded is Map && decoded['detail'] is String) {
+        return decoded['detail'] as String;
+      }
+    } catch (_) {}
+    return '$fallback (HTTP ${res.statusCode}).';
   }
 }

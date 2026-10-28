@@ -5,7 +5,7 @@ class EchoColors {
   static const Color surface = Color(0xFFF7F6F2);
   static const Color card = Color(0xFFFFFFFF);
   static const Color ink = Color(0xFF222522);
-  static const Color muted = Color(0xFF747972);
+  static const Color muted = Color(0xFF5F655E);
   static const Color forest = Color(0xFF294638);
   static const Color forest2 = Color(0xFF365C49);
   static const Color sage = Color(0xFFA8B9A5);

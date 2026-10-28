@@ -25,7 +25,9 @@ class NoteCard extends StatelessWidget {
     final isProcessing =
         note.status == ProcessingStatus.transcribing ||
         note.status == ProcessingStatus.structuring ||
-        note.status == ProcessingStatus.pending;
+        note.status == ProcessingStatus.pending ||
+        note.status == ProcessingStatus.queued ||
+        note.status == ProcessingStatus.uploading;
 
     String snippet =
         note.summary ??
@@ -96,7 +98,7 @@ class NoteCard extends StatelessWidget {
                     formattedDate,
                     style: const TextStyle(
                       fontSize: 10,
-                      color: Color(0xFF979B95),
+                      color: EchoColors.muted,
                     ),
                   ),
                 ],
@@ -147,25 +149,29 @@ class NoteCard extends StatelessWidget {
                     ],
                   ),
                   if (isFailed && onRetry != null)
-                    GestureDetector(
-                      onTap: onRetry,
-                      child: const Row(
-                        children: [
-                          Icon(
-                            Icons.refresh,
-                            size: 14,
-                            color: EchoColors.danger,
-                          ),
-                          SizedBox(width: 4),
-                          Text(
-                            'Retry',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
+                    Semantics(
+                      button: true,
+                      label: 'Retry processing this note',
+                      child: GestureDetector(
+                        onTap: onRetry,
+                        child: const Row(
+                          children: [
+                            Icon(
+                              Icons.refresh,
+                              size: 14,
                               color: EchoColors.danger,
                             ),
-                          ),
-                        ],
+                            SizedBox(width: 4),
+                            Text(
+                              'Retry',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: EchoColors.danger,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                 ],

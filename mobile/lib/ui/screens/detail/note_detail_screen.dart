@@ -39,14 +39,39 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     _originalController = TextEditingController(
       text: note?.originalContent ?? '',
     );
+    widget.noteProvider.addListener(_onProviderChanged);
   }
 
   @override
   void dispose() {
+    widget.noteProvider.removeListener(_onProviderChanged);
     _titleController.dispose();
     _summaryController.dispose();
     _originalController.dispose();
     super.dispose();
+  }
+
+  /// Keeps the display controllers aligned with the latest stored note while
+  /// the user is not editing. This prevents an in-flight AI result from being
+  /// silently replaced by stale text when editing starts later.
+  void _onProviderChanged() {
+    if (!mounted || _isEditing) return;
+    final note = _getNote();
+    if (note == null) return;
+    _syncControllers(note);
+  }
+
+  void _syncControllers(Note note) {
+    _titleController.text = note.title;
+    _summaryController.text = note.summary ?? '';
+    _originalController.text = note.originalContent;
+  }
+
+  void _beginEditing() {
+    final note = _getNote();
+    if (note == null) return;
+    _syncControllers(note);
+    setState(() => _isEditing = true);
   }
 
   Note? _getNote() {
@@ -57,29 +82,56 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     }
   }
 
-  void _saveEdits() {
+  Future<void> _saveEdits() async {
     final note = _getNote();
-    if (note != null) {
-      final updated = note.copyWith(
-        title: _titleController.text.trim(),
-        summary: _summaryController.text.trim(),
-        originalContent: _originalController.text.trim(),
-      );
-      widget.noteProvider.updateNote(updated);
-    }
+    if (note == null) return;
+    final updated = note.copyWith(
+      title: _titleController.text.trim().isEmpty
+          ? note.title
+          : _titleController.text.trim(),
+      summary: _summaryController.text.trim(),
+      originalContent: _originalController.text.trim(),
+    );
     setState(() => _isEditing = false);
+    try {
+      await widget.noteProvider.updateNote(updated);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not save changes: $e')));
+    }
   }
 
-  void _confirmDelete() {
-    showDialog(
+  Future<void> _confirmDelete() async {
+    await showDialog<void>(
       context: context,
       builder: (_) => DeleteConfirmationDialog(
         onConfirmDelete: () async {
-          await widget.noteProvider.deleteNote(widget.noteId);
-          widget.onBack();
+          try {
+            await widget.noteProvider.deleteNote(widget.noteId);
+            if (!mounted) return;
+            widget.onBack();
+          } catch (e) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Deletion failed. Nothing was removed: $e'),
+              ),
+            );
+          }
         },
       ),
     );
+  }
+
+  Future<void> _retry(Note note) async {
+    try {
+      await widget.noteProvider.retryNote(note.id);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Retry failed: $e')));
+    }
   }
 
   @override
@@ -141,6 +193,53 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
                     ),
                   ),
                   const SizedBox(height: 18),
+
+                  if (note.failureReason != null &&
+                      note.failureReason!.isNotEmpty) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: EchoColors.dangerSoft,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: EchoColors.danger),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Processing did not finish',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: EchoColors.danger,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            note.failureReason!,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              height: 1.4,
+                              color: EchoColors.ink,
+                            ),
+                          ),
+                          if (note.retryCount >=
+                              NoteProvider.maxRetryAttempts) ...[
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Automatic retries stopped. Use Retry to try again.',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: EchoColors.muted,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
 
                   // Audio Player if audio note
                   if (note.audioPath != null && note.audioPath!.isNotEmpty) ...[
@@ -419,7 +518,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
                             'Edit organized ideas',
                             style: TextStyle(fontWeight: FontWeight.w600),
                           ),
-                          onPressed: () => setState(() => _isEditing = true),
+                          onPressed: _beginEditing,
                         ),
                         if (note.status == ProcessingStatus.failed ||
                             note.status == ProcessingStatus.rawOnly) ...[
@@ -434,13 +533,12 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               elevation: 0,
                             ),
-                            icon: const Icon(Icons.auto_awesome, size: 18),
+                            icon: const Icon(Icons.refresh, size: 18),
                             label: const Text(
-                              'Process with AI',
+                              'Retry processing',
                               style: TextStyle(fontWeight: FontWeight.w600),
                             ),
-                            onPressed: () =>
-                                widget.noteProvider.processNoteAI(note.id),
+                            onPressed: () => _retry(note),
                           ),
                         ],
                       ],

@@ -90,7 +90,7 @@ class ProcessAudioCaptureUseCase:
         duration_ms: int = 0,
         consent_given: bool = False,
     ) -> CaptureUploadResultDTO:
-        job_id = str(uuid.uuid4())
+        job_id = capture_id
         job = ProcessingJobDTO(
             id=job_id,
             capture_id=capture_id,
@@ -148,6 +148,8 @@ class ProcessAudioCaptureUseCase:
                     pass
 
             self.job_repo.update_job_status(capture_id, "completed", "ready")
+            capture.status = "ready"
+            self.capture_repo.save(capture)
 
             return CaptureUploadResultDTO(
                 capture_id=capture_id,
@@ -158,6 +160,8 @@ class ProcessAudioCaptureUseCase:
 
         except Exception as e:
             self.job_repo.update_job_status(capture_id, "failed", "failed", error_message=str(e))
+            capture.status = "failed"
+            self.capture_repo.save(capture)
             if not consent_given and os.path.exists(audio_file_path):
                 try:
                     os.remove(audio_file_path)
@@ -306,6 +310,77 @@ class BackfillEmbeddingsUseCase:
                     print(f"[Embedding Backfill Error on {item.id}] {e}")
                     failed += 1
         return {"total_items": len(all_items), "newly_indexed": indexed, "failed": failed}
+
+class DeleteCaptureUseCase:
+    """Deletes a complete capture lifecycle idempotently.
+
+    Audio is removed before database rows so that a permission/filesystem
+    failure cannot silently report success while leaving retained audio behind.
+    """
+
+    def __init__(
+        self,
+        capture_repo: CaptureRepositoryPort,
+        knowledge_repo: KnowledgeRepositoryPort,
+        job_repo: JobStatusRepositoryPort,
+        eval_repo: EvalRecordRepositoryPort,
+        upload_dir: str,
+    ):
+        self.capture_repo = capture_repo
+        self.knowledge_repo = knowledge_repo
+        self.job_repo = job_repo
+        self.eval_repo = eval_repo
+        self.upload_dir = upload_dir
+
+    def execute(self, capture_id: str) -> Dict[str, Any]:
+        capture = self.capture_repo.get_by_id(capture_id)
+        audio_removed = False
+        if capture and capture.audio_path:
+            real_path = os.path.realpath(capture.audio_path)
+            upload_root = os.path.realpath(self.upload_dir)
+            if not (real_path == upload_root or real_path.startswith(upload_root + os.sep)):
+                raise RuntimeError("Refusing to delete audio outside the upload directory")
+            if os.path.exists(real_path):
+                os.remove(real_path)
+                audio_removed = True
+
+        self.knowledge_repo.delete(capture_id)
+        jobs_deleted = self.job_repo.delete_by_capture_id(capture_id)
+        eval_deleted = self.eval_repo.delete_by_capture_id(capture_id)
+        if capture:
+            self.capture_repo.delete(capture_id)
+
+        return {
+            "deleted": capture is not None,
+            "capture_id": capture_id,
+            "audio_removed": audio_removed,
+            "jobs_deleted": jobs_deleted,
+            "eval_records_deleted": eval_deleted,
+        }
+
+
+class PurgeRetainedAudioUseCase:
+    """Removes all server-retained capture audio after consent withdrawal."""
+
+    def __init__(self, capture_repo: CaptureRepositoryPort, upload_dir: str):
+        self.capture_repo = capture_repo
+        self.upload_dir = upload_dir
+
+    def execute(self) -> int:
+        upload_root = os.path.realpath(self.upload_dir)
+        removed = 0
+        for capture in self.capture_repo.list_all():
+            if not capture.audio_path:
+                continue
+            real_path = os.path.realpath(capture.audio_path)
+            if not (real_path == upload_root or real_path.startswith(upload_root + os.sep)):
+                raise RuntimeError("Refusing to purge audio outside the upload directory")
+            if os.path.exists(real_path):
+                os.remove(real_path)
+                removed += 1
+            self.capture_repo.clear_audio_path(capture.id)
+        return removed
+
 
 class AdminSystemStatusUseCase:
     def __init__(

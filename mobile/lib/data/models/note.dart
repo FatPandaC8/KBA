@@ -12,6 +12,8 @@ enum ProcessingStatus {
 }
 
 class Note {
+  static const Object _unset = Object();
+
   final String id;
   final String? audioPath;
   final int? audioDurationMs;
@@ -24,6 +26,7 @@ class Note {
   final List<String> tags;
   final ProcessingStatus status;
   final String? failureReason;
+  final int retryCount;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -40,39 +43,48 @@ class Note {
     this.tags = const [],
     this.status = ProcessingStatus.rawOnly,
     this.failureReason,
+    this.retryCount = 0,
     required this.createdAt,
     required this.updatedAt,
   });
 
   Note copyWith({
     String? id,
-    String? audioPath,
-    int? audioDurationMs,
+    Object? audioPath = _unset,
+    Object? audioDurationMs = _unset,
     String? originalContent,
-    String? transcript,
+    Object? transcript = _unset,
     String? title,
-    String? summary,
+    Object? summary = _unset,
     List<String>? keyFacts,
     List<String>? openQuestions,
     List<String>? tags,
     ProcessingStatus? status,
-    String? failureReason,
+    Object? failureReason = _unset,
+    int? retryCount,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
     return Note(
       id: id ?? this.id,
-      audioPath: audioPath ?? this.audioPath,
-      audioDurationMs: audioDurationMs ?? this.audioDurationMs,
+      audioPath: audioPath == _unset ? this.audioPath : audioPath as String?,
+      audioDurationMs: audioDurationMs == _unset
+          ? this.audioDurationMs
+          : audioDurationMs as int?,
       originalContent: originalContent ?? this.originalContent,
-      transcript: transcript ?? this.transcript,
+      transcript: transcript == _unset
+          ? this.transcript
+          : transcript as String?,
       title: title ?? this.title,
-      summary: summary ?? this.summary,
+      summary: summary == _unset ? this.summary : summary as String?,
       keyFacts: keyFacts ?? this.keyFacts,
       openQuestions: openQuestions ?? this.openQuestions,
       tags: tags ?? this.tags,
       status: status ?? this.status,
-      failureReason: failureReason ?? this.failureReason,
+      failureReason: failureReason == _unset
+          ? this.failureReason
+          : failureReason as String?,
+      retryCount: retryCount ?? this.retryCount,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -92,6 +104,7 @@ class Note {
       'tags': jsonEncode(tags),
       'status': status.name,
       'failureReason': failureReason,
+      'retryCount': retryCount,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
     };
@@ -126,6 +139,7 @@ class Note {
         orElse: () => ProcessingStatus.rawOnly,
       ),
       failureReason: map['failureReason'] as String?,
+      retryCount: (map['retryCount'] as int?) ?? 0,
       createdAt:
           DateTime.tryParse(map['createdAt'] as String? ?? '') ??
           DateTime.now(),

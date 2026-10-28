@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:mobile/core/theme/echo_colors.dart';
 import 'package:mobile/services/backend_service.dart';
@@ -24,6 +26,8 @@ class KnowledgeGraphWidget extends StatefulWidget {
 class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
   List<GraphEdgeModel> _relationships = [];
   bool _isLoading = false;
+  String? _loadError;
+  int _loadSequence = 0;
   String? _selectedNodeId;
   double _zoom = 1.0;
   Offset _panOffset = Offset.zero;
@@ -52,31 +56,35 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
   }
 
   void _onProviderChanged() {
+    if (_isLoading) return;
     _loadRelationships();
   }
 
   Future<void> _loadRelationships() async {
-    setState(() {
-      _isLoading = true;
-    });
+    final sequence = ++_loadSequence;
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _loadError = null;
+      });
+    }
 
     try {
       final rels = await widget.noteProvider.backendService
           .fetchAllRelationships();
-      if (mounted) {
-        setState(() {
-          _relationships = rels;
-          _isLoading = false;
-        });
-      }
+      if (!mounted || sequence != _loadSequence) return;
+      setState(() {
+        _relationships = rels;
+        _isLoading = false;
+      });
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          // Even if backend fails, local notes can still be viewed in graph
-          _relationships = [];
-        });
-      }
+      if (!mounted || sequence != _loadSequence) return;
+      setState(() {
+        _isLoading = false;
+        // Local notes remain viewable, but the failure must be visible and
+        // retryable instead of silently pretending there are no connections.
+        _loadError = e.toString();
+      });
     }
   }
 
@@ -177,6 +185,7 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
       nodes: graphNodes,
       edges: visibleEdges,
     );
+    final layoutBounds = DeterministicGraphLayout.computeBounds(positionedMap);
 
     // Selected node handling: default to first if none or selected removed
     final selectedId =
@@ -196,313 +205,432 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
       if (edge.toNode == selectedId) neighborIds.add(edge.fromNode);
     }
 
-    return Column(
-      children: [
-        // Graph Legend and Meta
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-          child: Row(
-            children: [
+    final canvasHeight = (MediaQuery.sizeOf(context).height * 0.58).clamp(
+      320.0,
+      520.0,
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final content = Column(
+          children: [
+            // Graph Legend and Meta
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              child: Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: EchoColors.forest,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  const Text(
+                    'Voice',
+                    style: TextStyle(fontSize: 10, color: EchoColors.muted),
+                  ),
+                  const SizedBox(width: 14),
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: EchoColors.sage, width: 1.5),
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  const Text(
+                    'Text',
+                    style: TextStyle(fontSize: 10, color: EchoColors.muted),
+                  ),
+                  const SizedBox(width: 14),
+                  Container(
+                    width: 14,
+                    height: 2,
+                    color: const Color(0xFF6B8A7A),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    '${visibleEdges.length} connections',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: EchoColors.muted,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.refresh,
+                      size: 18,
+                      color: EchoColors.muted,
+                    ),
+                    onPressed: _loadRelationships,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+            ),
+
+            if (_loadError != null)
               Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  color: EchoColors.forest,
-                  shape: BoxShape.circle,
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
                 ),
-              ),
-              const SizedBox(width: 5),
-              const Text(
-                'Voice',
-                style: TextStyle(fontSize: 10, color: EchoColors.muted),
-              ),
-              const SizedBox(width: 14),
-              Container(
-                width: 8,
-                height: 8,
                 decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: EchoColors.sage, width: 1.5),
+                  color: EchoColors.dangerSoft,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: EchoColors.danger),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.cloud_off_outlined,
+                      size: 16,
+                      color: EchoColors.danger,
+                    ),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Connections could not be loaded. Local notes are still shown.',
+                        style: TextStyle(fontSize: 11, color: EchoColors.ink),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _loadRelationships,
+                      child: const Text(
+                        'Retry',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: EchoColors.forest,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 5),
-              const Text(
-                'Text',
-                style: TextStyle(fontSize: 10, color: EchoColors.muted),
+
+            // Interactive Canvas Container
+            Container(
+              height: canvasHeight,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F3EE),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: EchoColors.border),
               ),
-              const SizedBox(width: 14),
-              Container(width: 14, height: 2, color: const Color(0xFF6B8A7A)),
-              const SizedBox(width: 5),
-              Text(
-                '${visibleEdges.length} connections',
-                style: const TextStyle(fontSize: 10, color: EchoColors.muted),
-              ),
-              const Spacer(),
-              IconButton(
-                icon: const Icon(
-                  Icons.refresh,
-                  size: 18,
-                  color: EchoColors.muted,
-                ),
-                onPressed: _loadRelationships,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-            ],
-          ),
-        ),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                children: [
+                  // Draggable / Zoomable Canvas Area. Content is scaled to fit the
+                  // real viewport and stays pannable, so nodes are never clipped by
+                  // a hard-coded canvas size.
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final availableWidth = constraints.maxWidth;
+                      final availableHeight = constraints.maxHeight;
+                      final fitScale = math.min(
+                        1.0,
+                        math.min(
+                          availableWidth / layoutBounds.width,
+                          availableHeight / layoutBounds.height,
+                        ),
+                      );
+                      final scale = (fitScale * _zoom).clamp(0.25, 3.0);
+                      final scaledWidth = layoutBounds.width * scale;
+                      final scaledHeight = layoutBounds.height * scale;
+                      final baseOffset = Offset(
+                        (availableWidth - scaledWidth) / 2,
+                        (availableHeight - scaledHeight) / 2,
+                      );
 
-        // Interactive Canvas Container
-        Container(
-          height: 490,
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: const Color(0xFFF1F3EE),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: EchoColors.border),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Stack(
-            children: [
-              // Draggable / Zoomable Canvas Area
-              GestureDetector(
-                onPanUpdate: (details) {
-                  setState(() {
-                    _panOffset += details.delta;
-                  });
-                },
-                child: Transform.translate(
-                  offset: _panOffset,
-                  child: Transform.scale(
-                    scale: _zoom,
-                    alignment: Alignment.center,
-                    child: SizedBox(
-                      width: 500,
-                      height: 500,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          // Edge Lines
-                          CustomPaint(
-                            size: const Size(500, 500),
-                            painter: _GraphEdgePainter(
-                              positionedMap: positionedMap,
-                              edges: visibleEdges,
-                              selectedNodeId: selectedId,
-                            ),
-                          ),
-
-                          // Node Buttons
-                          ...visibleNotes.map((note) {
-                            final posNode = positionedMap[note.id];
-                            if (posNode == null) return const SizedBox.shrink();
-
-                            final isSelected = note.id == selectedId;
-                            final isNeighbor = neighborIds.contains(note.id);
-                            final isCapture = note.audioPath != null;
-
-                            final opacity =
-                                (_selectedNodeId == null ||
-                                    isSelected ||
-                                    isNeighbor)
-                                ? 1.0
-                                : 0.45;
-
-                            return Positioned(
-                              left: posNode.position.dx,
-                              top: posNode.position.dy,
-                              child: Opacity(
-                                opacity: opacity,
-                                child: GestureDetector(
-                                  onTap: () {
-                                    setState(() {
-                                      _selectedNodeId = note.id;
-                                    });
-                                  },
-                                  onDoubleTap: () {
-                                    widget.onOpenDetail(note.id);
-                                  },
-                                  child: Container(
-                                    width: posNode.width,
-                                    height: posNode.height,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: isCapture
-                                          ? EchoColors.forest
-                                          : Colors.white,
-                                      borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(
-                                        color: isSelected
-                                            ? EchoColors.forest
-                                            : (isNeighbor
-                                                  ? const Color(0xFF6B8A7A)
-                                                  : EchoColors.sage),
-                                        width: isSelected
-                                            ? 2.5
-                                            : (isNeighbor ? 2.0 : 1.2),
-                                      ),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: isSelected
-                                              ? EchoColors.forest.withValues(
-                                                  alpha: 0.25,
-                                                )
-                                              : const Color.fromRGBO(
-                                                  35,
-                                                  42,
-                                                  37,
-                                                  0.06,
-                                                ),
-                                          blurRadius: isSelected ? 12 : 6,
-                                          offset: const Offset(0, 3),
-                                        ),
-                                      ],
-                                    ),
-                                    alignment: Alignment.center,
-                                    child: Text(
-                                      note.title,
-                                      textAlign: TextAlign.center,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w700,
-                                        color: isCapture
-                                            ? Colors.white
-                                            : EchoColors.forest,
-                                        height: 1.2,
-                                      ),
+                      return GestureDetector(
+                        onPanUpdate: (details) {
+                          setState(() {
+                            _panOffset += details.delta;
+                          });
+                        },
+                        child: Transform.translate(
+                          offset: baseOffset + _panOffset,
+                          child: Transform.scale(
+                            scale: scale,
+                            alignment: Alignment.topLeft,
+                            child: SizedBox(
+                              width: layoutBounds.width,
+                              height: layoutBounds.height,
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  // Edge Lines
+                                  CustomPaint(
+                                    size: layoutBounds.size,
+                                    painter: _GraphEdgePainter(
+                                      positionedMap: positionedMap,
+                                      edges: visibleEdges,
+                                      selectedNodeId: selectedId,
+                                      origin: layoutBounds.topLeft,
                                     ),
                                   ),
-                                ),
+
+                                  // Node Buttons
+                                  ...visibleNotes.map((note) {
+                                    final posNode = positionedMap[note.id];
+                                    if (posNode == null) {
+                                      return const SizedBox.shrink();
+                                    }
+
+                                    final isSelected = note.id == selectedId;
+                                    final isNeighbor = neighborIds.contains(
+                                      note.id,
+                                    );
+                                    final isCapture = note.audioPath != null;
+
+                                    final opacity =
+                                        (_selectedNodeId == null ||
+                                            isSelected ||
+                                            isNeighbor)
+                                        ? 1.0
+                                        : 0.45;
+
+                                    return Positioned(
+                                      left:
+                                          posNode.position.dx -
+                                          layoutBounds.left,
+                                      top:
+                                          posNode.position.dy -
+                                          layoutBounds.top,
+                                      child: Opacity(
+                                        opacity: opacity,
+                                        child: GestureDetector(
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedNodeId = note.id;
+                                            });
+                                          },
+                                          onDoubleTap: () {
+                                            widget.onOpenDetail(note.id);
+                                          },
+                                          child: Container(
+                                            width: posNode.width,
+                                            height: posNode.height,
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                              vertical: 6,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: isCapture
+                                                  ? EchoColors.forest
+                                                  : Colors.white,
+                                              borderRadius:
+                                                  BorderRadius.circular(14),
+                                              border: Border.all(
+                                                color: isSelected
+                                                    ? EchoColors.forest
+                                                    : (isNeighbor
+                                                          ? const Color(
+                                                              0xFF6B8A7A,
+                                                            )
+                                                          : EchoColors.sage),
+                                                width: isSelected
+                                                    ? 2.5
+                                                    : (isNeighbor ? 2.0 : 1.2),
+                                              ),
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: isSelected
+                                                      ? EchoColors.forest
+                                                            .withValues(
+                                                              alpha: 0.25,
+                                                            )
+                                                      : const Color.fromRGBO(
+                                                          35,
+                                                          42,
+                                                          37,
+                                                          0.06,
+                                                        ),
+                                                  blurRadius: isSelected
+                                                      ? 12
+                                                      : 6,
+                                                  offset: const Offset(0, 3),
+                                                ),
+                                              ],
+                                            ),
+                                            alignment: Alignment.center,
+                                            child: Text(
+                                              note.title,
+                                              textAlign: TextAlign.center,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w700,
+                                                color: isCapture
+                                                    ? Colors.white
+                                                    : EchoColors.forest,
+                                                height: 1.2,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }),
+                                ],
                               ),
-                            );
-                          }),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+
+                  // Zoom Controls
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: EchoColors.border),
+                      ),
+                      child: Column(
+                        children: [
+                          IconButton(
+                            tooltip: 'Zoom in',
+                            icon: const Icon(
+                              Icons.add,
+                              size: 18,
+                              color: EchoColors.forest,
+                            ),
+                            onPressed: () => setState(
+                              () => _zoom = (_zoom + 0.15).clamp(0.6, 1.6),
+                            ),
+                            constraints: const BoxConstraints(
+                              minWidth: 32,
+                              minHeight: 32,
+                            ),
+                            padding: EdgeInsets.zero,
+                          ),
+                          const Divider(height: 1, color: EchoColors.border),
+                          IconButton(
+                            tooltip: 'Zoom out',
+                            icon: const Icon(
+                              Icons.remove,
+                              size: 18,
+                              color: EchoColors.forest,
+                            ),
+                            onPressed: () => setState(
+                              () => _zoom = (_zoom - 0.15).clamp(0.6, 1.6),
+                            ),
+                            constraints: const BoxConstraints(
+                              minWidth: 32,
+                              minHeight: 32,
+                            ),
+                            padding: EdgeInsets.zero,
+                          ),
+                          const Divider(height: 1, color: EchoColors.border),
+                          IconButton(
+                            tooltip: 'Reset view',
+                            icon: const Icon(
+                              Icons.center_focus_strong_outlined,
+                              size: 18,
+                              color: EchoColors.forest,
+                            ),
+                            onPressed: () => setState(() {
+                              _zoom = 1.0;
+                              _panOffset = Offset.zero;
+                            }),
+                            constraints: const BoxConstraints(
+                              minWidth: 32,
+                              minHeight: 32,
+                            ),
+                            padding: EdgeInsets.zero,
+                          ),
                         ],
                       ),
                     ),
                   ),
-                ),
-              ),
 
-              // Zoom Controls
-              Positioned(
-                top: 10,
-                right: 10,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: EchoColors.border),
-                  ),
-                  child: Column(
-                    children: [
-                      IconButton(
-                        icon: const Icon(
-                          Icons.add,
-                          size: 18,
-                          color: EchoColors.forest,
+                  // Quick open selected node banner
+                  Positioned(
+                    bottom: 8,
+                    left: 12,
+                    right: 12,
+                    child: GestureDetector(
+                      onTap: () => widget.onOpenDetail(selectedNote.id),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
                         ),
-                        onPressed: () => setState(
-                          () => _zoom = (_zoom + 0.15).clamp(0.6, 1.6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.94),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: EchoColors.border),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color.fromRGBO(35, 42, 37, 0.06),
+                              blurRadius: 8,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
                         ),
-                        constraints: const BoxConstraints(
-                          minWidth: 32,
-                          minHeight: 32,
-                        ),
-                        padding: EdgeInsets.zero,
-                      ),
-                      const Divider(height: 1, color: EchoColors.border),
-                      IconButton(
-                        icon: const Icon(
-                          Icons.remove,
-                          size: 18,
-                          color: EchoColors.forest,
-                        ),
-                        onPressed: () => setState(
-                          () => _zoom = (_zoom - 0.15).clamp(0.6, 1.6),
-                        ),
-                        constraints: const BoxConstraints(
-                          minWidth: 32,
-                          minHeight: 32,
-                        ),
-                        padding: EdgeInsets.zero,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              // Quick open selected node banner
-              Positioned(
-                bottom: 8,
-                left: 12,
-                right: 12,
-                child: GestureDetector(
-                  onTap: () => widget.onOpenDetail(selectedNote.id),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.94),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: EchoColors.border),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color.fromRGBO(35, 42, 37, 0.06),
-                          blurRadius: 8,
-                          offset: Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                selectedNote.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: EchoColors.ink,
-                                ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    selectedNote.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                      color: EchoColors.ink,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${neighborIds.length} connected ideas · Tap to open',
+                                    style: const TextStyle(
+                                      fontSize: 10,
+                                      color: EchoColors.muted,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(height: 2),
-                              Text(
-                                '${neighborIds.length} connected ideas · Tap to open',
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  color: EchoColors.muted,
-                                ),
-                              ),
-                            ],
-                          ),
+                            ),
+                            const Icon(
+                              Icons.arrow_forward_ios,
+                              size: 12,
+                              color: EchoColors.forest,
+                            ),
+                          ],
                         ),
-                        const Icon(
-                          Icons.arrow_forward_ios,
-                          size: 12,
-                          color: EchoColors.forest,
-                        ),
-                      ],
+                      ),
                     ),
                   ),
-                ),
+                ],
               ),
-            ],
-          ),
-        ),
-      ],
+            ),
+          ],
+        );
+        if (constraints.hasBoundedHeight && constraints.maxHeight < 640) {
+          return SingleChildScrollView(child: content);
+        }
+        return content;
+      },
     );
   }
 }
@@ -511,11 +639,13 @@ class _GraphEdgePainter extends CustomPainter {
   final Map<String, PositionedNode> positionedMap;
   final List<GraphEdgeModel> edges;
   final String selectedNodeId;
+  final Offset origin;
 
   _GraphEdgePainter({
     required this.positionedMap,
     required this.edges,
     required this.selectedNodeId,
+    this.origin = Offset.zero,
   });
 
   @override
@@ -535,8 +665,8 @@ class _GraphEdgePainter extends CustomPainter {
         ..strokeWidth = isConnectedToSelected ? 2.5 : 1.4
         ..style = PaintingStyle.stroke;
 
-      final p1 = from.center;
-      final p2 = to.center;
+      final p1 = from.center - origin;
+      final p2 = to.center - origin;
 
       // Draw subtle cubic bezier curve to prevent edges overlapping straight lines
       final midX = (p1.dx + p2.dx) / 2;

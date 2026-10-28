@@ -31,9 +31,31 @@ class _AppShellState extends State<AppShell> {
   int _currentTab = 0;
   String? _selectedNoteId;
   bool _isSettingsOpen = false;
+  bool _isRecording = false;
   final List<int> _tabHistory = [0];
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await widget.noteProvider.loadNotes();
+      await widget.noteProvider.retryPendingWork();
+    });
+  }
+
+  void _showRecordingGuard() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Stop recording before leaving this screen.'),
+      ),
+    );
+  }
+
   void _switchTab(int index) {
+    if (_isRecording) {
+      _showRecordingGuard();
+      return;
+    }
     if (_currentTab != index) {
       _currentTab = index;
       _tabHistory.add(index);
@@ -44,6 +66,10 @@ class _AppShellState extends State<AppShell> {
   }
 
   void _openDetail(String noteId) {
+    if (_isRecording) {
+      _showRecordingGuard();
+      return;
+    }
     setState(() {
       _selectedNoteId = noteId;
       _isSettingsOpen = false;
@@ -57,6 +83,10 @@ class _AppShellState extends State<AppShell> {
   }
 
   void _openSettings() {
+    if (_isRecording) {
+      _showRecordingGuard();
+      return;
+    }
     setState(() {
       _isSettingsOpen = true;
       _selectedNoteId = null;
@@ -96,55 +126,39 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
-    Widget activeScreen;
-    String screenKey;
-
-    if (_isSettingsOpen) {
-      screenKey = 'settings';
-      activeScreen = SettingsScreen(
-        settingsService: widget.settingsService,
-        onBack: _closeSettings,
-      );
-    } else if (_selectedNoteId != null) {
-      screenKey = 'detail_$_selectedNoteId';
-      activeScreen = NoteDetailScreen(
-        noteId: _selectedNoteId!,
-        noteProvider: widget.noteProvider,
-        onBack: _closeDetail,
-      );
-    } else {
-      screenKey = 'tab_$_currentTab';
-      activeScreen = Scaffold(
-        body: IndexedStack(
-          index: _currentTab,
-          children: [
-            HomeScreen(
-              noteProvider: widget.noteProvider,
-              audioService: widget.audioService,
-              onOpenDetail: _openDetail,
-              onOpenSettings: _openSettings,
-              onOpenLibrary: () => _switchTab(2),
-            ),
-            RecallScreen(
-              noteProvider: widget.noteProvider,
-              onOpenDetail: _openDetail,
-            ),
-            LibraryScreen(
-              noteProvider: widget.noteProvider,
-              onOpenDetail: _openDetail,
-              onOpenHome: () => _switchTab(0),
-            ),
-          ],
-        ),
-        bottomNavigationBar: EchoBottomNav(
-          currentIndex: _currentTab,
-          onTap: (index) => _switchTab(index),
-          onCenterCapture: () => _switchTab(0),
-        ),
-      );
-    }
-
-    final reduceMotion = MediaQuery.of(context).disableAnimations;
+    final tabScaffold = Scaffold(
+      body: IndexedStack(
+        index: _currentTab,
+        children: [
+          HomeScreen(
+            noteProvider: widget.noteProvider,
+            audioService: widget.audioService,
+            onOpenDetail: _openDetail,
+            onOpenSettings: _openSettings,
+            onOpenLibrary: () => _switchTab(2),
+            onRecordingStateChanged: (value) {
+              if (_isRecording != value) {
+                setState(() => _isRecording = value);
+              }
+            },
+          ),
+          RecallScreen(
+            noteProvider: widget.noteProvider,
+            onOpenDetail: _openDetail,
+          ),
+          LibraryScreen(
+            noteProvider: widget.noteProvider,
+            onOpenDetail: _openDetail,
+            onOpenHome: () => _switchTab(0),
+          ),
+        ],
+      ),
+      bottomNavigationBar: EchoBottomNav(
+        currentIndex: _currentTab,
+        onTap: (index) => _switchTab(index),
+        onCenterCapture: () => _switchTab(0),
+      ),
+    );
 
     return PopScope(
       canPop: !_canPopInternally,
@@ -152,13 +166,28 @@ class _AppShellState extends State<AppShell> {
         if (didPop) return;
         _handlePop();
       },
-      child: AnimatedSwitcher(
-        duration: reduceMotion
-            ? Duration.zero
-            : const Duration(milliseconds: 200),
-        switchInCurve: Curves.easeOut,
-        switchOutCurve: Curves.easeIn,
-        child: KeyedSubtree(key: ValueKey(screenKey), child: activeScreen),
+      child: Stack(
+        children: [
+          // Kept mounted at all times so tab/search/filter state survives
+          // navigation and detail/settings overlays.
+          tabScaffold,
+          if (_selectedNoteId != null)
+            Positioned.fill(
+              child: NoteDetailScreen(
+                noteId: _selectedNoteId!,
+                noteProvider: widget.noteProvider,
+                onBack: _closeDetail,
+              ),
+            ),
+          if (_isSettingsOpen)
+            Positioned.fill(
+              child: SettingsScreen(
+                settingsService: widget.settingsService,
+                backendService: widget.noteProvider.backendService,
+                onBack: _closeSettings,
+              ),
+            ),
+        ],
       ),
     );
   }

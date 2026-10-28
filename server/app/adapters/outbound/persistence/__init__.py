@@ -334,6 +334,34 @@ class SqliteCaptureRepository(CaptureRepositoryPort):
             for r in rows
         ]
 
+    def list_all(self) -> List[CaptureEntity]:
+        conn = self.db.get_connection()
+        c = conn.cursor()
+        rows = c.execute("SELECT * FROM captures ORDER BY created_at DESC").fetchall()
+        return [
+            CaptureEntity(
+                id=r["id"],
+                idempotency_key=r["idempotency_key"],
+                audio_path=r["audio_path"] or "",
+                duration_ms=r["duration_ms"] or 0,
+                status=r["status"] or "received",
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    def delete(self, capture_id: str) -> None:
+        conn = self.db.get_connection()
+        c = conn.cursor()
+        c.execute("DELETE FROM captures WHERE id = ?", (capture_id,))
+        conn.commit()
+
+    def clear_audio_path(self, capture_id: str) -> None:
+        conn = self.db.get_connection()
+        c = conn.cursor()
+        c.execute("UPDATE captures SET audio_path = '' WHERE id = ?", (capture_id,))
+        conn.commit()
+
     def count(self) -> int:
         conn = self.db.get_connection()
         c = conn.cursor()
@@ -384,6 +412,22 @@ class SqliteEvalRecordRepository(EvalRecordRepositoryPort):
         conn = self.db.get_connection()
         c = conn.cursor()
         cur = c.execute("DELETE FROM model_eval_records WHERE consent_given = 0")
+        deleted = cur.rowcount
+        conn.commit()
+        return deleted
+
+    def delete_by_capture_id(self, capture_id: str) -> int:
+        conn = self.db.get_connection()
+        c = conn.cursor()
+        cur = c.execute("DELETE FROM model_eval_records WHERE capture_id = ?", (capture_id,))
+        deleted = cur.rowcount
+        conn.commit()
+        return deleted
+
+    def purge_all(self) -> int:
+        conn = self.db.get_connection()
+        c = conn.cursor()
+        cur = c.execute("DELETE FROM model_eval_records")
         deleted = cur.rowcount
         conn.commit()
         return deleted
@@ -454,4 +498,12 @@ class SqliteJobStatusRepository(JobStatusRepositoryPort):
             created_at=r["created_at"],
             updated_at=r["updated_at"],
         )
+
+    def delete_by_capture_id(self, capture_id: str) -> int:
+        conn = self.db.get_connection()
+        c = conn.cursor()
+        cur = c.execute("DELETE FROM processing_jobs WHERE capture_id = ?", (capture_id,))
+        deleted = cur.rowcount
+        conn.commit()
+        return deleted
 

@@ -17,6 +17,7 @@ class HomeScreen extends StatefulWidget {
   final Function(String noteId) onOpenDetail;
   final VoidCallback onOpenSettings;
   final VoidCallback onOpenLibrary;
+  final ValueChanged<bool>? onRecordingStateChanged;
 
   const HomeScreen({
     super.key,
@@ -25,6 +26,7 @@ class HomeScreen extends StatefulWidget {
     required this.onOpenDetail,
     required this.onOpenSettings,
     required this.onOpenLibrary,
+    this.onRecordingStateChanged,
   });
 
   @override
@@ -49,7 +51,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _recordTimer?.cancel();
+    if (_isRecording) {
+      widget.audioService.cancelRecording();
+      widget.onRecordingStateChanged?.call(false);
+    }
     super.dispose();
+  }
+
+  void _setRecording(bool value) {
+    _isRecording = value;
+    widget.onRecordingStateChanged?.call(value);
   }
 
   @override
@@ -104,7 +115,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _recordingStartTime = DateTime.now();
       _startTimer();
       if (mounted) {
-        setState(() => _isRecording = true);
+        setState(() => _setRecording(true));
       }
     } catch (e) {
       if (mounted) {
@@ -131,7 +142,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _recordingStartTime = null;
 
     setState(() {
-      _isRecording = false;
+      _setRecording(false);
     });
 
     // Check if recording is below minimum threshold
@@ -186,7 +197,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!_isRecording) return;
     _stopTimer();
     _recordingStartTime = null;
-    setState(() => _isRecording = false);
+    setState(() => _setRecording(false));
     await widget.audioService.cancelRecording();
   }
 

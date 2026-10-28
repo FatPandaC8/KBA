@@ -1,5 +1,7 @@
 import os
+import secrets
 from functools import lru_cache
+from typing import Optional
 from fastapi import Header, HTTPException, Depends, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -23,6 +25,8 @@ from server.app.application.use_cases import (
     ManageRelationshipsUseCase,
     BackfillEmbeddingsUseCase,
     AdminSystemStatusUseCase,
+    DeleteCaptureUseCase,
+    PurgeRetainedAudioUseCase,
 )
 
 security = HTTPBearer(auto_error=False)
@@ -89,6 +93,17 @@ class Container:
             embedding_repo=self.embedding_repo,
             embedder=self.embedder,
         )
+        self.delete_capture_uc = DeleteCaptureUseCase(
+            capture_repo=self.capture_repo,
+            knowledge_repo=self.knowledge_repo,
+            job_repo=self.job_repo,
+            eval_repo=self.eval_repo,
+            upload_dir=settings.upload_dir,
+        )
+        self.purge_audio_uc = PurgeRetainedAudioUseCase(
+            capture_repo=self.capture_repo,
+            upload_dir=settings.upload_dir,
+        )
         self.admin_status_uc = AdminSystemStatusUseCase(
             knowledge_repo=self.knowledge_repo,
             rel_repo=self.rel_repo,
@@ -107,24 +122,55 @@ def get_container() -> Container:
         _CONTAINER = Container(get_settings())
     return _CONTAINER
 
+def _extract_bearer_or_header(
+    credentials: Optional[HTTPAuthorizationCredentials],
+    header_token: Optional[str],
+) -> Optional[str]:
+    if credentials and credentials.scheme.lower() == "bearer":
+        return credentials.credentials
+    return header_token
+
+
+def _require_token(
+    expected_token: str,
+    credentials: Optional[HTTPAuthorizationCredentials],
+    header_token: Optional[str],
+    label: str,
+) -> bool:
+    if not expected_token:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{label} authentication is not configured on this server.",
+        )
+    token = _extract_bearer_or_header(credentials, header_token)
+    # Compare bytes so non-ASCII configured tokens still use a constant-time
+    # comparison instead of raising inside compare_digest.
+    if not token or not secrets.compare_digest(
+        token.encode("utf-8"), expected_token.encode("utf-8")
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail=f"Unauthorized: valid {label.lower()} token required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return True
+
+
 def verify_admin_auth(
     credentials: HTTPAuthorizationCredentials = Security(security),
     x_admin_token: str = Header(default=None, alias="X-Admin-Token")
 ) -> bool:
     settings = get_settings()
-    expected_token = settings.admin_token
+    return _require_token(
+        settings.admin_token, credentials, x_admin_token, "Admin"
+    )
 
-    # Check Bearer token or X-Admin-Token header
-    token = None
-    if credentials and credentials.scheme.lower() == "bearer":
-        token = credentials.credentials
-    elif x_admin_token:
-        token = x_admin_token
 
-    if not token or token != expected_token:
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized: Valid admin token required.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return True
+def verify_client_auth(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    x_client_token: str = Header(default=None, alias="X-Client-Token")
+) -> bool:
+    settings = get_settings()
+    return _require_token(
+        settings.client_token, credentials, x_client_token, "Client"
+    )

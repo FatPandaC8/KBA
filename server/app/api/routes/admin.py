@@ -163,10 +163,14 @@ def get_capture_audio(
     if not capture or not capture.audio_path:
         raise HTTPException(status_code=404, detail="Audio recording not found or purged per consent policy")
     
-    # Path traversal protection
+    # Path traversal protection: the audio file must live inside the configured
+    # upload directory, not merely share a string prefix with it.
     real_path = os.path.realpath(capture.audio_path)
     allowed_dir = os.path.realpath(container.settings.upload_dir)
-    if not real_path.startswith(allowed_dir) or not os.path.exists(real_path):
+    if (
+        not (real_path == allowed_dir or real_path.startswith(allowed_dir + os.sep))
+        or not os.path.exists(real_path)
+    ):
         raise HTTPException(status_code=404, detail="Audio file not accessible on server")
 
     return FileResponse(
@@ -174,6 +178,15 @@ def get_capture_audio(
         media_type="audio/mp4",
         filename=f"capture-{capture_id}.m4a"
     )
+
+
+@admin_router.delete("/knowledge/{item_id}")
+def admin_delete_knowledge(
+    item_id: str,
+    container: Container = Depends(get_container),
+):
+    container.manage_knowledge_uc.delete_knowledge(item_id)
+    return {"deleted": True, "id": item_id}
 
 
 @admin_router.get("/knowledge", response_model=List[KnowledgeItem])

@@ -227,4 +227,20 @@ class DeterministicGraphLayout {
 
     return resultMap;
   }
+
+  /// Bounding box of every laid-out node plus padding.
+  ///
+  /// Callers must use this instead of a fixed canvas size so that large or
+  /// wide graphs are never clipped outside the visible viewport.
+  static Rect computeBounds(
+    Map<String, PositionedNode> layout, {
+    double padding = minNodePadding,
+  }) {
+    if (layout.isEmpty) return const Rect.fromLTWH(0, 0, 1, 1);
+    Rect bounds = layout.values.first.rect;
+    for (final node in layout.values.skip(1)) {
+      bounds = bounds.expandToInclude(node.rect);
+    }
+    return bounds.inflate(padding);
+  }
 }

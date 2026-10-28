@@ -1,14 +1,23 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
-  static Database? _database;
 
-  DatabaseHelper._init();
+  Database? _database;
+  final Future<String> Function()? _directoryOverride;
+
+  DatabaseHelper._init() : _directoryOverride = null;
+
+  /// Allows migration tests to run against a temporary directory instead of
+  /// the user's real application documents directory.
+  @visibleForTesting
+  DatabaseHelper.forTesting(Future<String> Function() directoryProvider)
+    : _directoryOverride = directoryProvider;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -16,20 +25,29 @@ class DatabaseHelper {
     return _database!;
   }
 
+  Future<String> _resolveDirectory() async {
+    if (_directoryOverride != null) return _directoryOverride();
+    return (await getApplicationDocumentsDirectory()).path;
+  }
+
   Future<Database> _initDB(String filePath) async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final path = join(docsDir.path, filePath);
+    final directory = await _resolveDirectory();
+    final path = join(directory, filePath);
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _createDB,
-      onUpgrade: (db, oldVersion, newVersion) async {
-        await db.execute('DROP TABLE IF EXISTS notes_fts');
-        await db.execute('DROP TABLE IF EXISTS notes');
-        await _createDB(db, newVersion);
-      },
+      onUpgrade: _upgradeDB,
     );
+  }
+
+  Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 3) {
+      await db.execute(
+        'ALTER TABLE notes ADD COLUMN retryCount INTEGER NOT NULL DEFAULT 0',
+      );
+    }
   }
 
   Future<void> _createDB(Database db, int version) async {
@@ -47,6 +65,7 @@ class DatabaseHelper {
         tags TEXT,
         status TEXT NOT NULL,
         failureReason TEXT,
+        retryCount INTEGER NOT NULL DEFAULT 0,
         createdAt TEXT NOT NULL,
         updatedAt TEXT NOT NULL
       )

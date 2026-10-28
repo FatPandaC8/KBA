@@ -10,7 +10,7 @@ from .infrastructure.logging import setup_logging
 import numpy as np
 from .domain.entities import KnowledgeItemEntity
 from .api.dependencies import get_container
-from .api.routes.client import router as client_router
+from .api.routes.client import router as client_router, protected_router as protected_client_router
 from .api.routes.admin import admin_router
 
 # Setup unified logging
@@ -50,17 +50,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Standard CORS Middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS is disabled unless explicitly configured. The Android client does not
+# need CORS, and the admin UI is served from the same origin.
+cors_origins = settings.cors_origin_list
+if cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Client-Token"],
+    )
 
 # Mount Routes
 app.include_router(client_router)
+app.include_router(protected_client_router)
 app.include_router(admin_router)
 
 # Mount Admin Web Interface

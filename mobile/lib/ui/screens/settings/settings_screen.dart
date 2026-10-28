@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
 
 import 'package:mobile/core/theme/echo_colors.dart';
+import 'package:mobile/services/backend_service.dart';
 import 'package:mobile/services/settings_service.dart';
 
 import 'package:mobile/ui/widgets/echo_app_bar.dart';
 
 class SettingsScreen extends StatefulWidget {
   final SettingsService settingsService;
+  final BackendService backendService;
   final VoidCallback onBack;
 
   const SettingsScreen({
     super.key,
     required this.settingsService,
+    required this.backendService,
     required this.onBack,
   });
 
@@ -20,16 +23,109 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late bool _keepAudio;
-  late bool _wifiOnly;
+  late final TextEditingController _serverController;
+  late final TextEditingController _tokenController;
   late bool _evalConsent;
+  bool _obscureToken = true;
+  bool _saving = false;
+  String? _statusMessage;
+  bool _statusOk = false;
 
   @override
   void initState() {
     super.initState();
-    _keepAudio = widget.settingsService.keepAudio;
-    _wifiOnly = widget.settingsService.wifiOnly;
+    _serverController = TextEditingController(
+      text: widget.settingsService.serverUrl,
+    );
+    _tokenController = TextEditingController(
+      text: widget.settingsService.clientToken,
+    );
     _evalConsent = widget.settingsService.evalConsent;
+  }
+
+  @override
+  void dispose() {
+    _serverController.dispose();
+    _tokenController.dispose();
+    super.dispose();
+  }
+
+  Future<bool> _saveConnection() async {
+    final rawUrl = _serverController.text.trim();
+    final uri = Uri.tryParse(rawUrl);
+    if (uri == null ||
+        !uri.hasScheme ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      setState(() {
+        _statusOk = false;
+        _statusMessage = 'Enter a valid URL starting with http:// or https://.';
+      });
+      return false;
+    }
+
+    setState(() {
+      _saving = true;
+      _statusMessage = null;
+    });
+    try {
+      widget.settingsService.serverUrl = rawUrl.replaceAll(RegExp(r'/+$'), '');
+      await widget.settingsService.setClientToken(_tokenController.text);
+      if (!mounted) return false;
+      setState(() {
+        _statusOk = true;
+        _statusMessage = 'Connection settings saved.';
+      });
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+      setState(() {
+        _statusOk = false;
+        _statusMessage = 'Could not save settings securely: $e';
+      });
+      return false;
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _testConnection() async {
+    final saved = await _saveConnection();
+    if (!saved) return;
+    setState(() {
+      _saving = true;
+      _statusMessage = 'Testing connection…';
+    });
+    final result = await widget.backendService.testConnection();
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      _statusOk = result.ok;
+      _statusMessage = result.message;
+    });
+  }
+
+  Future<void> _setConsent(bool value) async {
+    final previous = _evalConsent;
+    setState(() => _evalConsent = value);
+    widget.settingsService.evalConsent = value;
+    try {
+      await widget.backendService.updateConsent(value);
+      if (!mounted) return;
+      setState(() {
+        _statusOk = true;
+        _statusMessage = value ? 'Evaluation participation enabled.' : 'Consent withdrawn. Server-retained audio and evaluation data were purged.';
+      });
+    } catch (e) {
+      widget.settingsService.evalConsent = previous;
+      if (!mounted) return;
+      setState(() {
+        _evalConsent = previous;
+        _statusOk = false;
+        _statusMessage =
+            'Consent update failed. The change was not applied: ${e.toString()}';
+      });
+    }
   }
 
   @override
@@ -52,11 +148,102 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(height: 20),
 
+              const Text(
+                'SERVER CONNECTION',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                  color: EchoColors.muted,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: EchoColors.border),
+                ),
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: _serverController,
+                      keyboardType: TextInputType.url,
+                      autocorrect: false,
+                      decoration: const InputDecoration(
+                        labelText: 'Backend URL',
+                        hintText: 'http://192.168.1.20:8000',
+                        helperText:
+                            'USB development: adb reverse tcp:8000 tcp:8000',
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: _tokenController,
+                      obscureText: _obscureToken,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      decoration: InputDecoration(
+                        labelText: 'Client access token',
+                        helperText: 'Stored in Android encrypted storage, not plain preferences.',
+                        suffixIcon: IconButton(
+                          tooltip: _obscureToken ? 'Show token' : 'Hide token',
+                          icon: Icon(
+                            _obscureToken
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
+                          ),
+                          onPressed: () =>
+                              setState(() => _obscureToken = !_obscureToken),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _saving ? null : _saveConnection,
+                            child: const Text('Save'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: _saving ? null : _testConnection,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: EchoColors.forest,
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Text('Test connection'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_statusMessage != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        _statusMessage!,
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 1.4,
+                          color: _statusOk
+                              ? EchoColors.forest
+                              : EchoColors.danger,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
               const SizedBox(height: 24),
 
-              // Audio & Network Preferences
               const Text(
-                'PREFERENCES',
+                'PRIVACY & PROCESSING',
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w700,
@@ -72,84 +259,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   side: const BorderSide(color: EchoColors.border),
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: Column(
-                  children: [
-                    SwitchListTile(
-                      activeThumbColor: EchoColors.forest,
-                      title: const Text(
-                        'Keep original audio',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      subtitle: const Text(
-                        'Always preserve source recordings locally',
-                        style: TextStyle(fontSize: 11, color: EchoColors.muted),
-                      ),
-                      value: _keepAudio,
-                      onChanged: (val) {
-                        setState(() => _keepAudio = val);
-                        widget.settingsService.keepAudio = val;
-                      },
-                    ),
-                    const Divider(height: 1, color: EchoColors.border),
-                    SwitchListTile(
-                      activeThumbColor: EchoColors.forest,
-                      title: const Text(
-                        'Process on Wi-Fi only',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      subtitle: const Text(
-                        'Reduce mobile data usage',
-                        style: TextStyle(fontSize: 11, color: EchoColors.muted),
-                      ),
-                      value: _wifiOnly,
-                      onChanged: (val) {
-                        setState(() => _wifiOnly = val);
-                        widget.settingsService.wifiOnly = val;
-                      },
-                    ),
-                    const Divider(height: 1, color: EchoColors.border),
-                    SwitchListTile(
-                      activeThumbColor: EchoColors.forest,
-                      title: const Text(
-                        'Evaluation dataset participation',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      subtitle: const Text(
-                        'Explicit opt-in: Allow server to retain audio recordings for offline pipeline quality evaluation. Disabled by default.',
-                        style: TextStyle(fontSize: 11, color: EchoColors.muted),
-                      ),
-                      value: _evalConsent,
-                      onChanged: (val) {
-                        setState(() => _evalConsent = val);
-                        widget.settingsService.evalConsent = val;
-                      },
-                    ),
-                  ],
+                child: SwitchListTile(
+                  activeThumbColor: EchoColors.forest,
+                  title: const Text(
+                    'Evaluation dataset participation',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'Allow the server to retain audio and evaluation data. '
+                    'Turning this off purges retained audio and evaluation records. '
+                    'Disabled by default.',
+                    style: TextStyle(fontSize: 11, color: EchoColors.muted),
+                  ),
+                  value: _evalConsent,
+                  onChanged: _setConsent,
                 ),
               ),
 
               const SizedBox(height: 24),
 
-              // Privacy card matching Figma
-              const Text(
-                'PRIVACY & PROCESSING',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.2,
-                  color: EchoColors.muted,
-                ),
-              ),
-              const SizedBox(height: 10),
               Container(
                 width: double.infinity,
                 decoration: BoxDecoration(
@@ -170,7 +298,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     SizedBox(height: 6),
                     Text(
-                      'Echo stores your source notes on-device and uses the server for transcription, structured knowledge extraction, and embedding-based semantic recall. Audio is not retained on the server unless you opt in to evaluation participation.',
+                      'Echo stores your source notes on-device and sends audio '
+                      'to your configured server for transcription, structured '
+                      'extraction, and semantic recall. Audio is not retained '
+                      'on the server unless evaluation participation is enabled.',
                       style: TextStyle(
                         fontSize: 11,
                         color: EchoColors.muted,
