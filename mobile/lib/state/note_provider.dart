@@ -11,10 +11,13 @@ import 'package:mobile/services/settings_service.dart';
 
 /// Single source of truth for captures and Ask AI conversations.
 ///
-/// Audio uploads are strictly serialized (REC-04): a new recording cannot start
-/// while an upload is in flight, and only one upload request is sent at a time.
-/// The local audio file is deleted only after the backend reports a terminal
-/// `ready` state for the recording (REC-06 / M3 decision).
+/// Audio uploads are strictly serialized (REC-04): only one upload request is
+/// sent at a time, but the mic is never gated by in-flight uploads or
+/// processing — a new recording can start while the previous one is still on
+/// the server (owner decision, 2026-10-29). The local audio file is deleted as
+/// soon as the backend answers 202, because that response only returns after
+/// the server has written the file and committed the database row; retry then
+/// works from the server-side copy (REC-06).
 class NoteProvider extends ChangeNotifier {
   final NoteRepository _repository;
   final BackendService _backendService;
@@ -198,10 +201,16 @@ class NoteProvider extends ChangeNotifier {
         }
 
         final uploaded = await _repository.getNoteById(noteId) ?? note;
+        // REC-04/REC-06 (owner decision 2026-10-29): a successful upload means
+        // the server confirmed receipt and durable storage, so the local copy
+        // is redundant and is deleted right away. Retries use the server-side
+        // audio via /recordings/{id}/retry.
+        final removed = await _deleteLocalAudio(uploaded.audioPath);
         await _save(
           uploaded.copyWith(
             status: ProcessingStatus.pending,
             stage: 'upload',
+            audioPath: removed ? null : uploaded.audioPath,
             // The server has the bytes now, so retry can work without the
             // local file even before extraction completes.
             audioOnServer: true,
@@ -290,15 +299,30 @@ class NoteProvider extends ChangeNotifier {
     }
   }
 
+  /// Deletes a local audio file best effort. Returns true when the file is
+  /// gone (or was never readable); false when deletion failed and the record
+  /// must keep pointing at the local copy until retry or reconciliation.
+  /// Synchronous FS calls are deliberate: an awaited dart:io future would
+  /// never settle inside a widget-test fake-async zone and could stall the
+  /// pipeline; a stat/delete is fast enough to run inline.
+  Future<bool> _deleteLocalAudio(String? path) async {
+    if (path == null || path.isEmpty) return true;
+    try {
+      final file = File(path);
+      if (file.existsSync()) file.deleteSync();
+      return true;
+    } catch (e) {
+      debugPrint('Could not delete local audio for $path: $e');
+      return false;
+    }
+  }
+
   Future<void> _markReady(Note note, KnowledgeSnapshot? knowledge) async {
-    // REC-06: only a confirmed terminal state removes local audio.
+    // REC-06: post-upload deletion is the primary path; this only catches the
+    // rare case where deletion failed during upload or the state was rebuilt
+    // through reconciliation.
     if (note.hasLocalAudio) {
-      try {
-        final file = File(note.audioPath!);
-        if (await file.exists()) await file.delete();
-      } catch (e) {
-        debugPrint('Could not delete local audio for ${note.id}: $e');
-      }
+      await _deleteLocalAudio(note.audioPath);
     }
 
     await _save(

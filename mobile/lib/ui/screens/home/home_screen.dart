@@ -167,15 +167,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _startRecording() async {
     if (_isRecording || _isProcessing) return;
-    if (widget.noteProvider.isUploadInFlight) {
-      if (mounted) {
-        setState(() {
-          _errorMessage =
-              'Wait for the current recording to finish uploading before starting a new one.';
-        });
-      }
-      return;
-    }
+    // REC-04/REC-06 (owner decision 2026-10-29): the mic is never blocked by
+    // an in-flight upload or by server-side processing. A previous capture can
+    // still be uploading; the upload queue serializes requests while this new
+    // recording simply waits its turn.
     setState(() => _errorMessage = null);
     try {
       final hasPerm = await widget.audioService.checkPermission();

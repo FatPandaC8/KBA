@@ -58,13 +58,21 @@ GATE; M4 will cover administration and the production deployment surface.
 - **Three tabs** — Record (centre FAB), Graph, Ask AI — with search inside the
   Graph tab (`app_shell.dart`, `echo_bottom_nav.dart`).
 - **Serialized upload queue (REC-04).** Captures are inserted locally and
-  processed one at a time; a second recording waits behind the first upload.
+  uploads are sent one at a time (M3 behaviour). Revised by owner decision
+  2026-10-29: the mic is no longer gated by an in-flight upload or by
+  server-side processing — a new recording can start immediately; uploads
+  still serialize in the queue.
 - **Status polling (PRC-01, PRC-03).** The client polls
   `/api/recordings/{id}/status` and maps real backend stages to the visible
   state; no fake percentages. Polling stops on `ready`/`failed`.
-- **Audio retention (REC-05, REC-06).** The local file is deleted only after a
-  terminal `ready`; failures keep it for retry. Server-only audio is streamed
-  through the authenticated bytes endpoint, never a public URL.
+- **Audio retention (REC-05, REC-06; revised 2026-10-29).** The local file was
+  deleted only after a terminal `ready` in M3. Per the owner decision, the
+  local copy is now deleted as soon as the server answers 202 — the backend
+  only returns 202 after the file write and the capture/job DB commit, so the
+  server copy is durable and retries use server-side audio. An upload that
+  never reaches 202 (network down, server rejected) keeps the local file.
+  Server-only audio is streamed through the authenticated bytes endpoint,
+  never a public URL.
 - **My Recordings (VR-01…VR-03).** Date, duration, status, playback, delete with
   confirmation and manual retry. No transcript is shown.
 - **Reconciliation (NET-02).** On app open the client reads
@@ -89,9 +97,9 @@ GATE; M4 will cover administration and the production deployment surface.
 | --- | --- | --- |
 | REC-01, REC-02 | Already implemented (M2), unchanged | `home_screen.dart`, `push_to_talk_test.dart` |
 | REC-03 | Implemented | sub-second discard; `push_to_talk_test.dart` |
-| REC-04 | Implemented | serialized queue; `m3_pipeline_test.dart` "uploads are serialized" |
-| REC-05 | Implemented | audio retained on failure; `m3_pipeline_test.dart` |
-| REC-06 | Implemented | delete only on `ready`; `m3_pipeline_test.dart` + reconciliation test |
+| REC-04 | Implemented, revised 2026-10-29 | serialized upload queue; mic no longer gated by in-flight work; `m3_pipeline_test.dart` "uploads are serialized" |
+| REC-05 | Implemented | upload failures (no server confirmation) keep the local file; `m3_pipeline_test.dart` |
+| REC-06 | Implemented, revised 2026-10-29 | local audio deleted on server receipt+storage confirmation (202), not on `ready`; server copy keeps captures retryable; `m3_pipeline_test.dart` + reconciliation test |
 | REC-07 | Implemented | idempotency key; `test_pipeline_m3.py::test_writing_to_a_ready_job_is_idempotent_and_not_duplicated` |
 | PRC-01, PRC-02 | Implemented | job table + worker; `test_pipeline_m3.py` stage tracking |
 | PRC-03 | Implemented | lease expiry; `test_resume_reuses_completed_stage_outputs_without_reprocessing` |
@@ -155,8 +163,8 @@ These are the author's proposals from the PRD, implemented as written:
 | ID | Implemented behaviour |
 | --- | --- |
 | REC-03 | Recordings shorter than 1 s are discarded with a gentle notice; no cancel gesture. |
-| REC-04 | Uploads are strictly serialized; a new recording waits for the previous upload. |
-| REC-06 | Local audio is deleted only after terminal `ready`; all failures keep it. |
+| REC-04 | Uploads serialize in the queue; the mic is never gated by in-flight work (revised 2026-10-29, supersedes the M3 original). |
+| REC-06 | Local audio is deleted on server receipt + durable-storage confirmation (202 after file+DB commit), not on terminal `ready` (revised 2026-10-29, supersedes the M3 original); server-side failure paths keep the server copy and still allow manual retry. |
 | KG-02 | 0.90 auto-link / 0.75–0.90 flagged candidate, per entity pair; no manual resolve UI. |
 | KG-04 | Server-side community detection with a single clustered canvas. |
 | SRCH-05 | Vectors are tagged with model and dimension and never mixed; **full re-index on model change is not automated** (see §5). |

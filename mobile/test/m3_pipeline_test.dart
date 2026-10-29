@@ -91,8 +91,14 @@ void main() {
     expect(provider.isUploadInFlight, isFalse);
   });
 
-  test('local audio is deleted only after a terminal ready (REC-06)', () async {
+  test('local audio is deleted once the server confirms upload (REC-06)',
+      () async {
     final path = writeAudio('ready.m4a');
+    // A real poll cadence and several processing stages between upload and
+    // terminal, so the deletion clearly happens long before the capture
+    // reaches `ready`.
+    NoteProvider.statusPollInterval = const Duration(milliseconds: 25);
+    backend.stages = const ['transcribe', 'extract', 'save'];
     backend.knowledgeByCapture.clear();
 
     final note = await provider.createAudioNote(
@@ -101,21 +107,55 @@ void main() {
     );
 
     await waitFor(
+      () => noteFor(note.id).audioPath == null,
+      reason: 'the server answer (202 after file+DB commit) confirms '
+          'receipt, so the local copy must be dropped right away',
+    );
+    final inFlight = noteFor(note.id);
+    expect(inFlight.status, isNot(ProcessingStatus.ready));
+    expect(inFlight.audioOnServer, isTrue);
+    expect(inFlight.canPlayAudio, isTrue);
+    expect(File(path).existsSync(), isFalse, reason: 'audio is redundant now');
+
+    await waitFor(
       () => noteFor(note.id).status == ProcessingStatus.ready,
-      reason: 'the capture should become ready',
+      reason: 'the capture should still become ready',
     );
 
     final ready = noteFor(note.id);
-    expect(File(path).existsSync(), isFalse, reason: 'audio is redundant now');
-    expect(ready.audioPath, isNull);
-    expect(ready.audioOnServer, isTrue);
     expect(ready.stage, 'completed');
     expect(ready.knowledgeItemId, isNotNull);
     expect(ready.errorClass, '');
     expect(ready.failureReason, isNull);
   });
 
-  test('audio is retained when processing fails (REC-05, REC-06)', () async {
+  test('local audio is retained when the server never receives it (REC-05)',
+      () async {
+    final path = writeAudio('upload-failed.m4a');
+    backend.failUpload = true;
+
+    final note = await provider.createAudioNote(
+      audioPath: path,
+      durationMs: 2000,
+    );
+
+    await waitFor(
+      () => noteFor(note.id).status == ProcessingStatus.failed,
+      reason: 'the upload should fail',
+    );
+
+    final failed = noteFor(note.id);
+    // The server never confirmed receipt, so the local bytes are the only
+    // copy and must be kept.
+    expect(File(path).existsSync(), isTrue, reason: 'retry needs the bytes');
+    expect(failed.audioPath, path);
+    expect(failed.errorClass, 'provider_failure');
+    expect(failed.failureReason, contains('kept'));
+    expect(failed.failureReason, contains('retry'));
+  });
+
+  test('a post-upload failure keeps server audio retryable without local '
+      'bytes (REC-05, REC-06)', () async {
     final path = writeAudio('failed.m4a');
     backend.terminalErrorClass = 'network_error';
 
@@ -126,16 +166,31 @@ void main() {
 
     await waitFor(
       () => noteFor(note.id).status == ProcessingStatus.failed,
-      reason: 'the capture should fail',
+      reason: 'the capture should fail during processing',
     );
 
     final failed = noteFor(note.id);
-    expect(File(path).existsSync(), isTrue, reason: 'retry needs the bytes');
-    expect(failed.audioPath, path);
+    // The upload was confirmed, so the local copy is deleted but the server
+    // copy keeps the capture retryable.
+    expect(failed.audioOnServer, isTrue);
+    expect(failed.canPlayAudio, isTrue);
     expect(failed.errorClass, 'network_error');
     expect(failed.stage, 'transcribe');
-    expect(failed.audioOnServer, isTrue);
     expect(failed.failureReason, contains('kept for retry'));
+    await waitFor(
+      () => !File(path).existsSync(),
+      reason: 'local copy is redundant once the server stored it',
+    );
+
+    // Manual retry works from the server-side audio only.
+    final retryCallsBefore = backend.retryCalls;
+    await provider.retryNote(note.id);
+    await waitFor(
+      () => noteFor(note.id).status == ProcessingStatus.ready,
+      reason: 'retry from server audio should finish the job',
+    );
+    expect(backend.retryCalls, retryCallsBefore + 1);
+    expect(noteFor(note.id).audioPath, isNull);
   });
 
   test('pipeline stages map to visible processing states (PRC-03)', () async {
