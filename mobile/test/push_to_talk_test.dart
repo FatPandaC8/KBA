@@ -98,8 +98,7 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    final prefs = await SharedPreferences.getInstance();
-    settingsService = SettingsService(prefs);
+    settingsService = SettingsService();
     repo = MockNoteRepository();
     final backendService = BackendService(settingsService);
 

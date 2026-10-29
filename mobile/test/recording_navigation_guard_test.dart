@@ -49,8 +49,7 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    final prefs = await SharedPreferences.getInstance();
-    final settings = SettingsService(prefs);
+    final settings = SettingsService();
     await settings.setSessionToken('test-session-token');
     audioService = FakeAudioService();
     provider = NoteProvider(
@@ -64,7 +63,7 @@ void main() {
   testWidgets('tab navigation is blocked while a recording is active', (
     tester,
   ) async {
-    final shellSettings = SettingsService(await SharedPreferences.getInstance());
+    final shellSettings = SettingsService();
     await shellSettings.setSessionToken('test-session-token');
     await tester.pumpWidget(
       MaterialApp(

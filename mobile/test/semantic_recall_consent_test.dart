@@ -58,8 +58,7 @@ void main() {
 
   test('Semantic recall prioritization and keyword fallback', () async {
     SharedPreferences.setMockInitialValues({});
-    final prefs = await SharedPreferences.getInstance();
-    final settingsService = SettingsService(prefs);
+    final settingsService = SettingsService();
 
     final mockRepo = MockNoteRepository();
     final backendService = BackendService(settingsService);

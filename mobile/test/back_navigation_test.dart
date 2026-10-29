@@ -31,8 +31,7 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    final prefs = await SharedPreferences.getInstance();
-    settingsService = SettingsService(prefs);
+    settingsService = SettingsService();
     await settingsService.setSessionToken('test-session-token');
     repo = FakeNoteRepository();
 

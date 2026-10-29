@@ -26,8 +26,7 @@ void main() {
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
-    final prefs = await SharedPreferences.getInstance();
-    final settings = SettingsService(prefs);
+    final settings = SettingsService();
     final repo = FakeNoteRepository();
     final provider = NoteProvider(
       repo,
