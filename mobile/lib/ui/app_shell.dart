@@ -126,6 +126,16 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
+    // When not signed in, the Settings screen doubles as the auth gateway
+    // (sign in / sign up / verify email). No other part of the app is usable.
+    if (!widget.settingsService.isAuthenticated) {
+      return SettingsScreen(
+        settingsService: widget.settingsService,
+        backendService: widget.noteProvider.backendService,
+        onBack: () {},
+      );
+    }
+
     final tabScaffold = Scaffold(
       body: IndexedStack(
         index: _currentTab,

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/data/models/note.dart';
 import 'package:mobile/data/repositories/note_repository.dart';
-import 'package:mobile/services/ai_service.dart';
 import 'package:mobile/services/audio_service.dart';
 import 'package:mobile/services/backend_service.dart';
 import 'package:mobile/services/settings_service.dart';
@@ -102,12 +101,10 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     settingsService = SettingsService(prefs);
     repo = MockNoteRepository();
-    final aiService = AIService(settingsService);
     final backendService = BackendService(settingsService);
 
     noteProvider = NoteProvider(
       repo,
-      aiService,
       backendService,
       settingsService,
     );

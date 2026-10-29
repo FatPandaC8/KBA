@@ -46,7 +46,7 @@ class FakeNoteRepository extends NoteRepository {
     return inMemory.where((n) {
       return n.title.toLowerCase().contains(q) ||
           n.originalContent.toLowerCase().contains(q) ||
-          (n.summary?.toLowerCase().contains(q) ?? false);
+          (n.summary?.toLowerCase().contains(query) ?? false);
     }).toList();
   }
 }
@@ -57,14 +57,20 @@ class FakeBackendService extends BackendService {
 
   bool healthy = true;
   bool failUpload = false;
-  bool failSync = false;
   bool failDelete = false;
   bool failGraph = false;
+  bool failAuth = false;
 
   int uploadCalls = 0;
-  int syncCalls = 0;
   int deleteCalls = 0;
   int healthCalls = 0;
+  int loginCalls = 0;
+  int signupCalls = 0;
+  int consentCalls = 0;
+  int logoutCalls = 0;
+  int deleteAccountCalls = 0;
+  int testConnectionCalls = 0;
+  int getConsentCalls = 0;
 
   /// When set, uploads wait until the completer is completed.
   Completer<void>? uploadGate;
@@ -74,11 +80,12 @@ class FakeBackendService extends BackendService {
     status: 'ready',
     title: 'Processed title',
     coreIdea: 'Processed summary',
-    transcript: 'Processed transcript',
     concepts: const ['concept'],
     tags: const ['tag'],
     openQuestions: const ['question'],
   );
+
+  bool consentGranted = false;
 
   @override
   Future<bool> checkHealth() async {
@@ -92,7 +99,6 @@ class FakeBackendService extends BackendService {
     required String idempotencyKey,
     required String audioPath,
     required int durationMs,
-    bool consentGiven = false,
   }) async {
     uploadCalls++;
     if (uploadGate != null) {
@@ -106,29 +112,10 @@ class FakeBackendService extends BackendService {
       status: uploadResult.status,
       title: uploadResult.title,
       coreIdea: uploadResult.coreIdea,
-      transcript: uploadResult.transcript,
       concepts: uploadResult.concepts,
       tags: uploadResult.tags,
       openQuestions: uploadResult.openQuestions,
     );
-  }
-
-  @override
-  Future<void> syncKnowledgeItem({
-    required String id,
-    required String captureId,
-    required String title,
-    required String coreIdea,
-    String details = '',
-    String transcript = '',
-    List<String> concepts = const [],
-    List<String> tags = const [],
-    List<String> openQuestions = const [],
-  }) async {
-    syncCalls++;
-    if (failSync) {
-      throw BackendException('sync failed', statusCode: 500);
-    }
   }
 
   @override
@@ -160,5 +147,81 @@ class FakeBackendService extends BackendService {
       throw BackendException('relationships failed', statusCode: 500);
     }
     return const [];
+  }
+
+  // ------------------------------------------------------------------ auth
+  @override
+  Future<Map<String, dynamic>> signup(String email, String password) async {
+    signupCalls++;
+    if (failAuth) {
+      throw BackendException('signup failed', statusCode: 500);
+    }
+    return {
+      'verification_required': true,
+      'email': email,
+      'dev_verification_token': 'dev-verify-token',
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> login(String email, String password) async {
+    loginCalls++;
+    if (failAuth) {
+      throw BackendException('login failed', statusCode: 401);
+    }
+    return {
+      'token': 'session-token-123',
+      'user': {
+        'id': 'user-1',
+        'email': email,
+        'email_verified': true,
+        'created_at': '2026-01-01T00:00:00Z',
+      },
+    };
+  }
+
+  @override
+  Future<void> verifyEmail(String token) async {
+    if (failAuth) {
+      throw BackendException('verify failed', statusCode: 401);
+    }
+  }
+
+  @override
+  Future<void> updateConsent(bool granted) async {
+    consentCalls++;
+    if (failAuth) {
+      throw BackendException('consent failed', statusCode: 500);
+    }
+    consentGranted = granted;
+  }
+
+  @override
+  Future<Map<String, dynamic>> getConsent() async {
+    getConsentCalls++;
+    return {'granted': consentGranted, 'version': '2026-10-29-v1', 'providers': <Map>[]};
+  }
+
+  @override
+  Future<void> logout() async {
+    logoutCalls++;
+  }
+
+  @override
+  Future<Map<String, dynamic>> deleteAccount() async {
+    deleteAccountCalls++;
+    return {'deleted': true, 'sessions_revoked': 1};
+  }
+
+  @override
+  Future<BackendConnectionResult> testConnection() async {
+    testConnectionCalls++;
+    if (!healthy) {
+      return const BackendConnectionResult(
+        ok: false,
+        message: 'Could not reach server.',
+      );
+    }
+    return const BackendConnectionResult(ok: true, message: 'Connected and authenticated.');
   }
 }

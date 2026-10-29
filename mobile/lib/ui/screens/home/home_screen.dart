@@ -8,7 +8,6 @@ import 'package:mobile/state/note_provider.dart';
 
 import 'package:mobile/ui/widgets/echo_app_bar.dart';
 import 'package:mobile/ui/screens/home/widgets/mic_halo_button.dart';
-import 'package:mobile/ui/screens/home/widgets/text_capture_dialog.dart';
 import 'package:mobile/ui/screens/home/widgets/waveform_widget.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -201,28 +200,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await widget.audioService.cancelRecording();
   }
 
-  void _openTextCapture() {
-    showDialog(
-      context: context,
-      builder: (_) => TextCaptureDialog(
-        onSave: (text) async {
-          final note = await widget.noteProvider.createTextNote(text);
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text('Thought saved!'),
-                action: SnackBarAction(
-                  label: 'Open',
-                  onPressed: () => widget.onOpenDetail(note.id),
-                ),
-              ),
-            );
-          }
-        },
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -384,39 +361,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       color: EchoColors.muted,
                                     ),
                                   ),
-
-                                  if (!_isRecording && !_isProcessing) ...[
-                                    const SizedBox(height: 20),
-                                    OutlinedButton.icon(
-                                      icon: const Icon(
-                                        Icons.edit_note,
-                                        size: 18,
-                                        color: EchoColors.forest,
-                                      ),
-                                      label: const Text(
-                                        'Or type text note',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          color: EchoColors.forest,
-                                        ),
-                                      ),
-                                      style: OutlinedButton.styleFrom(
-                                        side: const BorderSide(
-                                          color: EchoColors.sage,
-                                        ),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                        ),
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 18,
-                                          vertical: 12,
-                                        ),
-                                      ),
-                                      onPressed: _openTextCapture,
-                                    ),
-                                  ],
 
                                   if (_errorMessage != null) ...[
                                     const SizedBox(height: 12),

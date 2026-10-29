@@ -248,11 +248,7 @@ class _RecallScreenState extends State<RecallScreen> {
                       separatorBuilder: (_, _) => const SizedBox(height: 10),
                       itemBuilder: (context, index) {
                         final item = results[index];
-                        final snippet =
-                            item.summary ??
-                            (item.transcript?.isNotEmpty == true
-                                ? item.transcript!
-                                : item.originalContent);
+                        final snippet = item.summary ?? item.originalContent;
 
                         return InkWell(
                           onTap: () => widget.onOpenDetail(item.id),

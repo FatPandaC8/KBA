@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:mobile/services/ai_service.dart';
 import 'package:mobile/services/audio_service.dart';
 import 'package:mobile/services/settings_service.dart';
 import 'package:mobile/state/note_provider.dart';
@@ -51,10 +50,10 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
     final settings = SettingsService(prefs);
+    await settings.setSessionToken('test-session-token');
     audioService = FakeAudioService();
     provider = NoteProvider(
       FakeNoteRepository(),
-      AIService(settings),
       FakeBackendService(settings),
       settings,
     );
@@ -64,14 +63,14 @@ void main() {
   testWidgets('tab navigation is blocked while a recording is active', (
     tester,
   ) async {
+    final shellSettings = SettingsService(await SharedPreferences.getInstance());
+    await shellSettings.setSessionToken('test-session-token');
     await tester.pumpWidget(
       MaterialApp(
         home: AppShell(
           noteProvider: provider,
           audioService: audioService,
-          settingsService: SettingsService(
-            await SharedPreferences.getInstance(),
-          ),
+          settingsService: shellSettings,
         ),
       ),
     );

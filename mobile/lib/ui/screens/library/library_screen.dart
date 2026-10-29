@@ -47,8 +47,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             final query = _filter.toLowerCase();
             return note.title.toLowerCase().contains(query) ||
                 note.originalContent.toLowerCase().contains(query) ||
-                (note.summary?.toLowerCase().contains(query) ?? false) ||
-                (note.transcript?.toLowerCase().contains(query) ?? false);
+                (note.summary?.toLowerCase().contains(query) ?? false);
           }).toList();
 
           return SafeArea(

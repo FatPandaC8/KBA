@@ -41,7 +41,7 @@ class DeleteConfirmationDialog extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              'This removes the audio, transcript, and organized ideas. This can’t be undone.',
+              'This removes the audio recording and organized ideas. This can’t be undone.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 13,

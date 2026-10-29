@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/data/models/note.dart';
 import 'package:mobile/data/repositories/note_repository.dart';
-import 'package:mobile/services/ai_service.dart';
 import 'package:mobile/services/audio_service.dart';
 import 'package:mobile/services/backend_service.dart';
 import 'package:mobile/services/settings_service.dart';
@@ -79,6 +78,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
     settingsService = SettingsService(prefs);
+    await settingsService.setSessionToken('test-session-token');
     repo = MockNoteRepository();
 
     final testNote = Note(
@@ -91,12 +91,10 @@ void main() {
     );
     await repo.insertNote(testNote);
 
-    final aiService = AIService(settingsService);
     final backendService = BackendService(settingsService);
 
     noteProvider = NoteProvider(
       repo,
-      aiService,
       backendService,
       settingsService,
     );

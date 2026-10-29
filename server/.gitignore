@@ -1,2 +1,3 @@
 uploads/
 outbox/
+echo_backend.db

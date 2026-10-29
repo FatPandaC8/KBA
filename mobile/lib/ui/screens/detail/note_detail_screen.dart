@@ -28,7 +28,6 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
   bool _isEditing = false;
   late TextEditingController _titleController;
   late TextEditingController _summaryController;
-  late TextEditingController _originalController;
 
   @override
   void initState() {
@@ -36,9 +35,6 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     final note = _getNote();
     _titleController = TextEditingController(text: note?.title ?? '');
     _summaryController = TextEditingController(text: note?.summary ?? '');
-    _originalController = TextEditingController(
-      text: note?.originalContent ?? '',
-    );
     widget.noteProvider.addListener(_onProviderChanged);
   }
 
@@ -47,7 +43,6 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
     widget.noteProvider.removeListener(_onProviderChanged);
     _titleController.dispose();
     _summaryController.dispose();
-    _originalController.dispose();
     super.dispose();
   }
 
@@ -64,7 +59,6 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
   void _syncControllers(Note note) {
     _titleController.text = note.title;
     _summaryController.text = note.summary ?? '';
-    _originalController.text = note.originalContent;
   }
 
   void _beginEditing() {
@@ -90,7 +84,6 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
           ? note.title
           : _titleController.text.trim(),
       summary: _summaryController.text.trim(),
-      originalContent: _originalController.text.trim(),
     );
     setState(() => _isEditing = false);
     try {
@@ -382,86 +375,6 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
                     const SizedBox(height: 16),
                   ],
 
-                  // Original Content / Transcript Section
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: EchoColors.border),
-                    ),
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              note.audioPath != null
-                                  ? 'ORIGINAL TRANSCRIPT'
-                                  : 'ORIGINAL CAPTURE',
-                              style: const TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1.0,
-                                color: EchoColors.forest,
-                              ),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 3,
-                              ),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: const Color(0xFFD3D8D0),
-                                ),
-                              ),
-                              child: const Text(
-                                'PRESERVED',
-                                style: TextStyle(
-                                  fontSize: 8,
-                                  color: EchoColors.muted,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        if (_isEditing && note.audioPath == null)
-                          TextField(
-                            controller: _originalController,
-                            maxLines: 4,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              height: 1.5,
-                              color: EchoColors.ink,
-                            ),
-                            decoration: InputDecoration(
-                              filled: true,
-                              fillColor: EchoColors.surface,
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                            ),
-                          )
-                        else
-                          Text(
-                            note.transcript?.isNotEmpty == true
-                                ? note.transcript!
-                                : note.originalContent,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              height: 1.55,
-                              color: Color(0xFF454A45),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-
                   // Preservation Note matching Figma
                   Container(
                     margin: const EdgeInsets.symmetric(vertical: 18),
@@ -472,7 +385,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
                       ),
                     ),
                     child: const Text(
-                      'Changes to organized ideas never alter your original recording or transcript.',
+                      'Changes to organized ideas never alter your original recording.',
                       style: TextStyle(
                         fontSize: 11,
                         color: EchoColors.muted,

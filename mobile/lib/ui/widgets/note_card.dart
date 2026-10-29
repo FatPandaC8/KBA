@@ -29,11 +29,7 @@ class NoteCard extends StatelessWidget {
         note.status == ProcessingStatus.queued ||
         note.status == ProcessingStatus.uploading;
 
-    String snippet =
-        note.summary ??
-        (note.transcript?.isNotEmpty == true
-            ? note.transcript!
-            : note.originalContent);
+    String snippet = note.summary ?? note.originalContent;
     if (snippet.isEmpty) snippet = 'No content';
 
     return Container(

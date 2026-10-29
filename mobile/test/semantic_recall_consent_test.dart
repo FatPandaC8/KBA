@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/data/models/note.dart';
 import 'package:mobile/data/repositories/note_repository.dart';
-import 'package:mobile/services/ai_service.dart';
 import 'package:mobile/services/backend_service.dart';
 import 'package:mobile/services/settings_service.dart';
 import 'package:mobile/state/note_provider.dart';
@@ -58,23 +57,14 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('Semantic recall prioritization and keyword fallback', () async {
-    SharedPreferences.setMockInitialValues({
-      'evaluation_dataset_consent': false,
-    });
+    SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
     final settingsService = SettingsService(prefs);
 
-    // Initial consent check: strictly false
-    expect(settingsService.evalConsent, false);
-    settingsService.evalConsent = true;
-    expect(settingsService.evalConsent, true);
-
     final mockRepo = MockNoteRepository();
-    final aiService = AIService(settingsService);
     final backendService = BackendService(settingsService);
     final provider = NoteProvider(
       mockRepo,
-      aiService,
       backendService,
       settingsService,
     );

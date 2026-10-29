@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:mobile/data/models/note.dart';
-import 'package:mobile/services/ai_service.dart';
 import 'package:mobile/services/settings_service.dart';
 import 'package:mobile/state/note_provider.dart';
 import 'package:mobile/ui/screens/detail/note_detail_screen.dart';
@@ -37,7 +36,7 @@ void main() {
       updatedAt: now,
     );
     repo.inMemory.add(note);
-    provider = NoteProvider(repo, AIService(settings), backend, settings);
+    provider = NoteProvider(repo, backend, settings);
     await provider.loadNotes();
   });
 

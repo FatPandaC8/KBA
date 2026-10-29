@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'core/theme/echo_theme.dart';
 import 'data/repositories/note_repository.dart';
-import 'services/ai_service.dart';
 import 'services/audio_service.dart';
 import 'services/backend_service.dart';
 import 'services/settings_service.dart';
@@ -14,11 +13,9 @@ void main() async {
 
   final settingsService = await SettingsService.init();
   final noteRepository = NoteRepository();
-  final aiService = AIService(settingsService);
   final backendService = BackendService(settingsService);
   final noteProvider = NoteProvider(
     noteRepository,
-    aiService,
     backendService,
     settingsService,
   );
