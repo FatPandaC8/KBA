@@ -5,18 +5,29 @@ import os
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from server.app.adapters.inbound.http.schemas import (
+    AskRequest,
+    AskResponse,
     CaptureUploadResponse,
+    ConversationResponse,
+    ConversationSummary,
+    EntityDetailResponse,
+    EntityResponse,
+    EntityUpdateRequest,
+    GraphCluster,
     GraphData,
     GraphEdge,
     GraphNode,
+    GraphSearchResponse,
     JobStatusResponse,
     KnowledgeRelationship,
+    ProviderInfoResponse,
     PublicKnowledgeItem,
     RecordingResponse,
+    ScoredEntity,
     ScoredKnowledgeItem,
 )
 from server.app.api.dependencies import (
@@ -25,8 +36,9 @@ from server.app.api.dependencies import (
     get_current_user,
     require_current_consent,
 )
-from server.app.domain.entities import UserEntity
+from server.app.domain.entities import CaptureEntity, UserEntity
 from server.app.domain.errors import AudioProcessingError, EntityNotFoundError, ValidationError
+from server.app.domain.value_objects import CaptureStatus
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +87,7 @@ def health(container: Container = Depends(get_container)):
 
 @protected_router.post("/captures/upload", response_model=CaptureUploadResponse)
 async def upload_capture(
+    response: Response,
     file: UploadFile = File(...),
     capture_id: str = Form(...),
     idempotency_key: str = Form(...),
@@ -151,43 +164,39 @@ async def upload_capture(
         raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
 
     try:
-        result = container.process_audio_uc.execute(
-            capture_id=effective_id,
+        capture = existing or CaptureEntity(
+            id=effective_id,
             idempotency_key=idempotency_key,
-            audio_file_path=audio_path,
+            audio_path=audio_path,
             user_id=user.id,
             duration_ms=duration_ms,
+            status=CaptureStatus.RECEIVED,
         )
+        capture.audio_path = audio_path
+        capture.duration_ms = duration_ms
+        capture.status = CaptureStatus.RECEIVED
+        container.capture_repo.save(capture)
 
-        k_item = _to_public(result.knowledge_item) if result.knowledge_item else None
-        rels = [
-            KnowledgeRelationship(
-                id=r.id,
-                from_id=r.from_id,
-                to_id=r.to_id,
-                relation_type=r.relation_type,
-                status=r.status,
-            )
-            for r in result.relationships
-        ]
+        job = container.job_repo.get_by_capture_id(effective_id, user_id=user.id)
+        if job is None:
+            container.process_capture_uc.create_job(capture)
+        else:
+            # A fresh upload of the same recording is an explicit retry (REC-05).
+            container.process_capture_uc.retry(effective_id, user.id)
+        container.worker.kick()
 
+        response.status_code = 202
         return CaptureUploadResponse(
-            capture_id=result.capture_id,
-            status=result.status,
-            knowledge_item=k_item,
-            relationships=rels,
-        )
-    except (ValidationError, AudioProcessingError):
-        logger.warning("Rejected audio capture %s for user %s", effective_id, user.id)
-        raise HTTPException(
-            status_code=422,
-            detail="Audio could not be processed. The recording may be silent, corrupted, or not in English.",
+            capture_id=effective_id,
+            status="queued",
+            knowledge_item=None,
+            relationships=[],
         )
     except Exception:
-        logger.exception("Audio capture processing failed for %s", effective_id)
+        logger.exception("Could not queue audio capture %s", effective_id)
         raise HTTPException(
             status_code=500,
-            detail="Audio processing failed on the server. The recording was kept for retry.",
+            detail="Audio processing could not be queued. The recording was kept for retry.",
         )
 
 
@@ -346,14 +355,213 @@ def get_graph(
     user: UserEntity = Depends(require_current_consent),
     container: Container = Depends(get_container),
 ):
-    graph_dto = container.manage_relationships_uc.get_graph(user_id=user.id)
+    graph_dto = container.graph_query_uc.get_graph(user_id=user.id)
     return GraphData(
-        nodes=[GraphNode(id=n.id, title=n.title, kind=n.kind, x=n.x, y=n.y) for n in graph_dto.nodes],
+        nodes=[
+            GraphNode(
+                id=n.id,
+                title=n.title,
+                kind=n.kind,
+                x=n.x,
+                y=n.y,
+                cluster_id=n.cluster_id,
+                certainty=n.certainty,
+                confidence=n.confidence,
+                degree=n.degree,
+            )
+            for n in graph_dto.nodes
+        ],
         edges=[
-            GraphEdge(id=e.id, from_node=e.from_node, to_node=e.to_node, type=e.type, status=e.status)
+            GraphEdge(
+                id=e.id,
+                from_node=e.from_node,
+                to_node=e.to_node,
+                type=e.type,
+                status=e.status,
+                certainty=e.certainty,
+                confidence=e.confidence,
+            )
             for e in graph_dto.edges
         ],
+        clusters=[
+            GraphCluster(id=c.id, label=c.label, x=c.x, y=c.y, size=c.size)
+            for c in graph_dto.clusters
+        ],
     )
+
+
+@protected_router.get("/graph/search", response_model=GraphSearchResponse)
+def search_graph(
+    q: str = Query(default=""),
+    limit: int = Query(default=20, ge=1, le=100),
+    user: UserEntity = Depends(require_current_consent),
+    container: Container = Depends(get_container),
+):
+    result = container.graph_query_uc.search(user.id, q, limit=limit)
+    return GraphSearchResponse(
+        entities=[
+            ScoredEntity(entity=EntityResponse(**scored.entity.__dict__), score=scored.score)
+            for scored in result.entities
+        ],
+        relationships=[KnowledgeRelationship(**rel.__dict__) for rel in result.relationships],
+    )
+
+
+@protected_router.get("/graph/entities/{entity_id}", response_model=EntityDetailResponse)
+def get_entity(
+    entity_id: str,
+    user: UserEntity = Depends(require_current_consent),
+    container: Container = Depends(get_container),
+):
+    try:
+        detail = container.graph_query_uc.get_entity_detail(user.id, entity_id)
+    except EntityNotFoundError:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return EntityDetailResponse(**detail)
+
+
+@protected_router.patch("/graph/entities/{entity_id}", response_model=EntityResponse)
+def update_entity(
+    entity_id: str,
+    payload: EntityUpdateRequest,
+    user: UserEntity = Depends(require_current_consent),
+    container: Container = Depends(get_container),
+):
+    try:
+        updated = container.graph_query_uc.update_entity(
+            user.id, entity_id, payload.name, payload.description
+        )
+    except EntityNotFoundError:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return EntityResponse(**updated.__dict__)
+
+
+@protected_router.delete("/graph/entities/{entity_id}")
+def delete_entity(
+    entity_id: str,
+    user: UserEntity = Depends(require_current_consent),
+    container: Container = Depends(get_container),
+):
+    try:
+        container.graph_query_uc.delete_entity(user.id, entity_id)
+    except EntityNotFoundError:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return {"deleted": True, "id": entity_id}
+
+
+@protected_router.post("/recordings/{capture_id}/retry", response_model=JobStatusResponse)
+def retry_recording(
+    capture_id: str,
+    user: UserEntity = Depends(require_current_consent),
+    container: Container = Depends(get_container),
+):
+    capture = container.capture_repo.get_by_id(capture_id, user_id=user.id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    if not capture.audio_path or not os.path.exists(capture.audio_path):
+        raise HTTPException(status_code=409, detail="Recording audio is no longer available")
+    if not container.process_capture_uc.retry(capture_id, user.id):
+        job = container.job_repo.get_by_capture_id(capture_id, user_id=user.id)
+        if job and job.status != "failed":
+            # Already queued or running; report the real status rather than lying.
+            return JobStatusResponse(
+                capture_id=capture_id,
+                stage=job.stage,
+                status=job.status,
+                attempt=job.attempt,
+                error_class=job.error_class,
+                error_message=job.error_message,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+            )
+        raise HTTPException(status_code=409, detail="Recording cannot be retried")
+    container.worker.kick()
+    job = container.job_repo.get_by_capture_id(capture_id, user_id=user.id)
+    return JobStatusResponse(
+        capture_id=capture_id,
+        stage=job.stage if job else "upload",
+        status=job.status if job else "queued",
+        attempt=job.attempt if job else 0,
+        error_class=job.error_class if job else "",
+        error_message=job.error_message if job else None,
+        created_at=job.created_at if job else capture.created_at,
+        updated_at=job.updated_at if job else capture.created_at,
+    )
+
+
+@protected_router.get("/providers", response_model=List[ProviderInfoResponse])
+def list_providers(
+    user: UserEntity = Depends(require_current_consent),
+    container: Container = Depends(get_container),
+):
+    return [
+        ProviderInfoResponse(
+            id=p.id,
+            name=p.name,
+            kind=p.kind,
+            receives=p.receives,
+            trains_on_data=p.trains_on_data,
+            available=p.available,
+            detail=p.detail,
+        )
+        for p in container.provider_registry.list_providers()
+    ]
+
+
+# ------------------------------------------------------------------ Ask AI
+@protected_router.get("/conversations", response_model=List[ConversationSummary])
+def list_conversations(
+    user: UserEntity = Depends(require_current_consent),
+    container: Container = Depends(get_container),
+):
+    return [
+        ConversationSummary(
+            id=c.id, title=c.title, created_at=c.created_at, updated_at=c.updated_at
+        )
+        for c in container.ask_uc.list_conversations(user.id)
+    ]
+
+
+@protected_router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
+def get_conversation(
+    conversation_id: str,
+    user: UserEntity = Depends(require_current_consent),
+    container: Container = Depends(get_container),
+):
+    try:
+        return container.ask_uc.get_conversation(user.id, conversation_id)
+    except EntityNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+
+@protected_router.delete("/conversations/{conversation_id}")
+def delete_conversation(
+    conversation_id: str,
+    user: UserEntity = Depends(require_current_consent),
+    container: Container = Depends(get_container),
+):
+    try:
+        container.ask_uc.delete_conversation(user.id, conversation_id)
+    except EntityNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"deleted": True, "id": conversation_id}
+
+
+@protected_router.post("/ask", response_model=AskResponse)
+def ask_ai(
+    payload: AskRequest,
+    user: UserEntity = Depends(require_current_consent),
+    container: Container = Depends(get_container),
+):
+    try:
+        answer = container.ask_uc.ask(user.id, payload.question, payload.conversation_id)
+    except EntityNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return answer
 
 
 @protected_router.patch("/relationships/{rel_id}")

@@ -16,7 +16,11 @@ from .domain.errors import (
     AuthError,
     ConsentRequiredError,
     EntityNotFoundError,
+    InvalidInputAudioError,
+    ProviderError,
+    ProviderNetworkError,
     ProviderNotConfiguredError,
+    QuotaExhaustedError,
     RateLimitedError,
     ValidationError,
 )
@@ -29,9 +33,13 @@ setup_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     container = get_container()
-    # Resume indexing for records that do not have an embedding yet.
-    container.backfill_embeddings_uc.execute()
-    yield
+    # The worker resumes jobs whose lease expired during a restart (PRC-03).
+    if container.settings.worker_enabled:
+        container.worker.start()
+    try:
+        yield
+    finally:
+        container.worker.stop()
 
 
 settings = get_settings()
@@ -97,6 +105,26 @@ async def _provider_missing(_request: Request, exc: ProviderNotConfiguredError):
 @app.exception_handler(AudioProcessingError)
 async def _audio_error(_request: Request, exc: AudioProcessingError):
     return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.exception_handler(InvalidInputAudioError)
+async def _invalid_audio(_request: Request, exc: InvalidInputAudioError):
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.exception_handler(QuotaExhaustedError)
+async def _quota(_request: Request, exc: QuotaExhaustedError):
+    return JSONResponse(status_code=429, content={"detail": str(exc)})
+
+
+@app.exception_handler(ProviderNetworkError)
+async def _network(_request: Request, exc: ProviderNetworkError):
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(ProviderError)
+async def _provider(_request: Request, exc: ProviderError):
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 app.include_router(auth_router)

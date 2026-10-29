@@ -66,15 +66,13 @@ def retry_job(
     if not capture.audio_path or not os.path.exists(capture.audio_path):
         raise HTTPException(status_code=400, detail="Cannot retry: Audio was purged per privacy consent policy.")
 
-    # Re-run pipeline
-    res = container.process_audio_uc.execute(
-        capture_id=capture.id,
-        idempotency_key=f"retry-{capture.idempotency_key}",
-        audio_file_path=capture.audio_path,
-        user_id=capture.user_id,
-        duration_ms=capture.duration_ms,
-    )
-    return {"status": "retried", "capture_id": res.capture_id}
+    if not container.process_capture_uc.retry(capture.id, capture.user_id):
+        job = container.job_repo.get_by_capture_id(capture.id, user_id=capture.user_id)
+        if not job or job.status != "failed":
+            raise HTTPException(status_code=409, detail="Job is already queued or running")
+        raise HTTPException(status_code=409, detail="Job cannot be retried")
+    container.worker.kick()
+    return {"status": "queued", "capture_id": capture.id}
 
 @admin_router.get("/captures", response_model=List[DetailedCaptureResponse])
 def list_detailed_captures(

@@ -43,3 +43,35 @@ class RateLimitedError(DomainError):
 
 class ConsentRequiredError(DomainError):
     """Raised when an action requires current AI-provider consent."""
+
+
+# --------------------------------------------------------------- processing
+class ProviderError(DomainError):
+    """A provider failed while doing work (PRC-05: provider_failure)."""
+
+    error_class = "provider_failure"
+
+
+class QuotaExhaustedError(ProviderError):
+    """A free-tier/quota limit was hit. Never retried automatically."""
+
+    error_class = "quota_exhausted"
+
+
+class ProviderNetworkError(ProviderError):
+    """A transient network failure. Retried automatically."""
+
+    error_class = "network_error"
+
+
+class InvalidInputAudioError(DomainError):
+    """The input itself is unusable (silent/corrupt/non-English)."""
+
+    error_class = "invalid_input"
+
+
+class InsufficientEvidenceError(DomainError):
+    """The graph has too little evidence to answer without fabrication."""
+
+    def __init__(self, message: str = "There is not enough evidence in your graph to answer that."):
+        super().__init__(message)

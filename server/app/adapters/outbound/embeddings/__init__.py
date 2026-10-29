@@ -26,8 +26,12 @@ def get_embed_model():
 
 class FastEmbedProvider(EmbeddingProviderPort):
     def __init__(self, model_name: str = MODEL_NAME):
-        self.model_name = model_name
+        self._model_name = model_name
         self.dimension = MODEL_DIMENSION
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
 
     def embed_text(self, text: str) -> bytes:
         clean = text.strip()

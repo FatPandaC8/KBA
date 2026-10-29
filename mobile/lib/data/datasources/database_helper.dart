@@ -36,7 +36,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -47,6 +47,14 @@ class DatabaseHelper {
       await db.execute(
         'ALTER TABLE notes ADD COLUMN retryCount INTEGER NOT NULL DEFAULT 0',
       );
+    }
+    if (oldVersion < 4) {
+      await db.execute('ALTER TABLE notes ADD COLUMN errorClass TEXT');
+      await db.execute("ALTER TABLE notes ADD COLUMN stage TEXT NOT NULL DEFAULT ''");
+      await db.execute(
+        'ALTER TABLE notes ADD COLUMN audioOnServer INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute('ALTER TABLE notes ADD COLUMN knowledgeItemId TEXT');
     }
   }
 
@@ -65,7 +73,11 @@ class DatabaseHelper {
         tags TEXT,
         status TEXT NOT NULL,
         failureReason TEXT,
+        errorClass TEXT,
+        stage TEXT NOT NULL DEFAULT '',
         retryCount INTEGER NOT NULL DEFAULT 0,
+        audioOnServer INTEGER NOT NULL DEFAULT 0,
+        knowledgeItemId TEXT,
         createdAt TEXT NOT NULL,
         updatedAt TEXT NOT NULL
       )

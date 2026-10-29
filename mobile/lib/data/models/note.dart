@@ -26,7 +26,11 @@ class Note {
   final List<String> tags;
   final ProcessingStatus status;
   final String? failureReason;
+  final String errorClass;
+  final String stage;
   final int retryCount;
+  final bool audioOnServer;
+  final String? knowledgeItemId;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -43,10 +47,25 @@ class Note {
     this.tags = const [],
     this.status = ProcessingStatus.rawOnly,
     this.failureReason,
+    this.errorClass = '',
+    this.stage = '',
     this.retryCount = 0,
+    this.audioOnServer = false,
+    this.knowledgeItemId,
     required this.createdAt,
     required this.updatedAt,
   });
+
+  bool get hasLocalAudio => audioPath != null && audioPath!.isNotEmpty;
+
+  bool get canPlayAudio => hasLocalAudio || audioOnServer;
+
+  bool get isProcessing =>
+      status == ProcessingStatus.queued ||
+      status == ProcessingStatus.uploading ||
+      status == ProcessingStatus.pending ||
+      status == ProcessingStatus.transcribing ||
+      status == ProcessingStatus.structuring;
 
   Note copyWith({
     String? id,
@@ -61,7 +80,11 @@ class Note {
     List<String>? tags,
     ProcessingStatus? status,
     Object? failureReason = _unset,
+    Object? errorClass = _unset,
+    String? stage,
     int? retryCount,
+    bool? audioOnServer,
+    Object? knowledgeItemId = _unset,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -84,7 +107,15 @@ class Note {
       failureReason: failureReason == _unset
           ? this.failureReason
           : failureReason as String?,
+      errorClass: errorClass == _unset
+          ? this.errorClass
+          : (errorClass as String?) ?? '',
+      stage: stage ?? this.stage,
       retryCount: retryCount ?? this.retryCount,
+      audioOnServer: audioOnServer ?? this.audioOnServer,
+      knowledgeItemId: knowledgeItemId == _unset
+          ? this.knowledgeItemId
+          : knowledgeItemId as String?,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -104,7 +135,11 @@ class Note {
       'tags': jsonEncode(tags),
       'status': status.name,
       'failureReason': failureReason,
+      'errorClass': errorClass,
+      'stage': stage,
       'retryCount': retryCount,
+      'audioOnServer': audioOnServer ? 1 : 0,
+      'knowledgeItemId': knowledgeItemId,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
     };
@@ -139,7 +174,11 @@ class Note {
         orElse: () => ProcessingStatus.rawOnly,
       ),
       failureReason: map['failureReason'] as String?,
+      errorClass: (map['errorClass'] as String?) ?? '',
+      stage: (map['stage'] as String?) ?? '',
       retryCount: (map['retryCount'] as int?) ?? 0,
+      audioOnServer: ((map['audioOnServer'] as int?) ?? 0) == 1,
+      knowledgeItemId: map['knowledgeItemId'] as String?,
       createdAt:
           DateTime.tryParse(map['createdAt'] as String? ?? '') ??
           DateTime.now(),

@@ -46,12 +46,16 @@ class FakeNoteRepository extends NoteRepository {
     return inMemory.where((n) {
       return n.title.toLowerCase().contains(q) ||
           n.originalContent.toLowerCase().contains(q) ||
-          (n.summary?.toLowerCase().contains(query) ?? false);
+          (n.summary?.toLowerCase().contains(q) ?? false);
     }).toList();
   }
 }
 
 /// Controllable backend double. No real network calls are made.
+///
+/// It models the M3 asynchronous pipeline: an upload queues a job, status polls
+/// walk through [stages] and then report `ready`, unless [terminalErrorClass]
+/// makes the job fail with that class.
 class FakeBackendService extends BackendService {
   FakeBackendService(super.settings);
 
@@ -59,6 +63,8 @@ class FakeBackendService extends BackendService {
   bool failUpload = false;
   bool failDelete = false;
   bool failGraph = false;
+  bool failSearch = false;
+  bool failAsk = false;
   bool failAuth = false;
 
   int uploadCalls = 0;
@@ -71,19 +77,60 @@ class FakeBackendService extends BackendService {
   int deleteAccountCalls = 0;
   int testConnectionCalls = 0;
   int getConsentCalls = 0;
+  int statusCalls = 0;
+  int knowledgeCalls = 0;
+  int retryCalls = 0;
+  int graphCalls = 0;
+  int searchCalls = 0;
+  int askCalls = 0;
+
+  /// Capture ids in upload order, used to prove uploads are serialized.
+  final List<String> uploadedCaptureIds = [];
 
   /// When set, uploads wait until the completer is completed.
   Completer<void>? uploadGate;
 
+  /// Stages reported before the job becomes `ready`. Empty means the first
+  /// status poll already reports `ready`.
+  List<String> stages = const [];
+
+  /// When set, the job fails with this error class.
+  String? terminalErrorClass;
+  String? terminalErrorMessage;
+
+  final Map<String, int> _polls = {};
+
   BackendSyncResult uploadResult = BackendSyncResult(
     captureId: 'capture',
-    status: 'ready',
-    title: 'Processed title',
-    coreIdea: 'Processed summary',
-    concepts: const ['concept'],
-    tags: const ['tag'],
-    openQuestions: const ['question'],
+    status: 'queued',
+    title: '',
+    coreIdea: '',
+    concepts: const [],
+    tags: const [],
+    openQuestions: const [],
   );
+
+  /// Knowledge returned once a capture is ready.
+  Map<String, KnowledgeSnapshot> knowledgeByCapture = {};
+
+  final List<RecordingModel> recordings = [];
+
+  GraphDataModel graphData = GraphDataModel(
+    nodes: const [],
+    edges: const [],
+    clusters: const [],
+  );
+  GraphSearchResult searchResult = GraphSearchResult(
+    entities: const [],
+    relationships: const [],
+  );
+  final Map<String, EntityDetailModel> entityDetails = {};
+
+  final List<ConversationSummaryModel> conversations = [];
+  final Map<String, ConversationModel> conversationById = {};
+
+  /// Optional override for [ask].
+  AskResultModel Function(String question, String? conversationId)? askHandler;
 
   bool consentGranted = false;
 
@@ -107,9 +154,11 @@ class FakeBackendService extends BackendService {
     if (failUpload) {
       throw BackendException('upload failed', statusCode: 500);
     }
+    uploadedCaptureIds.add(captureId);
+    _polls[captureId] = 0;
     return BackendSyncResult(
       captureId: captureId,
-      status: uploadResult.status,
+      status: 'queued',
       title: uploadResult.title,
       coreIdea: uploadResult.coreIdea,
       concepts: uploadResult.concepts,
@@ -119,11 +168,78 @@ class FakeBackendService extends BackendService {
   }
 
   @override
+  Future<RecordingStatusModel> fetchRecordingStatus(String captureId) async {
+    statusCalls++;
+    if (terminalErrorClass != null) {
+      return RecordingStatusModel(
+        captureId: captureId,
+        stage: 'transcribe',
+        status: 'failed',
+        attempt: 1,
+        errorClass: terminalErrorClass!,
+        errorMessage: terminalErrorMessage,
+      );
+    }
+
+    final poll = (_polls[captureId] ?? 0) + 1;
+    _polls[captureId] = poll;
+
+    if (poll <= stages.length) {
+      return RecordingStatusModel(
+        captureId: captureId,
+        stage: stages[poll - 1],
+        status: 'processing',
+        attempt: 0,
+        errorClass: '',
+        errorMessage: null,
+      );
+    }
+
+    return RecordingStatusModel(
+      captureId: captureId,
+      stage: 'completed',
+      status: 'ready',
+      attempt: 0,
+      errorClass: '',
+      errorMessage: null,
+    );
+  }
+
+  @override
+  Future<KnowledgeSnapshot?> fetchKnowledgeForCapture(String captureId) async {
+    knowledgeCalls++;
+    return knowledgeByCapture[captureId] ??
+        KnowledgeSnapshot(
+          knowledgeItemId: 'knowledge-$captureId',
+          title: uploadResult.title.isEmpty
+              ? 'Voice Thought'
+              : uploadResult.title,
+          coreIdea: uploadResult.coreIdea,
+          concepts: uploadResult.concepts,
+          tags: uploadResult.tags,
+          openQuestions: uploadResult.openQuestions,
+        );
+  }
+
+  @override
+  Future<List<RecordingModel>> fetchRecordings() async {
+    return List.unmodifiable(recordings);
+  }
+
+  @override
+  Future<void> retryRecording(String captureId) async {
+    retryCalls++;
+    _polls[captureId] = 0;
+    terminalErrorClass = null;
+  }
+
+  @override
   Future<void> deleteCapture(String captureId) async {
     deleteCalls++;
     if (failDelete) {
       throw BackendException('delete failed', statusCode: 500);
     }
+    recordings.removeWhere((r) => r.captureId == captureId);
   }
 
   @override
@@ -132,13 +248,97 @@ class FakeBackendService extends BackendService {
     int limit = 20,
   }) async => const [];
 
+  // ----------------------------------------------------------------- graph
   @override
-  Future<({List<GraphNodeModel> nodes, List<GraphEdgeModel> edges})>
-  fetchGraph() async {
+  Future<GraphDataModel> fetchGraph() async {
+    graphCalls++;
     if (failGraph) {
       throw BackendException('graph failed', statusCode: 500);
     }
-    return (nodes: <GraphNodeModel>[], edges: <GraphEdgeModel>[]);
+    return graphData;
+  }
+
+  @override
+  Future<GraphSearchResult> searchGraph(String query, {int limit = 20}) async {
+    searchCalls++;
+    if (failSearch) {
+      throw BackendException('search failed', statusCode: 500);
+    }
+    if (query.trim().isEmpty) {
+      return GraphSearchResult(entities: const [], relationships: const []);
+    }
+    return searchResult;
+  }
+
+  @override
+  Future<EntityDetailModel> fetchEntityDetail(String entityId) async {
+    final detail = entityDetails[entityId];
+    if (detail == null) {
+      throw BackendException('entity not found', statusCode: 404);
+    }
+    return detail;
+  }
+
+  @override
+  Future<EntityModel> updateEntity(
+    String entityId, {
+    String? name,
+    String? description,
+  }) async {
+    final detail = entityDetails[entityId];
+    if (detail == null) {
+      throw BackendException('entity not found', statusCode: 404);
+    }
+    final updated = EntityModel(
+      id: detail.entity.id,
+      name: name ?? detail.entity.name,
+      entityType: detail.entity.entityType,
+      description: description ?? detail.entity.description,
+      confidence: detail.entity.confidence,
+      certainty: detail.entity.certainty,
+      provenance: detail.entity.provenance,
+      createdAt: detail.entity.createdAt,
+    );
+    entityDetails[entityId] = EntityDetailModel(
+      entity: updated,
+      relationships: detail.relationships,
+    );
+    return updated;
+  }
+
+  @override
+  Future<void> deleteEntity(String entityId) async {
+    entityDetails.remove(entityId);
+    graphData = GraphDataModel(
+      nodes: graphData.nodes.where((n) => n.id != entityId).toList(),
+      edges: graphData.edges
+          .where((e) => e.fromNode != entityId && e.toNode != entityId)
+          .toList(),
+      clusters: graphData.clusters,
+    );
+  }
+
+  @override
+  Future<void> updateRelationship(
+    String relId,
+    String status, {
+    String? relationType,
+  }) async {
+    graphData = GraphDataModel(
+      nodes: graphData.nodes,
+      edges: graphData.edges.map((edge) {
+        if (edge.id != relId) return edge;
+        return GraphEdgeModel(
+          id: edge.id,
+          fromNode: edge.fromNode,
+          toNode: edge.toNode,
+          type: relationType ?? edge.type,
+          status: status,
+          certainty: edge.certainty,
+        );
+      }).toList(),
+      clusters: graphData.clusters,
+    );
   }
 
   @override
@@ -146,7 +346,75 @@ class FakeBackendService extends BackendService {
     if (failGraph) {
       throw BackendException('relationships failed', statusCode: 500);
     }
-    return const [];
+    return graphData.edges;
+  }
+
+  @override
+  Future<void> deleteRelationship(String relId) async {
+    graphData = GraphDataModel(
+      nodes: graphData.nodes,
+      edges: graphData.edges.where((e) => e.id != relId).toList(),
+      clusters: graphData.clusters,
+    );
+    for (final entry in entityDetails.entries.toList()) {
+      entityDetails[entry.key] = EntityDetailModel(
+        entity: entry.value.entity,
+        relationships: entry.value.relationships
+            .where((r) => r.id != relId)
+            .toList(),
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------- Ask AI
+  @override
+  Future<List<ConversationSummaryModel>> fetchConversations() async {
+    return List.unmodifiable(conversations);
+  }
+
+  @override
+  Future<ConversationModel> fetchConversation(String conversationId) async {
+    final conversation = conversationById[conversationId];
+    if (conversation == null) {
+      throw BackendException('conversation not found', statusCode: 404);
+    }
+    return conversation;
+  }
+
+  @override
+  Future<void> deleteConversation(String conversationId) async {
+    conversations.removeWhere((c) => c.id == conversationId);
+    conversationById.remove(conversationId);
+  }
+
+  @override
+  Future<AskResultModel> ask(String question, {String? conversationId}) async {
+    askCalls++;
+    if (failAsk) {
+      throw BackendException('assistant failed', statusCode: 500);
+    }
+    final handler = askHandler;
+    if (handler != null) return handler(question, conversationId);
+
+    final id = conversationId ?? 'conversation-1';
+    return AskResultModel(
+      conversationId: id,
+      message: AskMessageModel(
+        id: 'message-$askCalls',
+        role: 'assistant',
+        content: 'Answer based on your knowledge.',
+        status: 'ready',
+        errorClass: '',
+        errorMessage: '',
+        createdAt: '2026-01-01T00:00:00Z',
+        citations: const [],
+      ),
+      facts: const [],
+      inferences: const [],
+      contradictions: const [],
+      refused: false,
+      refusalReason: '',
+    );
   }
 
   // ------------------------------------------------------------------ auth
@@ -199,7 +467,11 @@ class FakeBackendService extends BackendService {
   @override
   Future<Map<String, dynamic>> getConsent() async {
     getConsentCalls++;
-    return {'granted': consentGranted, 'version': '2026-10-29-v1', 'providers': <Map>[]};
+    return {
+      'granted': consentGranted,
+      'version': '2026-10-29-v1',
+      'providers': <Map>[],
+    };
   }
 
   @override
@@ -222,6 +494,9 @@ class FakeBackendService extends BackendService {
         message: 'Could not reach server.',
       );
     }
-    return const BackendConnectionResult(ok: true, message: 'Connected and authenticated.');
+    return const BackendConnectionResult(
+      ok: true,
+      message: 'Connected and authenticated.',
+    );
   }
 }

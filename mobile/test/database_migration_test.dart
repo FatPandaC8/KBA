@@ -46,7 +46,7 @@ void main() {
   });
 
   test(
-    'v2 → v3 migration preserves existing notes and adds retryCount',
+    'v2 → v4 migration preserves existing notes and adds M3 columns',
     () async {
       final dbPath = p.join(tempDir.path, 'echo_notes.db');
       final legacy = await databaseFactory.openDatabase(
@@ -93,18 +93,27 @@ void main() {
       expect(row['transcript'], 'spoken words');
       expect(row['status'], 'ready');
       expect(row['retryCount'], 0);
+      // M3 columns are additive and must not disturb legacy rows.
+      expect(row['errorClass'], isNull);
+      expect(row['stage'], '');
+      expect(row['audioOnServer'], 0);
+      expect(row['knowledgeItemId'], isNull);
 
       await helper.close();
     },
   );
 
-  test('fresh database creates the v3 schema', () async {
+  test('fresh database creates the v4 schema', () async {
     final helper = DatabaseHelper.forTesting(() async => tempDir.path);
     final db = await helper.database;
     final columns = await db.rawQuery('PRAGMA table_info(notes)');
     final names = columns.map((c) => c['name']).toSet();
     expect(names, contains('retryCount'));
     expect(names, contains('failureReason'));
+    expect(names, contains('errorClass'));
+    expect(names, contains('stage'));
+    expect(names, contains('audioOnServer'));
+    expect(names, contains('knowledgeItemId'));
 
     await db.insert('notes', {
       'id': 'new-note',
@@ -116,6 +125,10 @@ void main() {
     });
     final row = (await db.query('notes')).single;
     expect(row['retryCount'], 0);
+    expect(row['errorClass'], isNull);
+    expect(row['stage'], '');
+    expect(row['audioOnServer'], 0);
+    expect(row['knowledgeItemId'], isNull);
 
     await helper.close();
   });

@@ -5,7 +5,19 @@ from typing import Optional
 
 _LOCAL = threading.local()
 
-_USER_SCOPED_TABLES = ("captures", "knowledge_items", "relationships", "knowledge_embeddings", "processing_jobs", "model_eval_records")
+_USER_SCOPED_TABLES = (
+    "captures",
+    "knowledge_items",
+    "entities",
+    "relationships",
+    "knowledge_embeddings",
+    "processing_jobs",
+    "model_eval_records",
+    "conversations",
+    "messages",
+    "answer_citations",
+    "duplicate_candidates",
+)
 
 
 class DatabaseManager:
@@ -126,6 +138,24 @@ class DatabaseManager:
                 updated_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS entities (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT '',
+                capture_id TEXT,
+                name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                entity_type TEXT NOT NULL DEFAULT 'concept',
+                description TEXT NOT NULL DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 0.5,
+                certainty TEXT NOT NULL DEFAULT 'confirmed',
+                provenance TEXT NOT NULL DEFAULT 'voice-capture',
+                provider_id TEXT NOT NULL DEFAULT '',
+                model_version TEXT NOT NULL DEFAULT '',
+                user_edited INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS relationships (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL DEFAULT '',
@@ -133,6 +163,10 @@ class DatabaseManager:
                 to_id TEXT,
                 relation_type TEXT,
                 status TEXT,
+                confidence REAL NOT NULL DEFAULT 0.6,
+                certainty TEXT NOT NULL DEFAULT 'confirmed',
+                source_capture_id TEXT NOT NULL DEFAULT '',
+                provenance TEXT NOT NULL DEFAULT 'voice-capture',
                 user_edited INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT,
                 UNIQUE(user_id, from_id, to_id, relation_type)
@@ -175,6 +209,49 @@ class DatabaseManager:
                 created_at TEXT,
                 updated_at TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS duplicate_candidates (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                candidate_id TEXT NOT NULL,
+                score REAL NOT NULL,
+                decision TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(user_id, entity_id, candidate_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT 'New conversation',
+                created_at TEXT,
+                updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'ready',
+                error_class TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                created_at TEXT,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS answer_citations (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                name_snapshot TEXT NOT NULL DEFAULT '',
+                created_at TEXT,
+                FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+            );
             """
         )
 
@@ -198,6 +275,16 @@ class DatabaseManager:
         c.execute("CREATE INDEX IF NOT EXISTS idx_consents_user ON consents(user_id, created_at DESC);")
         c.execute("CREATE INDEX IF NOT EXISTS idx_record_supports_record ON record_supports(record_id);")
         c.execute("CREATE INDEX IF NOT EXISTS idx_record_supports_target ON record_supports(user_id, target_kind, target_id);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entities_user_name ON entities(user_id, normalized_name);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entities_capture ON entities(capture_id);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entities_user_type ON entities(user_id, entity_type);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_relationships_capture ON relationships(source_capture_id);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at DESC);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_answer_citations_message ON answer_citations(message_id);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_answer_citations_user ON answer_citations(user_id);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_duplicate_candidates_user ON duplicate_candidates(user_id, decision);")
 
         conn.commit()
         conn.close()
@@ -244,10 +331,16 @@ class DatabaseManager:
             "knowledge_items": {
                 "user_id": "TEXT NOT NULL DEFAULT ''",
                 "user_edited": "INTEGER NOT NULL DEFAULT 0",
+                "provider_id": "TEXT NOT NULL DEFAULT ''",
+                "model_version": "TEXT NOT NULL DEFAULT ''",
             },
             "relationships": {
                 "user_id": "TEXT NOT NULL DEFAULT ''",
                 "user_edited": "INTEGER NOT NULL DEFAULT 0",
+                "confidence": "REAL NOT NULL DEFAULT 0.6",
+                "certainty": "TEXT NOT NULL DEFAULT 'confirmed'",
+                "source_capture_id": "TEXT NOT NULL DEFAULT ''",
+                "provenance": "TEXT NOT NULL DEFAULT 'voice-capture'",
             },
             "knowledge_embeddings": {
                 "user_id": "TEXT NOT NULL DEFAULT ''",

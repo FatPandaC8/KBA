@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/data/models/note.dart';
-import 'package:mobile/data/repositories/note_repository.dart';
 import 'package:mobile/services/audio_service.dart';
-import 'package:mobile/services/backend_service.dart';
 import 'package:mobile/services/settings_service.dart';
 import 'package:mobile/state/note_provider.dart';
 import 'package:mobile/ui/app_shell.dart';
@@ -11,55 +9,12 @@ import 'package:mobile/ui/screens/detail/note_detail_screen.dart';
 import 'package:mobile/ui/screens/home/home_screen.dart';
 import 'package:mobile/ui/screens/library/library_screen.dart';
 import 'package:mobile/ui/screens/recall/recall_screen.dart';
+import 'package:mobile/ui/screens/recordings/recordings_screen.dart';
 import 'package:mobile/ui/screens/settings/settings_screen.dart';
+import 'package:mobile/ui/widgets/echo_bottom_nav.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class MockNoteRepository extends NoteRepository {
-  final List<Note> inMemory = [];
-
-  @override
-  Future<List<Note>> getAllNotes() async => List.unmodifiable(inMemory);
-
-  @override
-  Future<void> insertNote(Note note) async {
-    inMemory.removeWhere((n) => n.id == note.id);
-    inMemory.add(note);
-  }
-
-  @override
-  Future<Note?> getNoteById(String id) async {
-    try {
-      return inMemory.firstWhere((n) => n.id == id);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  @override
-  Future<void> updateNote(Note note) async {
-    final idx = inMemory.indexWhere((n) => n.id == note.id);
-    if (idx != -1) {
-      inMemory[idx] = note;
-    } else {
-      inMemory.add(note);
-    }
-  }
-
-  @override
-  Future<void> deleteNote(String id) async {
-    inMemory.removeWhere((n) => n.id == id);
-  }
-
-  @override
-  Future<List<Note>> searchNotes(String query) async {
-    final q = query.toLowerCase();
-    return inMemory.where((n) {
-      return n.title.toLowerCase().contains(q) ||
-          n.originalContent.toLowerCase().contains(q) ||
-          (n.summary?.toLowerCase().contains(q) ?? false);
-    }).toList();
-  }
-}
+import 'support/fakes.dart';
 
 class MockAudioService extends Fake implements AudioService {
   @override
@@ -69,7 +24,7 @@ class MockAudioService extends Fake implements AudioService {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  late MockNoteRepository repo;
+  late FakeNoteRepository repo;
   late NoteProvider noteProvider;
   late MockAudioService audioService;
   late SettingsService settingsService;
@@ -79,28 +34,32 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     settingsService = SettingsService(prefs);
     await settingsService.setSessionToken('test-session-token');
-    repo = MockNoteRepository();
+    repo = FakeNoteRepository();
 
     final testNote = Note(
       id: 'test-note-1',
       originalContent: 'Sample note content',
       title: 'Sample Note',
       summary: 'Summary of sample note',
+      status: ProcessingStatus.ready,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
     );
     await repo.insertNote(testNote);
 
-    final backendService = BackendService(settingsService);
-
     noteProvider = NoteProvider(
       repo,
-      backendService,
+      FakeBackendService(settingsService),
       settingsService,
     );
     await noteProvider.loadNotes();
     audioService = MockAudioService();
   });
+
+  Finder navItem(String label) => find.descendant(
+    of: find.byType(EchoBottomNav),
+    matching: find.text(label),
+  );
 
   Widget createTestWidget() {
     return MaterialApp(
@@ -118,7 +77,7 @@ void main() {
     await tester.pumpWidget(createTestWidget());
     await tester.pumpAndSettle();
 
-    // Verify initially on Home screen
+    // Verify initially on the Record tab
     expect(find.byType(HomeScreen), findsOneWidget);
     expect(find.byType(NoteDetailScreen), findsNothing);
 
@@ -134,7 +93,7 @@ void main() {
     await widgetsAppState.didPopRoute();
     await tester.pumpAndSettle();
 
-    // Verify detail is closed and back on Home
+    // Verify detail is closed and back on the Record tab
     expect(find.byType(NoteDetailScreen), findsNothing);
     expect(find.byType(HomeScreen), findsOneWidget);
   });
@@ -167,13 +126,11 @@ void main() {
     await tester.pumpWidget(createTestWidget());
     await tester.pumpAndSettle();
 
-    // Initially at Home (tab 0)
+    // Initially on the Record tab
     expect(find.byType(HomeScreen), findsOneWidget);
 
-    // Tap Library tab (index 2)
-    final libraryNav = find.text('Library');
-    expect(libraryNav, findsOneWidget);
-    await tester.tap(libraryNav);
+    // Tap the Graph tab (index 1)
+    await tester.tap(navItem('Graph'));
     await tester.pumpAndSettle();
 
     expect(find.byType(LibraryScreen), findsOneWidget);
@@ -184,17 +141,16 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(didPopHandled, isTrue);
-    // Should return to Home tab
+    // Should return to the Record tab
     expect(find.byType(HomeScreen), findsOneWidget);
   });
 
-  testWidgets('4. Back at root screen (Home tab) allows pop / exit', (
+  testWidgets('4. Back at root screen (Record tab) allows pop / exit', (
     tester,
   ) async {
     await tester.pumpWidget(createTestWidget());
     await tester.pumpAndSettle();
 
-    // We are at root Home tab with empty history
     expect(find.byType(HomeScreen), findsOneWidget);
 
     // Check PopScope configuration
@@ -203,10 +159,8 @@ void main() {
     final popScopeWidget = tester.widget(popScopeFinder) as dynamic;
     expect(popScopeWidget.canPop, isTrue);
 
-    // Trigger back route
     final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
     final result = await widgetsAppState.didPopRoute();
-    // At root with canPop: true, didPopRoute returns false, allowing Android OS to exit
     expect(result, isFalse);
   });
 
@@ -216,32 +170,50 @@ void main() {
       await tester.pumpWidget(createTestWidget());
       await tester.pumpAndSettle();
 
-      // Sequence: Home(0) -> Recall(1) -> Library(2)
-      await tester.tap(find.text('Recall'));
+      // Sequence: Record(0) -> Ask AI(2) -> Graph(1)
+      await tester.tap(navItem('Ask AI'));
       await tester.pumpAndSettle();
       expect(find.byType(RecallScreen), findsOneWidget);
 
-      await tester.tap(find.text('Library'));
+      await tester.tap(navItem('Graph'));
       await tester.pumpAndSettle();
       expect(find.byType(LibraryScreen), findsOneWidget);
 
       final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
 
-      // First Back -> should go back to Recall
+      // First Back -> should go back to Ask AI
       await widgetsAppState.didPopRoute();
       await tester.pumpAndSettle();
       expect(find.byType(RecallScreen), findsOneWidget);
 
-      // Second Back -> should go back to Home
+      // Second Back -> should go back to Record
       await widgetsAppState.didPopRoute();
       await tester.pumpAndSettle();
       expect(find.byType(HomeScreen), findsOneWidget);
 
-      // Now at Home, popScope should allow exit
       final popScopeFinder = find.byWidgetPredicate((w) => w is PopScope);
-      expect(popScopeFinder, findsOneWidget);
       final popScopeWidget = tester.widget(popScopeFinder) as dynamic;
       expect(popScopeWidget.canPop, isTrue);
     },
   );
+
+  testWidgets('6. Back from My recordings returns to the Record tab', (
+    tester,
+  ) async {
+    await tester.pumpWidget(createTestWidget());
+    await tester.pumpAndSettle();
+
+    final home = tester.widget<HomeScreen>(find.byType(HomeScreen));
+    home.onOpenRecordings();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(RecordingsScreen), findsOneWidget);
+
+    final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
+    await widgetsAppState.didPopRoute();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(RecordingsScreen), findsNothing);
+    expect(find.byType(HomeScreen), findsOneWidget);
+  });
 }

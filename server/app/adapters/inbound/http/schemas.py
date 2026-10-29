@@ -12,6 +12,10 @@ class KnowledgeRelationship(BaseModel):
     to_id: str
     relation_type: str = "Related to"
     status: str = "suggested"
+    certainty: str = "confirmed"
+    confidence: float = 0.6
+    source_capture_id: str = ""
+    created_at: Optional[str] = None
 
 
 class KnowledgeItem(BaseModel):
@@ -60,6 +64,10 @@ class GraphNode(BaseModel):
     kind: str
     x: float
     y: float
+    cluster_id: str = ""
+    certainty: str = "confirmed"
+    confidence: float = 0.5
+    degree: int = 0
 
 
 class GraphEdge(BaseModel):
@@ -68,11 +76,137 @@ class GraphEdge(BaseModel):
     to_node: str
     type: str
     status: str
+    certainty: str = "confirmed"
+    confidence: float = 0.6
+
+
+class GraphCluster(BaseModel):
+    id: str
+    label: str
+    x: float
+    y: float
+    size: int
 
 
 class GraphData(BaseModel):
     nodes: List[GraphNode]
     edges: List[GraphEdge]
+    clusters: List[GraphCluster] = []
+
+
+class EntityResponse(BaseModel):
+    id: str
+    name: str
+    entity_type: str
+    description: str = ""
+    confidence: float = 0.5
+    certainty: str = "confirmed"
+    provenance: str = "voice-capture"
+    capture_id: str = ""
+    created_at: str
+    updated_at: str
+    provider_id: str = ""
+    model_version: str = ""
+
+
+class EntityDetailRelationship(BaseModel):
+    id: str
+    from_id: str
+    to_id: str
+    from_name: str = ""
+    to_name: str = ""
+    relation_type: str
+    status: str
+    certainty: str = "confirmed"
+    confidence: float = 0.6
+    source_capture_id: str = ""
+    created_at: str
+
+
+class EntityDetailResponse(BaseModel):
+    entity: EntityResponse
+    relationships: List[EntityDetailRelationship] = []
+
+
+class EntityUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ScoredEntity(BaseModel):
+    entity: EntityResponse
+    score: float
+
+
+class GraphSearchResponse(BaseModel):
+    entities: List[ScoredEntity] = []
+    relationships: List[KnowledgeRelationship] = []
+
+
+class CitationResponse(BaseModel):
+    id: str
+    kind: str
+    target_id: str
+    name: str
+    deleted: bool = False
+
+
+class MessageResponse(BaseModel):
+    id: str
+    role: str
+    content: str
+    status: str
+    error_class: str = ""
+    error_message: str = ""
+    created_at: str
+    citations: List[CitationResponse] = []
+
+
+class ConversationResponse(BaseModel):
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+    messages: List[MessageResponse] = []
+
+
+class ConversationSummary(BaseModel):
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class AskRequest(BaseModel):
+    question: str
+    conversation_id: Optional[str] = None
+
+
+class AskResponse(BaseModel):
+    conversation_id: str
+    message: MessageResponse
+    facts: List[str] = []
+    inferences: List[str] = []
+    contradictions: List[str] = []
+    refused: bool = False
+    refusal_reason: str = ""
+
+
+class ProviderInfoResponse(BaseModel):
+    id: str
+    name: str
+    kind: str
+    receives: List[str]
+    trains_on_data: bool
+    available: bool
+    detail: str = ""
+
+
+class DuplicateFlagResponse(BaseModel):
+    entity_id: str
+    candidate_id: str
+    score: float
+    decision: str
 
 
 class CaptureUploadResponse(BaseModel):

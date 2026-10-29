@@ -1,22 +1,48 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
 import 'package:mobile/core/theme/echo_colors.dart';
 import 'package:mobile/services/backend_service.dart';
-import 'package:mobile/state/note_provider.dart';
 
+import 'graph_detail_sheets.dart';
 import 'graph_layout_engine.dart';
 
+/// Requests a focus change on the canvas. [sequence] makes repeated taps on the
+/// same search result act again (SRCH-02).
+class GraphFocusRequest {
+  final String? entityId;
+  final String? relationshipId;
+  final int sequence;
+
+  const GraphFocusRequest({
+    this.entityId,
+    this.relationshipId,
+    required this.sequence,
+  });
+
+  bool get isEmpty => entityId == null && relationshipId == null;
+}
+
+/// Zoom/pan clustered canvas (KG-04, KG-05, KG-06) with level-of-detail
+/// cluster collapsing when zoomed out.
+///
+/// Coordinates, communities and the cluster labels are produced by the backend;
+/// the client only renders them. When a backend returns a degenerate layout
+/// (every node on the same point) the deterministic local engine is used as a
+/// fallback so a broken layout never produces an unusable canvas.
 class KnowledgeGraphWidget extends StatefulWidget {
-  final NoteProvider noteProvider;
-  final Function(String noteId) onOpenDetail;
-  final String searchQuery;
+  final GraphDataModel graph;
+  final BackendService backend;
+  final GraphFocusRequest? focus;
+  final Future<void> Function() onGraphMutated;
 
   const KnowledgeGraphWidget({
     super.key,
-    required this.noteProvider,
-    required this.onOpenDetail,
-    this.searchQuery = '',
+    required this.graph,
+    required this.backend,
+    required this.onGraphMutated,
+    this.focus,
   });
 
   @override
@@ -24,706 +50,900 @@ class KnowledgeGraphWidget extends StatefulWidget {
 }
 
 class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
-  List<GraphEdgeModel> _relationships = [];
-  bool _isLoading = false;
-  String? _loadError;
-  int _loadSequence = 0;
-  String? _selectedNodeId;
-  double _zoom = 1.0;
-  Offset _panOffset = Offset.zero;
+  static const double _nodeWidth = 88;
+  static const double _nodeHeight = 40;
+  static const double _paintPadding = 70;
+  static const double _collapsedAtScale = 0.55;
+
+  final TransformationController _transform = TransformationController();
+
+  Size _viewport = Size.zero;
+  double _scale = 1;
+  bool _fitted = false;
+  Rect _bounds = const Rect.fromLTWH(0, 0, 1, 1);
+  String? _selectedEntityId;
+  String? _focusedEdgeId;
+  bool _detailOpen = false;
+  int _appliedFocusSequence = -1;
+
+  bool get _collapsed => _scale < _collapsedAtScale;
 
   @override
   void initState() {
     super.initState();
-    widget.noteProvider.addListener(_onProviderChanged);
-    _loadRelationships();
+    _transform.addListener(_onTransformChanged);
+    _scheduleFocus();
   }
 
   @override
   void didUpdateWidget(KnowledgeGraphWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.noteProvider != widget.noteProvider) {
-      oldWidget.noteProvider.removeListener(_onProviderChanged);
-      widget.noteProvider.addListener(_onProviderChanged);
-      _loadRelationships();
+    if (!identical(oldWidget.graph, widget.graph)) {
+      _fitted = false;
+      if (_selectedEntityId != null &&
+          !widget.graph.nodes.any((node) => node.id == _selectedEntityId)) {
+        _selectedEntityId = null;
+      }
+      if (_focusedEdgeId != null &&
+          !widget.graph.edges.any((edge) => edge.id == _focusedEdgeId)) {
+        _focusedEdgeId = null;
+      }
+    }
+    if (oldWidget.graph != widget.graph ||
+        oldWidget.focus?.sequence != widget.focus?.sequence) {
+      _scheduleFocus();
     }
   }
 
   @override
   void dispose() {
-    widget.noteProvider.removeListener(_onProviderChanged);
+    _transform.removeListener(_onTransformChanged);
+    _transform.dispose();
     super.dispose();
   }
 
-  void _onProviderChanged() {
-    if (_isLoading) return;
-    _loadRelationships();
+  void _onTransformChanged() {
+    final scale = _transform.value.getMaxScaleOnAxis();
+    if ((scale - _scale).abs() < 0.01) return;
+    setState(() => _scale = scale);
   }
 
-  Future<void> _loadRelationships() async {
-    final sequence = ++_loadSequence;
-    if (mounted) {
-      setState(() {
-        _isLoading = true;
-        _loadError = null;
-      });
+  void _scheduleFocus() {
+    final focus = widget.focus;
+    if (focus == null || focus.isEmpty) return;
+    if (focus.sequence == _appliedFocusSequence) return;
+    _appliedFocusSequence = focus.sequence;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _applyFocus(focus));
+  }
+
+  Future<void> _applyFocus(GraphFocusRequest focus) async {
+    if (!mounted || _viewport.isEmpty) return;
+    final centers = _centersFor(widget.graph);
+    final entityId = focus.entityId;
+    if (entityId != null) {
+      final center = centers[entityId];
+      if (center != null) {
+        _focusPoint(center);
+      }
+      await _openEntityDetail(entityId);
+      return;
     }
 
+    final relationshipId = focus.relationshipId;
+    if (relationshipId == null) return;
+    GraphEdgeModel? edge;
+    for (final candidate in widget.graph.edges) {
+      if (candidate.id == relationshipId) {
+        edge = candidate;
+        break;
+      }
+    }
+    if (edge == null) return;
+    final resolved = edge;
+    setState(() => _focusedEdgeId = resolved.id);
+    final from = centers[resolved.fromNode];
+    final to = centers[resolved.toNode];
+    if (from != null && to != null) {
+      _focusPoint(Offset((from.dx + to.dx) / 2, (from.dy + to.dy) / 2));
+    }
+    await _openRelationshipDetail(resolved);
+  }
+
+  /// Centres the canvas on a point given in graph coordinates. The child of the
+  /// [InteractiveViewer] is translated by `_bounds.topLeft`, so graph points
+  /// must be converted into child space before building the matrix.
+  void _focusPoint(Offset graphPoint) {
+    if (_viewport.isEmpty) return;
+    final target = _scale < 0.85 ? 0.9 : _scale;
+    _transform.value = _matrixFor(graphPoint - _bounds.topLeft, target);
+  }
+
+  Matrix4 _matrixFor(Offset contentPoint, double scale) {
+    final tx = _viewport.width / 2 - contentPoint.dx * scale;
+    final ty = _viewport.height / 2 - contentPoint.dy * scale;
+    return Matrix4.identity()
+      ..setEntry(0, 0, scale)
+      ..setEntry(1, 1, scale)
+      ..setEntry(0, 3, tx)
+      ..setEntry(1, 3, ty);
+  }
+
+  void _zoomBy(double factor) {
+    if (_viewport.isEmpty) return;
+    final current = _transform.value.getMaxScaleOnAxis();
+    final target = (current * factor).clamp(0.04, 4.0);
+    final tx = _transform.value.storage[12];
+    final ty = _transform.value.storage[13];
+    final cx = _viewport.width / 2;
+    final cy = _viewport.height / 2;
+    final contentX = (cx - tx) / current;
+    final contentY = (cy - ty) / current;
+    _transform.value = _matrixFor(Offset(contentX, contentY), target);
+  }
+
+  void _scheduleFit() {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _fitToView());
+  }
+
+  void _fitToView() {
+    if (!mounted || _viewport.isEmpty) return;
+    if (_bounds.width <= 0 || _bounds.height <= 0) return;
+    final scale = math
+        .min(_viewport.width / _bounds.width, _viewport.height / _bounds.height)
+        .clamp(0.04, 1.4);
+    // The child spans `_bounds.size` starting at the origin, so its centre is
+    // half its size — not `_bounds.center` in graph coordinates.
+    _transform.value = _matrixFor(_bounds.size.center(Offset.zero), scale);
+  }
+
+  Future<void> _openEntityDetail(String entityId) async {
+    if (_detailOpen) return;
+    _detailOpen = true;
+    if (mounted) setState(() => _selectedEntityId = entityId);
     try {
-      final rels = await widget.noteProvider.backendService
-          .fetchAllRelationships();
-      if (!mounted || sequence != _loadSequence) return;
-      setState(() {
-        _relationships = rels;
-        _isLoading = false;
-      });
+      final detail = await widget.backend.fetchEntityDetail(entityId);
+      if (!mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => EntityDetailSheet(
+          detail: detail,
+          backend: widget.backend,
+          onChanged: widget.onGraphMutated,
+        ),
+      );
     } catch (e) {
-      if (!mounted || sequence != _loadSequence) return;
-      setState(() {
-        _isLoading = false;
-        // Local notes remain viewable, but the failure must be visible and
-        // retryable instead of silently pretending there are no connections.
-        _loadError = e.toString();
-      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('This entity could not be loaded. Try again.'),
+          ),
+        );
+      }
+    } finally {
+      _detailOpen = false;
+    }
+  }
+
+  Future<void> _openRelationshipDetail(GraphEdgeModel edge) async {
+    if (_detailOpen) return;
+    _detailOpen = true;
+    final titles = {
+      for (final node in widget.graph.nodes) node.id: node.title,
+    };
+    final relationship = EntityRelationshipModel(
+      id: edge.id,
+      fromId: edge.fromNode,
+      toId: edge.toNode,
+      fromName: titles[edge.fromNode] ?? '',
+      toName: titles[edge.toNode] ?? '',
+      relationType: edge.type,
+      status: edge.status,
+      certainty: edge.certainty,
+    );
+    try {
+      if (!mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => _RelationshipSheet(
+          relationship: relationship,
+          backend: widget.backend,
+          onChanged: widget.onGraphMutated,
+        ),
+      );
+    } finally {
+      _detailOpen = false;
+    }
+  }
+
+  /// Node centres in graph coordinates.
+  Map<String, Offset> _centersFor(GraphDataModel graph) {
+    if (graph.nodes.isEmpty) return const {};
+    final distinct = graph.nodes
+        .map((node) => '${node.x},${node.y}')
+        .toSet()
+        .length;
+    if (graph.nodes.length > 1 && distinct == 1) {
+      final layout = DeterministicGraphLayout.computeLayout(
+        nodes: graph.nodes,
+        edges: _validEdges(graph),
+      );
+      return {
+        for (final entry in layout.entries) entry.key: entry.value.center,
+      };
+    }
+    return {for (final node in graph.nodes) node.id: Offset(node.x, node.y)};
+  }
+
+  List<GraphEdgeModel> _validEdges(GraphDataModel graph) {
+    final ids = graph.nodes.map((node) => node.id).toSet();
+    return graph.edges
+        .where((edge) => ids.contains(edge.fromNode) && ids.contains(edge.toNode))
+        .toList();
+  }
+
+  Rect _boundsFor(Map<String, Offset> centers, GraphDataModel graph) {
+    if (centers.isEmpty) return const Rect.fromLTWH(0, 0, 1, 1);
+    var minX = double.infinity;
+    var minY = double.infinity;
+    var maxX = -double.infinity;
+    var maxY = -double.infinity;
+    for (final center in centers.values) {
+      minX = math.min(minX, center.dx - _nodeWidth / 2);
+      minY = math.min(minY, center.dy - _nodeHeight / 2);
+      maxX = math.max(maxX, center.dx + _nodeWidth / 2);
+      maxY = math.max(maxY, center.dy + _nodeHeight / 2);
+    }
+    for (final cluster in graph.clusters) {
+      minX = math.min(minX, cluster.x - 40);
+      minY = math.min(minY, cluster.y - 24);
+      maxX = math.max(maxX, cluster.x + 40);
+      maxY = math.max(maxY, cluster.y + 24);
+    }
+    return Rect.fromLTRB(minX, minY, maxX, maxY).inflate(_paintPadding);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final graph = widget.graph;
+    if (graph.nodes.isEmpty) {
+      return _EmptyGraph();
+    }
+
+    final centers = _centersFor(graph);
+    _bounds = _boundsFor(centers, graph);
+    final edges = _validEdges(graph);
+
+    final neighbours = <String>{};
+    if (_selectedEntityId != null) {
+      for (final edge in edges) {
+        if (edge.fromNode == _selectedEntityId) neighbours.add(edge.toNode);
+        if (edge.toNode == _selectedEntityId) neighbours.add(edge.fromNode);
+      }
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        _viewport = Size(constraints.maxWidth, constraints.maxHeight);
+        if (!_fitted && !_viewport.isEmpty) {
+          _fitted = true;
+          _scheduleFit();
+        }
+
+        return Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFFF1F3EE),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: EchoColors.border),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: InteractiveViewer(
+                  transformationController: _transform,
+                  constrained: false,
+                  minScale: 0.04,
+                  maxScale: 4.0,
+                  boundaryMargin: const EdgeInsets.all(900),
+                  child: SizedBox(
+                    width: _bounds.width,
+                    height: _bounds.height,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        if (!_collapsed)
+                          Positioned.fill(
+                            child: CustomPaint(
+                              painter: _GraphEdgePainter(
+                                centers: centers,
+                                origin: _bounds.topLeft,
+                                edges: edges,
+                                selectedNodeId: _selectedEntityId,
+                                focusedEdgeId: _focusedEdgeId,
+                              ),
+                            ),
+                          ),
+                        if (!_collapsed)
+                          ...graph.nodes.map(
+                            (node) => _nodeWidget(node, centers, neighbours),
+                          ),
+                        if (_collapsed)
+                          ...graph.clusters.map(
+                            (cluster) => _clusterWidget(cluster),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(top: 10, right: 10, child: _zoomControls()),
+              Positioned(left: 10, bottom: 10, child: _legend()),
+              if (_collapsed)
+                Positioned(
+                  left: 10,
+                  right: 46,
+                  top: 10,
+                  child: IgnorePointer(
+                    child: Text(
+                      'Zoomed out · ${graph.clusters.length} clusters',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: EchoColors.muted,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _nodeWidget(
+    GraphNodeModel node,
+    Map<String, Offset> centers,
+    Set<String> neighbours,
+  ) {
+    final center = centers[node.id];
+    if (center == null) return const SizedBox.shrink();
+
+    final isSelected = node.id == _selectedEntityId;
+    final dimmed =
+        _selectedEntityId != null &&
+        !isSelected &&
+        !neighbours.contains(node.id);
+    final marker = switch (node.certainty) {
+      'uncertain' => '? ',
+      'conflicting' => '! ',
+      _ => '',
+    };
+    final borderColor = switch (node.certainty) {
+      'conflicting' => EchoColors.danger,
+      'uncertain' => const Color(0xFF8A7A4A),
+      _ => EchoColors.sage,
+    };
+
+    return Positioned(
+      left: center.dx - _bounds.left - _nodeWidth / 2,
+      top: center.dy - _bounds.top - _nodeHeight / 2,
+      child: Opacity(
+        opacity: dimmed ? 0.4 : 1,
+        child: GestureDetector(
+          onTap: () => _openEntityDetail(node.id),
+          child: Container(
+            width: _nodeWidth,
+            height: _nodeHeight,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            decoration: BoxDecoration(
+              color: isSelected ? EchoColors.forest : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isSelected ? EchoColors.forest : borderColor,
+                width: isSelected ? 2.4 : 1.2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color.fromRGBO(35, 42, 37, 0.08),
+                  blurRadius: isSelected ? 10 : 5,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '$marker${node.title}',
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 9.5,
+                height: 1.15,
+                fontWeight: FontWeight.w600,
+                color: isSelected ? Colors.white : EchoColors.ink,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _clusterWidget(GraphClusterModel cluster) {
+    final lod = _scale.clamp(0.35, 1.0);
+    final width = (88 + 9 * math.sqrt(cluster.size)) / lod;
+    final height = 46 / lod;
+    final left = cluster.x - _bounds.left - width / 2;
+    final top = cluster.y - _bounds.top - height / 2;
+
+    return Positioned(
+      left: left,
+      top: top,
+      child: GestureDetector(
+        onTap: () => _focusPoint(Offset(cluster.x, cluster.y)),
+        child: Container(
+          width: width,
+          height: height,
+          padding: EdgeInsets.symmetric(horizontal: 8 / lod),
+          decoration: BoxDecoration(
+            color: EchoColors.sageSoft,
+            borderRadius: BorderRadius.circular(14 / lod),
+            border: Border.all(color: EchoColors.forest, width: 1.2 / lod),
+          ),
+          alignment: Alignment.center,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              '${cluster.label} · ${cluster.size}',
+              style: TextStyle(
+                fontSize: 11 / lod,
+                fontWeight: FontWeight.w700,
+                color: EchoColors.forest,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _zoomControls() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: EchoColors.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Tooltip(
+            message: 'Zoom in',
+            child: IconButton(
+              icon: const Icon(Icons.add, size: 18, color: EchoColors.forest),
+              onPressed: () => _zoomBy(1.3),
+              constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+              padding: EdgeInsets.zero,
+            ),
+          ),
+          const Divider(height: 1, color: EchoColors.border),
+          Tooltip(
+            message: 'Zoom out',
+            child: IconButton(
+              icon: const Icon(Icons.remove, size: 18, color: EchoColors.forest),
+              onPressed: () => _zoomBy(1 / 1.3),
+              constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+              padding: EdgeInsets.zero,
+            ),
+          ),
+          const Divider(height: 1, color: EchoColors.border),
+          Tooltip(
+            message: 'Fit graph',
+            child: IconButton(
+              icon: const Icon(
+                Icons.center_focus_strong_outlined,
+                size: 18,
+                color: EchoColors.forest,
+              ),
+              onPressed: _fitToView,
+              constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+              padding: EdgeInsets.zero,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _legend() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: EchoColors.border),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _LineSample(pattern: 'solid', label: 'Confirmed'),
+          SizedBox(width: 10),
+          _LineSample(pattern: 'dashed', label: 'Uncertain'),
+          SizedBox(width: 10),
+          _LineSample(pattern: 'dotted', label: 'Conflicting'),
+        ],
+      ),
+    );
+  }
+}
+
+class _LineSample extends StatelessWidget {
+  final String pattern;
+  final String label;
+
+  const _LineSample({required this.pattern, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 16,
+          height: 6,
+          child: CustomPaint(painter: _LineSamplePainter(pattern)),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 9, color: EchoColors.muted),
+        ),
+      ],
+    );
+  }
+}
+
+class _LineSamplePainter extends CustomPainter {
+  final String pattern;
+
+  _LineSamplePainter(this.pattern);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = EchoColors.forest
+      ..strokeWidth = 1.4
+      ..style = PaintingStyle.stroke;
+    final path = Path()
+      ..moveTo(0, size.height / 2)
+      ..lineTo(size.width, size.height / 2);
+    drawPatternedPath(canvas, path, paint, pattern);
+  }
+
+  @override
+  bool shouldRepaint(covariant _LineSamplePainter oldDelegate) =>
+      oldDelegate.pattern != pattern;
+}
+
+class _EmptyGraph extends StatelessWidget {
+  const _EmptyGraph();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      alignment: Alignment.center,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F3EE),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: EchoColors.border),
+      ),
+      child: const Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.hub_outlined, color: EchoColors.forest, size: 30),
+          SizedBox(height: 12),
+          Text(
+            'No knowledge yet',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: EchoColors.ink,
+            ),
+          ),
+          SizedBox(height: 6),
+          Text(
+            'Record a thought. Echo turns what you said into entities and '
+            'relationships you can explore here.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: EchoColors.muted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RelationshipSheet extends StatefulWidget {
+  final EntityRelationshipModel relationship;
+  final BackendService backend;
+  final Future<void> Function() onChanged;
+
+  const _RelationshipSheet({
+    required this.relationship,
+    required this.backend,
+    required this.onChanged,
+  });
+
+  @override
+  State<_RelationshipSheet> createState() => _RelationshipSheetState();
+}
+
+class _RelationshipSheetState extends State<_RelationshipSheet> {
+  bool _busy = false;
+  String? _error;
+
+  Future<void> _delete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: EchoColors.card,
+        title: const Text(
+          'Delete this relationship?',
+          style: TextStyle(fontSize: 16),
+        ),
+        content: const Text(
+          'Only the connection is removed. Neither entity is deleted.',
+          style: TextStyle(fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: EchoColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.backend.deleteRelationship(widget.relationship.id);
+      await widget.onChanged();
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = 'The relationship was not deleted.');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final allNotes = widget.noteProvider.notes;
-
-    // Filter notes based on search query
-    final query = widget.searchQuery.trim().toLowerCase();
-    final visibleNotes = query.isEmpty
-        ? allNotes
-        : allNotes.where((n) {
-            return n.title.toLowerCase().contains(query) ||
-                n.originalContent.toLowerCase().contains(query) ||
-                (n.summary?.toLowerCase().contains(query) ?? false);
-          }).toList();
-
-    if (_isLoading && allNotes.isEmpty) {
-      return Container(
-        height: 380,
-        alignment: Alignment.center,
-        child: const Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(color: EchoColors.forest),
-            SizedBox(height: 14),
-            Text(
-              'Mapping your ideas…',
-              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-            ),
-            SizedBox(height: 4),
-            Text(
-              'Building a focused view',
-              style: TextStyle(color: EchoColors.muted, fontSize: 11),
-            ),
-          ],
+    final rel = widget.relationship;
+    return SafeArea(
+      top: false,
+      child: Container(
+        width: double.infinity,
+        decoration: const BoxDecoration(
+          color: EchoColors.card,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
         ),
-      );
-    }
-
-    if (visibleNotes.isEmpty) {
-      return Container(
-        height: 360,
-        alignment: Alignment.center,
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 18),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 56,
-              height: 56,
-              decoration: const BoxDecoration(
-                color: EchoColors.sageSoft,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.hub_outlined,
-                color: EchoColors.forest,
-                size: 28,
+            const Text(
+              'Relationship',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: EchoColors.ink,
               ),
             ),
-            const SizedBox(height: 14),
-            Text(
-              allNotes.isEmpty ? 'No captures yet' : 'No ideas match',
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+            const SizedBox(height: 12),
+            _SheetRow(label: 'Source', value: rel.fromName),
+            _SheetRow(label: 'Type', value: rel.relationType),
+            _SheetRow(label: 'Target', value: rel.toName),
+            _SheetRow(label: 'Status', value: rel.status),
+            _SheetRow(
+              label: 'Certainty',
+              value: rel.certainty,
             ),
-            const SizedBox(height: 6),
-            Text(
-              allNotes.isEmpty
-                  ? 'Record voice thoughts or type captures to see them connect.'
-                  : 'Adjust your search to see connected ideas.',
-              style: const TextStyle(color: EchoColors.muted, fontSize: 12),
+            if (_error != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                _error!,
+                style: const TextStyle(fontSize: 11, color: EchoColors.danger),
+              ),
+            ],
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _delete,
+              icon: const Icon(Icons.link_off, size: 16),
+              label: const Text('Delete relationship'),
             ),
           ],
         ),
-      );
-    }
-
-    // Convert visible notes to GraphNodeModels
-    final graphNodes = visibleNotes.map((note) {
-      return GraphNodeModel(
-        id: note.id,
-        title: note.title,
-        kind: note.audioPath != null ? 'capture' : 'idea',
-        x: 0,
-        y: 0,
-      );
-    }).toList();
-
-    // Map relationships where both endpoints exist
-    final visibleNoteIds = visibleNotes.map((n) => n.id).toSet();
-    final visibleEdges = _relationships.where((e) {
-      return visibleNoteIds.contains(e.fromNode) &&
-          visibleNoteIds.contains(e.toNode);
-    }).toList();
-
-    // Run deterministic layout engine
-    final positionedMap = DeterministicGraphLayout.computeLayout(
-      nodes: graphNodes,
-      edges: visibleEdges,
-    );
-    final layoutBounds = DeterministicGraphLayout.computeBounds(positionedMap);
-
-    // Selected node handling: default to first if none or selected removed
-    final selectedId =
-        (_selectedNodeId != null && visibleNoteIds.contains(_selectedNodeId))
-        ? _selectedNodeId!
-        : visibleNotes.first.id;
-
-    final selectedNote = visibleNotes.firstWhere(
-      (n) => n.id == selectedId,
-      orElse: () => visibleNotes.first,
-    );
-
-    // Identify direct neighbor IDs of selected node
-    final neighborIds = <String>{};
-    for (final edge in visibleEdges) {
-      if (edge.fromNode == selectedId) neighborIds.add(edge.toNode);
-      if (edge.toNode == selectedId) neighborIds.add(edge.fromNode);
-    }
-
-    final canvasHeight = (MediaQuery.sizeOf(context).height * 0.58).clamp(
-      320.0,
-      520.0,
-    );
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final content = Column(
-          children: [
-            // Graph Legend and Meta
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-              child: Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: EchoColors.forest,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 5),
-                  const Text(
-                    'Voice',
-                    style: TextStyle(fontSize: 10, color: EchoColors.muted),
-                  ),
-                  const SizedBox(width: 14),
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: EchoColors.sage, width: 1.5),
-                    ),
-                  ),
-                  const SizedBox(width: 5),
-                  const Text(
-                    'Text',
-                    style: TextStyle(fontSize: 10, color: EchoColors.muted),
-                  ),
-                  const SizedBox(width: 14),
-                  Container(
-                    width: 14,
-                    height: 2,
-                    color: const Color(0xFF6B8A7A),
-                  ),
-                  const SizedBox(width: 5),
-                  Text(
-                    '${visibleEdges.length} connections',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: EchoColors.muted,
-                    ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(
-                      Icons.refresh,
-                      size: 18,
-                      color: EchoColors.muted,
-                    ),
-                    onPressed: _loadRelationships,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-                ],
-              ),
-            ),
-
-            if (_loadError != null)
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: EchoColors.dangerSoft,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: EchoColors.danger),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.cloud_off_outlined,
-                      size: 16,
-                      color: EchoColors.danger,
-                    ),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'Connections could not be loaded. Local notes are still shown.',
-                        style: TextStyle(fontSize: 11, color: EchoColors.ink),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: _loadRelationships,
-                      child: const Text(
-                        'Retry',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: EchoColors.forest,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-            // Interactive Canvas Container
-            Container(
-              height: canvasHeight,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: const Color(0xFFF1F3EE),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: EchoColors.border),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: Stack(
-                children: [
-                  // Draggable / Zoomable Canvas Area. Content is scaled to fit the
-                  // real viewport and stays pannable, so nodes are never clipped by
-                  // a hard-coded canvas size.
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      final availableWidth = constraints.maxWidth;
-                      final availableHeight = constraints.maxHeight;
-                      final fitScale = math.min(
-                        1.0,
-                        math.min(
-                          availableWidth / layoutBounds.width,
-                          availableHeight / layoutBounds.height,
-                        ),
-                      );
-                      final scale = (fitScale * _zoom).clamp(0.25, 3.0);
-                      final scaledWidth = layoutBounds.width * scale;
-                      final scaledHeight = layoutBounds.height * scale;
-                      final baseOffset = Offset(
-                        (availableWidth - scaledWidth) / 2,
-                        (availableHeight - scaledHeight) / 2,
-                      );
-
-                      return GestureDetector(
-                        onPanUpdate: (details) {
-                          setState(() {
-                            _panOffset += details.delta;
-                          });
-                        },
-                        child: Transform.translate(
-                          offset: baseOffset + _panOffset,
-                          child: Transform.scale(
-                            scale: scale,
-                            alignment: Alignment.topLeft,
-                            child: SizedBox(
-                              width: layoutBounds.width,
-                              height: layoutBounds.height,
-                              child: Stack(
-                                clipBehavior: Clip.none,
-                                children: [
-                                  // Edge Lines
-                                  CustomPaint(
-                                    size: layoutBounds.size,
-                                    painter: _GraphEdgePainter(
-                                      positionedMap: positionedMap,
-                                      edges: visibleEdges,
-                                      selectedNodeId: selectedId,
-                                      origin: layoutBounds.topLeft,
-                                    ),
-                                  ),
-
-                                  // Node Buttons
-                                  ...visibleNotes.map((note) {
-                                    final posNode = positionedMap[note.id];
-                                    if (posNode == null) {
-                                      return const SizedBox.shrink();
-                                    }
-
-                                    final isSelected = note.id == selectedId;
-                                    final isNeighbor = neighborIds.contains(
-                                      note.id,
-                                    );
-                                    final isCapture = note.audioPath != null;
-
-                                    final opacity =
-                                        (_selectedNodeId == null ||
-                                            isSelected ||
-                                            isNeighbor)
-                                        ? 1.0
-                                        : 0.45;
-
-                                    return Positioned(
-                                      left:
-                                          posNode.position.dx -
-                                          layoutBounds.left,
-                                      top:
-                                          posNode.position.dy -
-                                          layoutBounds.top,
-                                      child: Opacity(
-                                        opacity: opacity,
-                                        child: GestureDetector(
-                                          onTap: () {
-                                            setState(() {
-                                              _selectedNodeId = note.id;
-                                            });
-                                          },
-                                          onDoubleTap: () {
-                                            widget.onOpenDetail(note.id);
-                                          },
-                                          child: Container(
-                                            width: posNode.width,
-                                            height: posNode.height,
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                              vertical: 6,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: isCapture
-                                                  ? EchoColors.forest
-                                                  : Colors.white,
-                                              borderRadius:
-                                                  BorderRadius.circular(14),
-                                              border: Border.all(
-                                                color: isSelected
-                                                    ? EchoColors.forest
-                                                    : (isNeighbor
-                                                          ? const Color(
-                                                              0xFF6B8A7A,
-                                                            )
-                                                          : EchoColors.sage),
-                                                width: isSelected
-                                                    ? 2.5
-                                                    : (isNeighbor ? 2.0 : 1.2),
-                                              ),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: isSelected
-                                                      ? EchoColors.forest
-                                                            .withValues(
-                                                              alpha: 0.25,
-                                                            )
-                                                      : const Color.fromRGBO(
-                                                          35,
-                                                          42,
-                                                          37,
-                                                          0.06,
-                                                        ),
-                                                  blurRadius: isSelected
-                                                      ? 12
-                                                      : 6,
-                                                  offset: const Offset(0, 3),
-                                                ),
-                                              ],
-                                            ),
-                                            alignment: Alignment.center,
-                                            child: Text(
-                                              note.title,
-                                              textAlign: TextAlign.center,
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.w700,
-                                                color: isCapture
-                                                    ? Colors.white
-                                                    : EchoColors.forest,
-                                                height: 1.2,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  }),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-
-                  // Zoom Controls
-                  Positioned(
-                    top: 10,
-                    right: 10,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: EchoColors.border),
-                      ),
-                      child: Column(
-                        children: [
-                          IconButton(
-                            tooltip: 'Zoom in',
-                            icon: const Icon(
-                              Icons.add,
-                              size: 18,
-                              color: EchoColors.forest,
-                            ),
-                            onPressed: () => setState(
-                              () => _zoom = (_zoom + 0.15).clamp(0.6, 1.6),
-                            ),
-                            constraints: const BoxConstraints(
-                              minWidth: 32,
-                              minHeight: 32,
-                            ),
-                            padding: EdgeInsets.zero,
-                          ),
-                          const Divider(height: 1, color: EchoColors.border),
-                          IconButton(
-                            tooltip: 'Zoom out',
-                            icon: const Icon(
-                              Icons.remove,
-                              size: 18,
-                              color: EchoColors.forest,
-                            ),
-                            onPressed: () => setState(
-                              () => _zoom = (_zoom - 0.15).clamp(0.6, 1.6),
-                            ),
-                            constraints: const BoxConstraints(
-                              minWidth: 32,
-                              minHeight: 32,
-                            ),
-                            padding: EdgeInsets.zero,
-                          ),
-                          const Divider(height: 1, color: EchoColors.border),
-                          IconButton(
-                            tooltip: 'Reset view',
-                            icon: const Icon(
-                              Icons.center_focus_strong_outlined,
-                              size: 18,
-                              color: EchoColors.forest,
-                            ),
-                            onPressed: () => setState(() {
-                              _zoom = 1.0;
-                              _panOffset = Offset.zero;
-                            }),
-                            constraints: const BoxConstraints(
-                              minWidth: 32,
-                              minHeight: 32,
-                            ),
-                            padding: EdgeInsets.zero,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  // Quick open selected node banner
-                  Positioned(
-                    bottom: 8,
-                    left: 12,
-                    right: 12,
-                    child: GestureDetector(
-                      onTap: () => widget.onOpenDetail(selectedNote.id),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.94),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: EchoColors.border),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color.fromRGBO(35, 42, 37, 0.06),
-                              blurRadius: 8,
-                              offset: Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    selectedNote.title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: EchoColors.ink,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    '${neighborIds.length} connected ideas · Tap to open',
-                                    style: const TextStyle(
-                                      fontSize: 10,
-                                      color: EchoColors.muted,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const Icon(
-                              Icons.arrow_forward_ios,
-                              size: 12,
-                              color: EchoColors.forest,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        );
-        if (constraints.hasBoundedHeight && constraints.maxHeight < 640) {
-          return SingleChildScrollView(child: content);
-        }
-        return content;
-      },
+      ),
     );
   }
 }
 
+class _SheetRow extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _SheetRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 78,
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 11, color: EchoColors.muted),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value.isEmpty ? '—' : value,
+              style: const TextStyle(fontSize: 13, color: EchoColors.ink),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Draws a path respecting the certainty encoding (KG-06): solid for confirmed,
+/// dashed for uncertain and dotted for conflicting. Line style — not colour —
+/// carries the meaning, so it survives grayscale.
+void drawPatternedPath(
+  Canvas canvas,
+  Path path,
+  Paint paint,
+  String pattern,
+) {
+  if (pattern == 'solid') {
+    canvas.drawPath(path, paint);
+    return;
+  }
+  final patternLengths = pattern == 'dotted'
+      ? const [1.2, 3.6]
+      : const [7.0, 4.5];
+  final dashedPaint = Paint()
+    ..color = paint.color
+    ..strokeWidth = paint.strokeWidth
+    ..style = PaintingStyle.stroke;
+  for (final metric in path.computeMetrics()) {
+    var distance = 0.0;
+    var index = 0;
+    while (distance < metric.length) {
+      final length = patternLengths[index % patternLengths.length];
+      final next = math.min(distance + length, metric.length);
+      if (index.isEven) {
+        canvas.drawPath(metric.extractPath(distance, next), dashedPaint);
+      }
+      distance = next;
+      index++;
+    }
+  }
+}
+
 class _GraphEdgePainter extends CustomPainter {
-  final Map<String, PositionedNode> positionedMap;
-  final List<GraphEdgeModel> edges;
-  final String selectedNodeId;
+  final Map<String, Offset> centers;
   final Offset origin;
+  final List<GraphEdgeModel> edges;
+  final String? selectedNodeId;
+  final String? focusedEdgeId;
 
   _GraphEdgePainter({
-    required this.positionedMap,
+    required this.centers,
+    required this.origin,
     required this.edges,
     required this.selectedNodeId,
-    this.origin = Offset.zero,
+    required this.focusedEdgeId,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    var labelBudget = 14;
     for (final edge in edges) {
-      final from = positionedMap[edge.fromNode];
-      final to = positionedMap[edge.toNode];
+      final from = centers[edge.fromNode];
+      final to = centers[edge.toNode];
       if (from == null || to == null) continue;
 
-      final isConnectedToSelected =
+      final p1 = from - origin;
+      final p2 = to - origin;
+      final connected =
           edge.fromNode == selectedNodeId || edge.toNode == selectedNodeId;
+      final focused = edge.id == focusedEdgeId;
 
+      final pattern = switch (edge.certainty) {
+        'uncertain' => 'dashed',
+        'conflicting' => 'dotted',
+        _ => 'solid',
+      };
       final paint = Paint()
-        ..color = isConnectedToSelected
-            ? const Color(0xFF285430)
-            : const Color(0xFFB0BEB3)
-        ..strokeWidth = isConnectedToSelected ? 2.5 : 1.4
+        ..color = focused
+            ? EchoColors.forest
+            : (connected ? const Color(0xFF3F5A48) : const Color(0xFFAAB8AC))
+        ..strokeWidth = focused
+            ? 2.8
+            : (connected ? 2.1 : 1.2)
         ..style = PaintingStyle.stroke;
 
-      final p1 = from.center - origin;
-      final p2 = to.center - origin;
-
-      // Draw subtle cubic bezier curve to prevent edges overlapping straight lines
-      final midX = (p1.dx + p2.dx) / 2;
-      final midY = (p1.dy + p2.dy) / 2;
-      final dx = p2.dx - p1.dx;
-      final dy = p2.dy - p1.dy;
-      final dist = (dx * dx + dy * dy);
-      final offsetDist = dist > 400 ? 12.0 : 0.0;
-
-      final controlPoint = Offset(
-        midX - (dy / 25).clamp(-offsetDist, offsetDist),
-        midY + (dx / 25).clamp(-offsetDist, offsetDist),
-      );
       final path = Path()
         ..moveTo(p1.dx, p1.dy)
-        ..quadraticBezierTo(controlPoint.dx, controlPoint.dy, p2.dx, p2.dy);
+        ..lineTo(p2.dx, p2.dy);
+      drawPatternedPath(canvas, path, paint, pattern);
 
-      canvas.drawPath(path, paint);
+      final showLabel =
+          labelBudget > 0 && (focused || connected) && edge.type.isNotEmpty;
+      if (!showLabel) continue;
+      labelBudget--;
 
-      // Draw small relationship chip/indicator along selected edges
-      if (isConnectedToSelected && edge.type.isNotEmpty) {
-        final textSpan = TextSpan(
-          text: edge.type,
-          style: const TextStyle(
-            color: Color(0xFF285430),
-            fontSize: 9,
-            fontWeight: FontWeight.w700,
-          ),
-        );
-        final tp = TextPainter(text: textSpan, textDirection: TextDirection.ltr)
-          ..layout();
-
-        final badgeRect = RRect.fromRectAndRadius(
-          Rect.fromCenter(
-            center: controlPoint,
-            width: tp.width + 10,
-            height: tp.height + 6,
-          ),
-          const Radius.circular(6),
-        );
-
-        final badgePaint = Paint()..color = const Color(0xFFE5EDE6);
-        final badgeBorder = Paint()
-          ..color = const Color(0xFF94A897)
+      final anchor = Offset((p1.dx + p2.dx) / 2, (p1.dy + p2.dy) / 2);
+      final textSpan = TextSpan(
+        text: edge.type,
+        style: const TextStyle(
+          fontSize: 9,
+          fontWeight: FontWeight.w600,
+          color: EchoColors.forest,
+        ),
+      );
+      final painter = TextPainter(
+        text: textSpan,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final rect = Rect.fromCenter(
+        center: anchor,
+        width: painter.width + 10,
+        height: painter.height + 6,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(6)),
+        Paint()..color = const Color(0xFFE5EDE6),
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(6)),
+        Paint()
+          ..color = EchoColors.sage
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.0;
-
-        canvas.drawRRect(badgeRect, badgePaint);
-        canvas.drawRRect(badgeRect, badgeBorder);
-        tp.paint(
-          canvas,
-          Offset(
-            controlPoint.dx - tp.width / 2,
-            controlPoint.dy - tp.height / 2,
-          ),
-        );
-      }
+          ..strokeWidth = 0.8,
+      );
+      painter.paint(
+        canvas,
+        Offset(
+          anchor.dx - painter.width / 2,
+          anchor.dy - painter.height / 2,
+        ),
+      );
     }
   }
 

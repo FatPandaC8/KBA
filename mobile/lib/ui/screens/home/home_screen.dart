@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:mobile/core/theme/echo_colors.dart';
+import 'package:mobile/data/models/note.dart';
 import 'package:mobile/services/audio_service.dart';
 import 'package:mobile/state/note_provider.dart';
 
@@ -16,6 +17,7 @@ class HomeScreen extends StatefulWidget {
   final Function(String noteId) onOpenDetail;
   final VoidCallback onOpenSettings;
   final VoidCallback onOpenLibrary;
+  final VoidCallback onOpenRecordings;
   final ValueChanged<bool>? onRecordingStateChanged;
 
   const HomeScreen({
@@ -25,6 +27,7 @@ class HomeScreen extends StatefulWidget {
     required this.onOpenDetail,
     required this.onOpenSettings,
     required this.onOpenLibrary,
+    required this.onOpenRecordings,
     this.onRecordingStateChanged,
   });
 
@@ -40,14 +43,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _errorMessage;
   DateTime? _recordingStartTime;
 
+  /// The capture whose "Organizing…" snackbar is currently on screen. It is
+  /// cleared when that capture reaches a terminal state so the banner can be
+  /// replaced with the real outcome.
+  String? _organizingNoteId;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    widget.noteProvider.addListener(_onNotesChanged);
+  }
+
+  @override
+  void didUpdateWidget(HomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.noteProvider != widget.noteProvider) {
+      oldWidget.noteProvider.removeListener(_onNotesChanged);
+      widget.noteProvider.addListener(_onNotesChanged);
+    }
   }
 
   @override
   void dispose() {
+    widget.noteProvider.removeListener(_onNotesChanged);
     WidgetsBinding.instance.removeObserver(this);
     _recordTimer?.cancel();
     if (_isRecording) {
@@ -55,6 +74,54 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       widget.onRecordingStateChanged?.call(false);
     }
     super.dispose();
+  }
+
+  /// Replaces the open-ended "Organizing…" snackbar as soon as the capture
+  /// reaches a terminal state, so the user is never told work is still running
+  /// after it has already finished or failed.
+  void _onNotesChanged() {
+    final id = _organizingNoteId;
+    if (id == null) return;
+
+    Note? note;
+    for (final candidate in widget.noteProvider.notes) {
+      if (candidate.id == id) {
+        note = candidate;
+        break;
+      }
+    }
+    if (note == null) return;
+
+    final status = note.status;
+    if (status != ProcessingStatus.ready &&
+        status != ProcessingStatus.failed) {
+      return;
+    }
+
+    _organizingNoteId = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          // A snackbar with an action persists by default in current Flutter;
+          // this one must time out on its own.
+          persist: false,
+          content: Text(
+            status == ProcessingStatus.ready
+                ? 'Saved to your knowledge.'
+                : 'This recording could not be processed. Open My recordings '
+                      'to retry.',
+          ),
+          action: SnackBarAction(
+            label: 'View',
+            onPressed: () => widget.onOpenDetail(id),
+          ),
+        ),
+      );
+    });
   }
 
   void _setRecording(bool value) {
@@ -69,8 +136,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  static const int maxVoiceSeconds = 30;
-  static const int minRecordingMs = 800; // minimum duration threshold
+  static const int maxVoiceSeconds = 120;
+  static const int minRecordingMs = 1000; // sub-second captures are discarded
+
+  String _formatSeconds(int seconds) {
+    final minutes = seconds ~/ 60;
+    final remainder = seconds % 60;
+    return '$minutes:${remainder.toString().padLeft(2, '0')}';
+  }
 
   void _startTimer() {
     _recordSeconds = 0;
@@ -94,7 +167,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _startRecording() async {
     if (_isRecording || _isProcessing) return;
-
+    if (widget.noteProvider.isUploadInFlight) {
+      if (mounted) {
+        setState(() {
+          _errorMessage =
+              'Wait for the current recording to finish uploading before starting a new one.';
+        });
+      }
+      return;
+    }
     setState(() => _errorMessage = null);
     try {
       final hasPerm = await widget.audioService.checkPermission();
@@ -136,7 +217,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!_isRecording || _isProcessing) return;
 
     final durationMs = _currentRecordDurationMs();
-    final elapsedSeconds = _recordSeconds;
     _stopTimer();
     _recordingStartTime = null;
 
@@ -144,9 +224,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _setRecording(false);
     });
 
-    // Check if recording is below minimum threshold
-    final isTooShort = durationMs < minRecordingMs && elapsedSeconds == 0;
-    if (isTooShort) {
+    // Sub-second taps are discarded; anything from one second up is kept.
+    if (durationMs < minRecordingMs) {
       await widget.audioService.cancelRecording();
       if (mounted) {
         setState(() {
@@ -170,9 +249,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           durationMs: result.durationMs,
         );
         if (mounted) {
+          _organizingNoteId = note.id;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: const Text('Thought captured! Organizing…'),
+              // Replaced by the terminal message in `_onNotesChanged`; the
+              // duration is only a safety net if no update ever arrives.
+              duration: const Duration(minutes: 2),
+              // Same Flutter default: an action-only snackbar would otherwise
+              // never expire.
+              persist: false,
               action: SnackBarAction(
                 label: 'View',
                 onPressed: () => widget.onOpenDetail(note.id),
@@ -242,7 +328,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             Row(
                               children: [
                                 Text(
-                                  '$totalCount captures',
+                                  '$totalCount ${totalCount == 1 ? 'capture' : 'captures'}',
                                   style: const TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
@@ -319,7 +405,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     const WaveformWidget(isRecording: true),
                                     const SizedBox(height: 12),
                                     Text(
-                                      '0:${_recordSeconds.toString().padLeft(2, '0')} / 0:$maxVoiceSeconds',
+                                      '${_formatSeconds(_recordSeconds)} / ${_formatSeconds(maxVoiceSeconds)}',
                                       style: const TextStyle(
                                         fontSize: 26,
                                         fontWeight: FontWeight.w600,
@@ -379,6 +465,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     ),
                                   ],
                                 ],
+                              ),
+                            ),
+
+                            const SizedBox(height: 14),
+                            TextButton.icon(
+                              onPressed: widget.onOpenRecordings,
+                              icon: const Icon(
+                                Icons.queue_music_outlined,
+                                size: 18,
+                                color: EchoColors.forest,
+                              ),
+                              label: const Text(
+                                'My recordings',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: EchoColors.forest,
+                                ),
                               ),
                             ),
 

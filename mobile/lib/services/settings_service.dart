@@ -1,7 +1,13 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class SettingsService {
+/// Persisted preferences and the authenticated session.
+///
+/// The service is a [ChangeNotifier] because the app shell must rebuild when a
+/// session starts or ends: otherwise a successful sign-in would leave the user
+/// on the auth gate until the next launch.
+class SettingsService extends ChangeNotifier {
   static const _keyServerUrl = 'server_backend_url';
   static const _secureSessionTokenKey = 'echo_session_token';
 
@@ -32,10 +38,13 @@ class SettingsService {
 
   /// Persist a session token obtained after sign-up or login.
   Future<void> setSessionToken(String value) async {
-    _sessionToken = value.trim();
+    final next = value.trim();
+    final changed = next != _sessionToken;
+    _sessionToken = next;
     // Persist to secure storage without blocking; a locked/unavailable
     // keystore (or headless test VM) must not prevent the app from running.
     _persistSessionToken(_sessionToken);
+    if (changed) notifyListeners();
   }
 
   Future<void> _persistSessionToken(String token) async {
@@ -55,8 +64,10 @@ class SettingsService {
 
   /// Clear the session token (logout / account deletion).
   Future<void> clearSession() async {
+    final changed = _sessionToken.isNotEmpty;
     _sessionToken = '';
     _persistSessionToken('');
+    if (changed) notifyListeners();
   }
 
   /// Whether a session is currently established.

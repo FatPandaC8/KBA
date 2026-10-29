@@ -120,6 +120,7 @@ void main() {
         onOpenDetail: (_) {},
         onOpenSettings: () {},
         onOpenLibrary: () {},
+        onOpenRecordings: () {},
       ),
     );
   }
@@ -154,7 +155,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(audioService.stopCallCount, 1);
-      expect(find.text('Thought captured! Organizing…'), findsOneWidget);
+      // The capture is submitted and the banner reports the real outcome; it
+      // never keeps claiming work is running after the job has settled.
+      expect(find.text('Thought captured! Organizing…'), findsNothing);
+      expect(find.textContaining('could not be processed'), findsOneWidget);
       expect(repo.inMemory.length, 1);
     },
   );
@@ -198,11 +202,11 @@ void main() {
 
       expect(audioService.startCallCount, 1);
 
-      // Advance 31 seconds while holding
-      await tester.pump(const Duration(seconds: 31));
+      // Advance past the 120 second ceiling while holding
+      await tester.pump(const Duration(seconds: 121));
       await tester.pumpAndSettle();
 
-      // Auto-submitted upon hitting 30s limit
+      // Auto-submitted upon hitting the 2 minute limit
       expect(audioService.stopCallCount, 1);
       expect(repo.inMemory.length, 1);
 

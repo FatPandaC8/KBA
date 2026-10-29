@@ -1,23 +1,24 @@
 import os
-import time
 from typing import Any, Dict, List, Optional
 
 from server.app.domain.entities import (
     KnowledgeItemEntity,
+    ExtractedEntity,
     RelationshipEntity,
     CaptureEntity,
     EvalRecordEntity,
 )
 from server.app.domain.value_objects import CaptureStatus
-from server.app.domain.errors import AudioProcessingError, EntityNotFoundError
+from server.app.domain.errors import EntityNotFoundError
 from ..ports import (
     KnowledgeRepositoryPort,
+    EntityRepositoryPort,
     RelationshipRepositoryPort,
+    DuplicateCandidateRepositoryPort,
     EmbeddingRepositoryPort,
     CaptureRepositoryPort,
     EvalRecordRepositoryPort,
     JobStatusRepositoryPort,
-    AudioTranscriptionPort,
     KnowledgeExtractionPort,
     EmbeddingProviderPort,
     UserRepositoryPort,
@@ -26,13 +27,16 @@ from ..ports import (
     ConsentRepositoryPort,
     TombstoneRepositoryPort,
     RecordSupportRepositoryPort,
+    ConversationRepositoryPort,
+    MessageRepositoryPort,
+    CitationRepositoryPort,
 )
 from ..dto import (
     KnowledgeItemDTO,
+    EntityDTO,
     RelationshipDTO,
     GraphDataDTO,
     ScoredKnowledgeItemDTO,
-    CaptureUploadResultDTO,
     SystemHealthDTO,
     ProcessingJobDTO,
     DetailedCaptureViewDTO,
@@ -54,6 +58,25 @@ def entity_to_dto(e: KnowledgeItemEntity) -> KnowledgeItemDTO:
         provenance=e.provenance,
         created_at=e.created_at,
         updated_at=e.updated_at,
+        provider_id=e.provider_id,
+        model_version=e.model_version,
+    )
+
+
+def extracted_entity_to_dto(e: ExtractedEntity) -> EntityDTO:
+    return EntityDTO(
+        id=e.id,
+        name=e.name,
+        entity_type=e.entity_type,
+        description=e.description,
+        confidence=e.confidence,
+        certainty=e.certainty,
+        provenance=e.provenance,
+        capture_id=e.capture_id,
+        created_at=e.created_at,
+        updated_at=e.updated_at,
+        provider_id=e.provider_id,
+        model_version=e.model_version,
     )
 
 
@@ -65,115 +88,10 @@ def rel_to_dto(r: RelationshipEntity) -> RelationshipDTO:
         relation_type=r.relation_type,
         status=r.status,
         created_at=r.created_at,
+        certainty=r.certainty,
+        confidence=r.confidence,
+        source_capture_id=r.source_capture_id,
     )
-
-
-class ProcessAudioCaptureUseCase:
-    def __init__(
-        self,
-        capture_repo: CaptureRepositoryPort,
-        knowledge_repo: KnowledgeRepositoryPort,
-        rel_repo: RelationshipRepositoryPort,
-        embedding_repo: EmbeddingRepositoryPort,
-        job_repo: JobStatusRepositoryPort,
-        transcriber: AudioTranscriptionPort,
-        extractor: KnowledgeExtractionPort,
-        embedder: EmbeddingProviderPort,
-        upload_dir: str = "server/uploads",
-    ):
-        self.capture_repo = capture_repo
-        self.knowledge_repo = knowledge_repo
-        self.rel_repo = rel_repo
-        self.embedding_repo = embedding_repo
-        self.job_repo = job_repo
-        self.transcriber = transcriber
-        self.extractor = extractor
-        self.embedder = embedder
-        self.upload_dir = upload_dir
-
-    def execute(
-        self,
-        capture_id: str,
-        idempotency_key: str,
-        audio_file_path: str,
-        user_id: str,
-        duration_ms: int = 0,
-    ) -> CaptureUploadResultDTO:
-        job = ProcessingJobDTO(
-            id=capture_id,
-            capture_id=capture_id,
-            stage="received",
-            status="processing",
-            duration_ms=duration_ms,
-            error_message=None,
-            created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            user_id=user_id,
-        )
-        self.job_repo.record_job(job)
-
-        capture = CaptureEntity(
-            id=capture_id,
-            idempotency_key=idempotency_key,
-            audio_path=audio_file_path,
-            user_id=user_id,
-            duration_ms=duration_ms,
-            status="received",
-        )
-        self.capture_repo.save(capture)
-
-        try:
-            # 1. Transcribe
-            self.job_repo.update_job_status(capture_id, "transcribing", "processing", user_id=user_id)
-            transcript = self.transcriber.transcribe(audio_file_path)
-            if not transcript or not transcript.strip():
-                raise AudioProcessingError("No intelligible speech detected in recording.")
-
-            # 2. Extract structured knowledge
-            self.job_repo.update_job_status(capture_id, "extracting", "processing", user_id=user_id)
-            knowledge_item = self.extractor.extract(transcript, capture_id, user_id=user_id)
-            knowledge_item.user_id = user_id
-
-            # 3. Connect to existing knowledge in this user's own graph only
-            existing_items = self.knowledge_repo.get_all(user_id=user_id)
-            relationships = self.extractor.connect(knowledge_item, existing_items)
-            for rel in relationships:
-                rel.user_id = user_id
-
-            # 4. Persist
-            self.knowledge_repo.save(knowledge_item)
-            for rel in relationships:
-                self.rel_repo.save(rel)
-
-            # 5. Embed
-            self.job_repo.update_job_status(capture_id, "indexing", "processing", user_id=user_id)
-            try:
-                vec_bytes = self.embedder.embed_item(knowledge_item)
-                self.embedding_repo.save(knowledge_item.id, vec_bytes, user_id=user_id)
-            except Exception as embed_err:
-                print(f"[Embedding Error] {embed_err}")
-
-            # Audio is retained for the owner's playback (VR-01/VR-02).
-            self.job_repo.update_job_status(capture_id, "completed", "ready", user_id=user_id)
-            capture.status = "ready"
-            self.capture_repo.save(capture)
-
-            return CaptureUploadResultDTO(
-                capture_id=capture_id,
-                status="ready",
-                knowledge_item=entity_to_dto(knowledge_item),
-                relationships=[rel_to_dto(r) for r in relationships],
-            )
-
-        except Exception as e:
-            self.job_repo.update_job_status(
-                capture_id, "failed", "failed", error_message=str(e), user_id=user_id
-            )
-            capture.status = "failed"
-            self.capture_repo.save(capture)
-            # Never discard unprocessed audio here. The recording remains
-            # available for the user's manual retry (REC-05).
-            raise
 
 
 class SemanticRecallUseCase:
@@ -262,11 +180,9 @@ class ManageKnowledgeUseCase:
         self.knowledge_repo.save(entity)
 
         if not existing:
-            all_items = self.knowledge_repo.get_all(user_id=user_id)
-            new_rels = self.extractor.connect(entity, all_items)
-            for r in new_rels:
-                r.user_id = user_id
-                self.rel_repo.save(r)
+            # Admin/manual saves keep entity extraction out of scope; the
+            # capture pipeline owns graph extraction.
+            pass
 
         try:
             vec_bytes = self.embedder.embed_item(entity)
@@ -335,26 +251,39 @@ class BackfillEmbeddingsUseCase:
 
 
 class DeleteCaptureUseCase:
-    """Deletes a complete capture lifecycle idempotently.
+    """Deletes one record and only the knowledge it exclusively supported.
 
     Audio is removed before database rows so that a permission/filesystem
     failure cannot silently report success while leaving retained audio behind.
+    Knowledge shared with another record is kept (DEL-01).
     """
 
     def __init__(
         self,
         capture_repo: CaptureRepositoryPort,
         knowledge_repo: KnowledgeRepositoryPort,
+        entity_repo: EntityRepositoryPort,
+        rel_repo: RelationshipRepositoryPort,
+        duplicate_repo: DuplicateCandidateRepositoryPort,
+        embedding_repo: EmbeddingRepositoryPort,
         job_repo: JobStatusRepositoryPort,
         eval_repo: EvalRecordRepositoryPort,
         support_repo: RecordSupportRepositoryPort,
+        citation_repo: CitationRepositoryPort,
+        message_repo: MessageRepositoryPort,
         upload_dir: str,
     ):
         self.capture_repo = capture_repo
         self.knowledge_repo = knowledge_repo
+        self.entity_repo = entity_repo
+        self.rel_repo = rel_repo
+        self.duplicate_repo = duplicate_repo
+        self.embedding_repo = embedding_repo
         self.job_repo = job_repo
         self.eval_repo = eval_repo
         self.support_repo = support_repo
+        self.citation_repo = citation_repo
+        self.message_repo = message_repo
         self.upload_dir = upload_dir
 
     def execute(self, capture_id: str, user_id: str) -> Dict[str, Any]:
@@ -369,7 +298,49 @@ class DeleteCaptureUseCase:
                 os.remove(real_path)
                 audio_removed = True
 
+        supports = self.support_repo.list_for_record(user_id, capture_id)
+        entity_ids = {
+            entry["target_id"] for entry in supports if entry["target_kind"] == "entity"
+        }
+        relationship_ids = {
+            entry["target_id"] for entry in supports if entry["target_kind"] == "relationship"
+        }
+        # Legacy rows may predate support tracking; keep their capture link as a
+        # fallback so deletion still cleans them up.
+        entity_ids.update(
+            e.id for e in self.entity_repo.list_by_capture(capture_id, user_id=user_id)
+        )
+        relationship_ids.update(
+            r.id for r in self.rel_repo.get_all(user_id=user_id)
+            if r.source_capture_id == capture_id
+        )
         supports_removed = self.support_repo.delete_for_record(user_id, capture_id)
+
+        entities_removed = 0
+        relationships_removed = 0
+        messages_removed = 0
+
+        for entity_id in entity_ids:
+            if self.support_repo.list_for_target(user_id, "entity", entity_id):
+                continue  # shared with another record
+            relationships_removed += self.rel_repo.delete_for_entity(entity_id, user_id=user_id)
+            self.duplicate_repo.delete_for_entity(entity_id, user_id=user_id)
+            self.embedding_repo.delete(entity_id, user_id=user_id)
+            messages_removed += self._delete_dependent_answers(user_id, "entity", entity_id)
+            self.entity_repo.delete(entity_id, user_id=user_id)
+            entities_removed += 1
+
+        for rel_id in relationship_ids:
+            rel = self.rel_repo.get_by_id(rel_id, user_id=user_id)
+            if not rel:
+                continue
+            if self.support_repo.list_for_target(user_id, "relationship", rel_id):
+                continue
+            messages_removed += self._delete_dependent_answers(user_id, "relationship", rel_id)
+            self.embedding_repo.delete(rel_id, user_id=user_id)
+            self.rel_repo.delete(rel_id, user_id=user_id)
+            relationships_removed += 1
+
         self.knowledge_repo.delete(capture_id, user_id=user_id)
         jobs_deleted = self.job_repo.delete_by_capture_id(capture_id, user_id=user_id)
         eval_deleted = self.eval_repo.delete_by_capture_id(capture_id, user_id=user_id)
@@ -380,10 +351,21 @@ class DeleteCaptureUseCase:
             "deleted": capture is not None,
             "capture_id": capture_id,
             "audio_removed": audio_removed,
+            "entities_removed": entities_removed,
+            "relationships_removed": relationships_removed,
+            "messages_removed": messages_removed,
             "jobs_deleted": jobs_deleted,
             "eval_records_deleted": eval_deleted,
             "supports_removed": supports_removed,
         }
+
+    def _delete_dependent_answers(self, user_id: str, kind: str, target_id: str) -> int:
+        removed = 0
+        for citation in self.citation_repo.list_for_target(user_id, kind, target_id):
+            self.message_repo.delete(citation.message_id, user_id=user_id)
+            self.citation_repo.delete_for_message(citation.message_id, user_id=user_id)
+            removed += 1
+        return removed
 
 
 class PurgeRetainedAudioUseCase:
@@ -420,12 +402,17 @@ class AccountDeletionUseCase:
         consent_repo: ConsentRepositoryPort,
         capture_repo: CaptureRepositoryPort,
         knowledge_repo: KnowledgeRepositoryPort,
+        entity_repo: EntityRepositoryPort,
         rel_repo: RelationshipRepositoryPort,
+        duplicate_repo: DuplicateCandidateRepositoryPort,
         embedding_repo: EmbeddingRepositoryPort,
         job_repo: JobStatusRepositoryPort,
         eval_repo: EvalRecordRepositoryPort,
         tombstone_repo: TombstoneRepositoryPort,
         support_repo: RecordSupportRepositoryPort,
+        conversation_repo: ConversationRepositoryPort,
+        message_repo: MessageRepositoryPort,
+        citation_repo: CitationRepositoryPort,
         upload_dir: str,
     ):
         self.user_repo = user_repo
@@ -434,12 +421,17 @@ class AccountDeletionUseCase:
         self.consent_repo = consent_repo
         self.capture_repo = capture_repo
         self.knowledge_repo = knowledge_repo
+        self.entity_repo = entity_repo
         self.rel_repo = rel_repo
+        self.duplicate_repo = duplicate_repo
         self.embedding_repo = embedding_repo
         self.job_repo = job_repo
         self.eval_repo = eval_repo
         self.tombstone_repo = tombstone_repo
         self.support_repo = support_repo
+        self.conversation_repo = conversation_repo
+        self.message_repo = message_repo
+        self.citation_repo = citation_repo
         self.upload_dir = upload_dir
 
     def execute(self, user_id: str) -> Dict[str, Any]:
@@ -460,8 +452,17 @@ class AccountDeletionUseCase:
         items = self.knowledge_repo.get_all(user_id=user_id)
         for item in items:
             self.knowledge_repo.delete(item.id, user_id=user_id)
+        for conversation in self.conversation_repo.list_for_user(user_id):
+            self.message_repo.delete_for_conversation(conversation.id, user_id=user_id)
+            self.conversation_repo.delete(conversation.id, user_id=user_id)
+        self.citation_repo.delete_for_user(user_id)
+        self.message_repo.delete_for_user(user_id)
+        self.conversation_repo.delete_for_user(user_id)
+        for entity in self.entity_repo.get_all(user_id=user_id):
+            self.entity_repo.delete(entity.id, user_id=user_id)
         for rel in self.rel_repo.get_all(user_id=user_id):
             self.rel_repo.delete(rel.id, user_id=user_id)
+        self.duplicate_repo.delete_for_user(user_id)
         for item_id, _ in self.embedding_repo.get_all(user_id=user_id):
             self.embedding_repo.delete(item_id, user_id=user_id)
 
@@ -601,3 +602,9 @@ class AdminSystemStatusUseCase:
             error_message=error_message,
             resolved_item=entity_to_dto(k_item) if k_item else None,
         )
+
+
+# M3 use cases live in focused modules; re-exported for container wiring.
+from .jobs import ProcessCaptureUseCase, name_similarity  # noqa: E402,F401
+from .graph import GraphQueryUseCase  # noqa: E402,F401
+from .ask import AskQuestionUseCase  # noqa: E402,F401

@@ -60,14 +60,14 @@ class EchoBottomNav extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    // Left Action: Recall
+                    // Left Action: Graph
                     Padding(
                       padding: const EdgeInsets.only(bottom: 6),
                       child: _buildNavItem(
                         1,
-                        'Recall',
-                        Icons.search_outlined,
-                        Icons.search,
+                        'Graph',
+                        Icons.hub_outlined,
+                        Icons.hub,
                       ),
                     ),
 
@@ -108,7 +108,7 @@ class EchoBottomNav extends StatelessWidget {
                               ),
                               const SizedBox(height: 2),
                               const Text(
-                                'Capture',
+                                'Record',
                                 style: TextStyle(
                                   fontSize: 10,
                                   fontWeight: FontWeight.w700,
@@ -121,14 +121,14 @@ class EchoBottomNav extends StatelessWidget {
                       ),
                     ),
 
-                    // Right Action: Library
+                    // Right Action: Ask AI
                     Padding(
                       padding: const EdgeInsets.only(bottom: 6),
                       child: _buildNavItem(
                         2,
-                        'Library',
-                        Icons.library_books_outlined,
-                        Icons.library_books,
+                        'Ask AI',
+                        Icons.chat_bubble_outline,
+                        Icons.chat_bubble,
                       ),
                     ),
                   ],

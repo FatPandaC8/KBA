@@ -6,9 +6,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from server.app.infrastructure.config import get_settings, ServerSettings
 from server.app.infrastructure.database import DatabaseManager
+from server.app.infrastructure.worker import JobWorker
 from server.app.adapters.outbound.persistence import (
     SqliteKnowledgeRepository,
+    SqliteEntityRepository,
     SqliteRelationshipRepository,
+    SqliteDuplicateCandidateRepository,
     SqliteEmbeddingRepository,
     SqliteCaptureRepository,
     SqliteEvalRecordRepository,
@@ -19,13 +22,20 @@ from server.app.adapters.outbound.persistence import (
     SqliteConsentRepository,
     SqliteTombstoneRepository,
     SqliteRecordSupportRepository,
+    SqliteConversationRepository,
+    SqliteMessageRepository,
+    SqliteCitationRepository,
 )
 from server.app.adapters.outbound.embeddings import FastEmbedProvider
 from server.app.adapters.outbound.speech import FasterWhisperSpeechAdapter
 from server.app.adapters.outbound.extraction import SemanticKnowledgeExtractor
+from server.app.adapters.outbound.providers import LocalProviderRegistry
+from server.app.adapters.outbound.answering import LocalGraphAnswerProvider
 from server.app.adapters.outbound.identity import LogEmailAdapter, GoogleTokenInfoVerifier
 from server.app.application.use_cases import (
-    ProcessAudioCaptureUseCase,
+    ProcessCaptureUseCase,
+    GraphQueryUseCase,
+    AskQuestionUseCase,
     SemanticRecallUseCase,
     ManageKnowledgeUseCase,
     ManageRelationshipsUseCase,
@@ -50,7 +60,9 @@ class Container:
 
         # Repositories
         self.knowledge_repo = SqliteKnowledgeRepository(self.db_manager)
+        self.entity_repo = SqliteEntityRepository(self.db_manager)
         self.rel_repo = SqliteRelationshipRepository(self.db_manager)
+        self.duplicate_repo = SqliteDuplicateCandidateRepository(self.db_manager)
         self.embedding_repo = SqliteEmbeddingRepository(self.db_manager)
         self.capture_repo = SqliteCaptureRepository(self.db_manager)
         self.eval_repo = SqliteEvalRecordRepository(self.db_manager)
@@ -61,11 +73,16 @@ class Container:
         self.consent_repo = SqliteConsentRepository(self.db_manager)
         self.tombstone_repo = SqliteTombstoneRepository(self.db_manager)
         self.support_repo = SqliteRecordSupportRepository(self.db_manager)
+        self.conversation_repo = SqliteConversationRepository(self.db_manager)
+        self.message_repo = SqliteMessageRepository(self.db_manager)
+        self.citation_repo = SqliteCitationRepository(self.db_manager)
 
         # Free/local AI adapters only. No paid provider or paid fallback exists.
         self.embedder = FastEmbedProvider()
         self.transcriber = FasterWhisperSpeechAdapter()
         self.extractor = SemanticKnowledgeExtractor(pipeline_version=settings.pipeline_version)
+        self.answerer = LocalGraphAnswerProvider()
+        self.provider_registry = LocalProviderRegistry(pipeline_version=settings.pipeline_version)
         self.email_port = LogEmailAdapter(settings.email_outbox_path)
         self.google_verifier = GoogleTokenInfoVerifier(settings.google_client_id)
 
@@ -81,16 +98,44 @@ class Container:
         self.consent_service = ConsentService(self.consent_repo, settings)
 
         # Use cases
-        self.process_audio_uc = ProcessAudioCaptureUseCase(
+        self.process_capture_uc = ProcessCaptureUseCase(
             capture_repo=self.capture_repo,
             knowledge_repo=self.knowledge_repo,
+            entity_repo=self.entity_repo,
             rel_repo=self.rel_repo,
+            duplicate_repo=self.duplicate_repo,
             embedding_repo=self.embedding_repo,
             job_repo=self.job_repo,
+            support_repo=self.support_repo,
+            tombstone_repo=self.tombstone_repo,
             transcriber=self.transcriber,
             extractor=self.extractor,
             embedder=self.embedder,
             upload_dir=settings.upload_dir,
+            auto_link_threshold=settings.duplicate_auto_link_threshold,
+            flag_threshold=settings.duplicate_flag_threshold,
+            retry_limit=settings.job_retry_limit,
+            lease_seconds=settings.job_lease_seconds,
+        )
+        self.graph_query_uc = GraphQueryUseCase(
+            entity_repo=self.entity_repo,
+            rel_repo=self.rel_repo,
+            embedding_repo=self.embedding_repo,
+            embedder=self.embedder,
+            duplicate_repo=self.duplicate_repo,
+            support_repo=self.support_repo,
+            tombstone_repo=self.tombstone_repo,
+        )
+        self.ask_uc = AskQuestionUseCase(
+            conversation_repo=self.conversation_repo,
+            message_repo=self.message_repo,
+            citation_repo=self.citation_repo,
+            entity_repo=self.entity_repo,
+            rel_repo=self.rel_repo,
+            embedding_repo=self.embedding_repo,
+            embedder=self.embedder,
+            answerer=self.answerer,
+            graph_query=self.graph_query_uc,
         )
         self.semantic_recall_uc = SemanticRecallUseCase(
             knowledge_repo=self.knowledge_repo,
@@ -115,9 +160,15 @@ class Container:
         self.delete_capture_uc = DeleteCaptureUseCase(
             capture_repo=self.capture_repo,
             knowledge_repo=self.knowledge_repo,
+            entity_repo=self.entity_repo,
+            rel_repo=self.rel_repo,
+            duplicate_repo=self.duplicate_repo,
+            embedding_repo=self.embedding_repo,
             job_repo=self.job_repo,
             eval_repo=self.eval_repo,
             support_repo=self.support_repo,
+            citation_repo=self.citation_repo,
+            message_repo=self.message_repo,
             upload_dir=settings.upload_dir,
         )
         self.purge_audio_uc = PurgeRetainedAudioUseCase(
@@ -131,12 +182,17 @@ class Container:
             consent_repo=self.consent_repo,
             capture_repo=self.capture_repo,
             knowledge_repo=self.knowledge_repo,
+            entity_repo=self.entity_repo,
             rel_repo=self.rel_repo,
+            duplicate_repo=self.duplicate_repo,
             embedding_repo=self.embedding_repo,
             job_repo=self.job_repo,
             eval_repo=self.eval_repo,
             tombstone_repo=self.tombstone_repo,
             support_repo=self.support_repo,
+            conversation_repo=self.conversation_repo,
+            message_repo=self.message_repo,
+            citation_repo=self.citation_repo,
             upload_dir=settings.upload_dir,
         )
         self.admin_status_uc = AdminSystemStatusUseCase(
@@ -148,6 +204,8 @@ class Container:
             pipeline_version=settings.pipeline_version,
             upload_dir=settings.upload_dir,
         )
+
+        self.worker = JobWorker(self.process_capture_uc, poll_interval=settings.job_poll_seconds)
 
 
 _CONTAINER: Optional[Container] = None

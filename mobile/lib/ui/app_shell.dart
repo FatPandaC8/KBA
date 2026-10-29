@@ -8,9 +8,11 @@ import 'screens/detail/note_detail_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/library/library_screen.dart';
 import 'screens/recall/recall_screen.dart';
+import 'screens/recordings/recordings_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'widgets/echo_bottom_nav.dart';
 
+/// Three tabs (PRD v2 navigation): Record (0), Graph (1), Ask AI (2).
 class AppShell extends StatefulWidget {
   final NoteProvider noteProvider;
   final AudioService audioService;
@@ -31,16 +33,48 @@ class _AppShellState extends State<AppShell> {
   int _currentTab = 0;
   String? _selectedNoteId;
   bool _isSettingsOpen = false;
+  bool _isRecordingsOpen = false;
   bool _isRecording = false;
   final List<int> _tabHistory = [0];
 
   @override
   void initState() {
     super.initState();
+    widget.settingsService.addListener(_onSessionChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await widget.noteProvider.loadNotes();
       await widget.noteProvider.retryPendingWork();
     });
+  }
+
+  @override
+  void didUpdateWidget(AppShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.settingsService != widget.settingsService) {
+      oldWidget.settingsService.removeListener(_onSessionChanged);
+      widget.settingsService.addListener(_onSessionChanged);
+    }
+  }
+
+  /// Signing in or out must move the user between the auth gate and the tabs
+  /// immediately, without a relaunch.
+  void _onSessionChanged() {
+    if (!mounted) return;
+    setState(() {
+      _isSettingsOpen = false;
+      _selectedNoteId = null;
+      _isRecordingsOpen = false;
+      _currentTab = 0;
+      _tabHistory
+        ..clear()
+        ..add(0);
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.settingsService.removeListener(_onSessionChanged);
+    super.dispose();
   }
 
   void _showRecordingGuard() {
@@ -62,6 +96,7 @@ class _AppShellState extends State<AppShell> {
     }
     _selectedNoteId = null;
     _isSettingsOpen = false;
+    _isRecordingsOpen = false;
     setState(() {});
   }
 
@@ -99,8 +134,27 @@ class _AppShellState extends State<AppShell> {
     });
   }
 
+  void _openRecordings() {
+    if (_isRecording) {
+      _showRecordingGuard();
+      return;
+    }
+    setState(() {
+      _isRecordingsOpen = true;
+      _selectedNoteId = null;
+      _isSettingsOpen = false;
+    });
+  }
+
+  void _closeRecordings() {
+    setState(() {
+      _isRecordingsOpen = false;
+    });
+  }
+
   bool get _canPopInternally =>
       _isSettingsOpen ||
+      _isRecordingsOpen ||
       _selectedNoteId != null ||
       _tabHistory.length > 1 ||
       _currentTab != 0;
@@ -108,6 +162,8 @@ class _AppShellState extends State<AppShell> {
   void _handlePop() {
     if (_isSettingsOpen) {
       _closeSettings();
+    } else if (_isRecordingsOpen) {
+      _closeRecordings();
     } else if (_selectedNoteId != null) {
       _closeDetail();
     } else if (_tabHistory.length > 1) {
@@ -145,21 +201,18 @@ class _AppShellState extends State<AppShell> {
             audioService: widget.audioService,
             onOpenDetail: _openDetail,
             onOpenSettings: _openSettings,
-            onOpenLibrary: () => _switchTab(2),
+            onOpenLibrary: () => _switchTab(1),
+            onOpenRecordings: _openRecordings,
             onRecordingStateChanged: (value) {
               if (_isRecording != value) {
                 setState(() => _isRecording = value);
               }
             },
           ),
+          LibraryScreen(noteProvider: widget.noteProvider),
           RecallScreen(
             noteProvider: widget.noteProvider,
             onOpenDetail: _openDetail,
-          ),
-          LibraryScreen(
-            noteProvider: widget.noteProvider,
-            onOpenDetail: _openDetail,
-            onOpenHome: () => _switchTab(0),
           ),
         ],
       ),
@@ -181,6 +234,13 @@ class _AppShellState extends State<AppShell> {
           // Kept mounted at all times so tab/search/filter state survives
           // navigation and detail/settings overlays.
           tabScaffold,
+          if (_isRecordingsOpen)
+            Positioned.fill(
+              child: RecordingsScreen(
+                noteProvider: widget.noteProvider,
+                onBack: _closeRecordings,
+              ),
+            ),
           if (_selectedNoteId != null)
             Positioned.fill(
               child: NoteDetailScreen(

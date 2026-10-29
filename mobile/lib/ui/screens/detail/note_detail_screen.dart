@@ -234,11 +234,15 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
                     const SizedBox(height: 16),
                   ],
 
-                  // Audio Player if audio note
-                  if (note.audioPath != null && note.audioPath!.isNotEmpty) ...[
+                  // Audio Player if audio is local or stored on the server.
+                  if (note.canPlayAudio) ...[
                     AudioPlayerWidget(
-                      audioPath: note.audioPath!,
+                      audioPath: note.hasLocalAudio ? note.audioPath : null,
                       durationMs: note.audioDurationMs,
+                      remoteAudioLoader: note.hasLocalAudio
+                          ? null
+                          : () => widget.noteProvider.backendService
+                                .fetchAudioBytes(note.id),
                     ),
                     const SizedBox(height: 16),
                   ],

@@ -55,6 +55,16 @@ class ServerSettings:
     consent_version: str = os.getenv("ECHO_CONSENT_VERSION", "2026-10-29-v1")
     ai_providers_json: str = os.getenv("ECHO_AI_PROVIDERS", "")
 
+    # Processing jobs (PRC-02 … PRC-05)
+    job_retry_limit: int = int(os.getenv("ECHO_JOB_RETRY_LIMIT", "3"))
+    job_lease_seconds: int = int(os.getenv("ECHO_JOB_LEASE_SECONDS", "300"))
+    job_poll_seconds: float = float(os.getenv("ECHO_JOB_POLL_SECONDS", "1.0"))
+    worker_enabled: bool = os.getenv("ECHO_WORKER_ENABLED", "1") not in ("0", "false", "False")
+
+    # Duplicate matching bands (KG-02)
+    duplicate_auto_link_threshold: float = float(os.getenv("ECHO_DUPLICATE_AUTO_LINK", "0.90"))
+    duplicate_flag_threshold: float = float(os.getenv("ECHO_DUPLICATE_FLAG", "0.75"))
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

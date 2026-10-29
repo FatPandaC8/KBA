@@ -7,6 +7,7 @@ import 'package:mobile/services/settings_service.dart';
 import 'package:mobile/state/note_provider.dart';
 import 'package:mobile/ui/app_shell.dart';
 import 'package:mobile/ui/screens/home/widgets/mic_halo_button.dart';
+import 'package:mobile/ui/widgets/echo_bottom_nav.dart';
 
 import 'support/fakes.dart';
 
@@ -82,8 +83,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(audioService.active, isTrue);
 
-    // Tapping Library must not leave the capture screen mid-recording.
-    await tester.tap(find.text('Library'));
+    // Tapping another tab must not leave the capture screen mid-recording.
+    await tester.tap(
+      find.descendant(
+        of: find.byType(EchoBottomNav),
+        matching: find.text('Graph'),
+      ),
+    );
     await tester.pump();
 
     expect(find.text('Capture what matters.'), findsOneWidget);

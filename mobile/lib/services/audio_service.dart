@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path/path.dart' as p;
@@ -89,6 +90,13 @@ class AudioService {
   Future<void> play(String path) async {
     await _player.stop();
     await _player.play(DeviceFileSource(path));
+  }
+
+  /// Plays authenticated audio bytes fetched from the server (VR-02). Bytes
+  /// are handed to the player directly, so no public URL or temp file leaks.
+  Future<void> playBytes(Uint8List bytes) async {
+    await _player.stop();
+    await _player.play(BytesSource(bytes));
   }
 
   Future<void> pause() => _player.pause();

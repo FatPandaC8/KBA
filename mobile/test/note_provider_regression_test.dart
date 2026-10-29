@@ -43,7 +43,12 @@ void main() {
     settings = SettingsService(prefs);
     repo = FakeNoteRepository();
     backend = FakeBackendService(settings);
+    NoteProvider.statusPollInterval = Duration.zero;
     provider = NoteProvider(repo, backend, settings);
+  });
+
+  tearDown(() {
+    NoteProvider.statusPollInterval = const Duration(milliseconds: 600);
   });
 
   test(

@@ -3,13 +3,24 @@ from typing import List, Optional, Tuple, Dict, Any
 
 from server.app.domain.entities import (
     KnowledgeItemEntity,
+    ExtractedEntity,
     RelationshipEntity,
     CaptureEntity,
     EvalRecordEntity,
     UserEntity,
     ConsentEntity,
+    ConversationEntity,
+    MessageEntity,
+    CitationEntity,
 )
-from ..dto import GraphDataDTO, ProcessingJobDTO
+from ..dto import (
+    GraphDataDTO,
+    ProcessingJobDTO,
+    EvidenceItem,
+    AnswerDraft,
+    ProviderInfoDTO,
+    ExtractionResult,
+)
 
 
 class UserRepositoryPort(ABC):
@@ -166,6 +177,58 @@ class KnowledgeRepositoryPort(ABC):
         pass
 
 
+class EntityRepositoryPort(ABC):
+    @abstractmethod
+    def save(self, entity: ExtractedEntity) -> None:
+        pass
+
+    @abstractmethod
+    def get_by_id(self, entity_id: str, user_id: Optional[str] = None) -> Optional[ExtractedEntity]:
+        pass
+
+    @abstractmethod
+    def get_all(self, user_id: Optional[str] = None, limit: Optional[int] = None) -> List[ExtractedEntity]:
+        pass
+
+    @abstractmethod
+    def list_by_capture(self, capture_id: str, user_id: Optional[str] = None) -> List[ExtractedEntity]:
+        pass
+
+    @abstractmethod
+    def find_by_normalized(self, user_id: str, normalized_name: str) -> List[ExtractedEntity]:
+        pass
+
+    @abstractmethod
+    def count(self, user_id: Optional[str] = None) -> int:
+        pass
+
+    @abstractmethod
+    def delete(self, entity_id: str, user_id: Optional[str] = None) -> None:
+        pass
+
+    @abstractmethod
+    def update_fields(self, entity_id: str, user_id: str, name: Optional[str], description: Optional[str]) -> bool:
+        pass
+
+
+class DuplicateCandidateRepositoryPort(ABC):
+    @abstractmethod
+    def record(self, user_id: str, entity_id: str, candidate_id: str, score: float, decision: str) -> None:
+        """Persist a compared pair. ``decision`` is auto_linked or flagged."""
+
+    @abstractmethod
+    def list_flagged(self, user_id: str) -> List[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
+    def delete_for_entity(self, entity_id: str, user_id: Optional[str] = None) -> int:
+        pass
+
+    @abstractmethod
+    def delete_for_user(self, user_id: str) -> int:
+        pass
+
+
 class RelationshipRepositoryPort(ABC):
     @abstractmethod
     def save(self, rel: RelationshipEntity) -> None:
@@ -180,11 +243,23 @@ class RelationshipRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    def get_between(self, user_id: str, from_id: str, to_id: str) -> List[RelationshipEntity]:
+        pass
+
+    @abstractmethod
+    def list_for_entity(self, user_id: str, entity_id: str) -> List[RelationshipEntity]:
+        pass
+
+    @abstractmethod
     def update_status(self, rel_id: str, status: str, relation_type: Optional[str] = None, user_id: Optional[str] = None) -> None:
         pass
 
     @abstractmethod
     def delete(self, rel_id: str, user_id: Optional[str] = None) -> None:
+        pass
+
+    @abstractmethod
+    def delete_for_entity(self, entity_id: str, user_id: Optional[str] = None) -> int:
         pass
 
     @abstractmethod
@@ -294,8 +369,12 @@ class KnowledgeExtractionPort(ABC):
         pass
 
     @abstractmethod
-    def connect(self, new_item: KnowledgeItemEntity, existing_items: List[KnowledgeItemEntity]) -> List[RelationshipEntity]:
-        pass
+    def extract_graph(self, transcript: str, capture_id: str, user_id: str = "") -> ExtractionResult:
+        """Extract the summary record, entities and relationships in one pass.
+
+        The result is deterministic for the same transcript so a retried stage
+        produces identical identifiers and prose (PRC-04).
+        """
 
 
 class EmbeddingProviderPort(ABC):
@@ -310,6 +389,10 @@ class EmbeddingProviderPort(ABC):
     @abstractmethod
     def calculate_similarity(self, query_bytes: bytes, target_bytes: bytes) -> float:
         pass
+
+    @property
+    def model_name(self) -> str:
+        return ""
 
 
 class JobStatusRepositoryPort(ABC):
@@ -331,6 +414,117 @@ class JobStatusRepositoryPort(ABC):
 
     @abstractmethod
     def delete_by_capture_id(self, capture_id: str, user_id: Optional[str] = None) -> int:
+        pass
+
+    @abstractmethod
+    def claim(self, capture_id: str, lease_owner: str, lease_seconds: int, user_id: Optional[str] = None) -> Optional[ProcessingJobDTO]:
+        """Atomically take the job lease. Returns None when already leased."""
+
+    @abstractmethod
+    def release(self, capture_id: str, lease_owner: str, user_id: Optional[str] = None) -> None:
+        pass
+
+    @abstractmethod
+    def save_stage_output(self, capture_id: str, stage: str, outputs: Dict[str, Any], user_id: Optional[str] = None) -> None:
+        """Persist stage output and advance the stage idempotently."""
+
+    @abstractmethod
+    def record_attempt(self, capture_id: str, attempt: int, error_class: str, error_message: str, user_id: Optional[str] = None) -> None:
+        pass
+
+    @abstractmethod
+    def list_resumable(self, now_iso: str, limit: int = 20) -> List[ProcessingJobDTO]:
+        """Jobs whose lease expired or which failed recoverably."""
+
+
+class ConversationRepositoryPort(ABC):
+    @abstractmethod
+    def save(self, conversation: ConversationEntity) -> None:
+        pass
+
+    @abstractmethod
+    def get_by_id(self, conversation_id: str, user_id: str) -> Optional[ConversationEntity]:
+        pass
+
+    @abstractmethod
+    def list_for_user(self, user_id: str) -> List[ConversationEntity]:
+        pass
+
+    @abstractmethod
+    def touch(self, conversation_id: str, user_id: str, title: Optional[str] = None) -> None:
+        pass
+
+    @abstractmethod
+    def delete(self, conversation_id: str, user_id: str) -> None:
+        pass
+
+    @abstractmethod
+    def delete_for_user(self, user_id: str) -> int:
+        pass
+
+
+class MessageRepositoryPort(ABC):
+    @abstractmethod
+    def save(self, message: MessageEntity) -> None:
+        pass
+
+    @abstractmethod
+    def list_for_conversation(self, conversation_id: str, user_id: str) -> List[MessageEntity]:
+        pass
+
+    @abstractmethod
+    def get_by_id(self, message_id: str, user_id: str) -> Optional[MessageEntity]:
+        pass
+
+    @abstractmethod
+    def delete(self, message_id: str, user_id: str) -> None:
+        pass
+
+    @abstractmethod
+    def delete_for_conversation(self, conversation_id: str, user_id: str) -> int:
+        pass
+
+    @abstractmethod
+    def delete_for_user(self, user_id: str) -> int:
+        pass
+
+
+class CitationRepositoryPort(ABC):
+    @abstractmethod
+    def save(self, citation: CitationEntity) -> None:
+        pass
+
+    @abstractmethod
+    def list_for_message(self, message_id: str, user_id: str) -> List[CitationEntity]:
+        pass
+
+    @abstractmethod
+    def list_for_target(self, user_id: str, kind: str, target_id: str) -> List[CitationEntity]:
+        pass
+
+    @abstractmethod
+    def delete_for_message(self, message_id: str, user_id: str) -> int:
+        pass
+
+    @abstractmethod
+    def delete_for_user(self, user_id: str) -> int:
+        pass
+
+
+class AnswerProviderPort(ABC):
+    @abstractmethod
+    def answer(
+        self,
+        question: str,
+        evidence: List[EvidenceItem],
+        contradictions: List[str],
+    ) -> AnswerDraft:
+        """Produce an evidence-grounded answer or a refusal."""
+
+
+class ProviderRegistryPort(ABC):
+    @abstractmethod
+    def list_providers(self) -> List[ProviderInfoDTO]:
         pass
 
 

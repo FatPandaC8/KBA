@@ -1,5 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
+
+from server.app.domain.entities import ExtractedEntity, KnowledgeItemEntity, RelationshipEntity
+
 
 @dataclass
 class KnowledgeItemDTO:
@@ -16,6 +19,25 @@ class KnowledgeItemDTO:
     provenance: str
     created_at: str
     updated_at: str
+    provider_id: str = ""
+    model_version: str = ""
+
+
+@dataclass
+class EntityDTO:
+    id: str
+    name: str
+    entity_type: str
+    description: str
+    confidence: float
+    certainty: str
+    provenance: str
+    capture_id: str
+    created_at: str
+    updated_at: str
+    provider_id: str = ""
+    model_version: str = ""
+
 
 @dataclass
 class RelationshipDTO:
@@ -25,6 +47,10 @@ class RelationshipDTO:
     relation_type: str
     status: str
     created_at: str
+    certainty: str = "confirmed"
+    confidence: float = 0.6
+    source_capture_id: str = ""
+
 
 @dataclass
 class GraphNodeDTO:
@@ -33,6 +59,11 @@ class GraphNodeDTO:
     kind: str
     x: float
     y: float
+    cluster_id: str = ""
+    certainty: str = "confirmed"
+    confidence: float = 0.5
+    degree: int = 0
+
 
 @dataclass
 class GraphEdgeDTO:
@@ -41,16 +72,43 @@ class GraphEdgeDTO:
     to_node: str
     type: str
     status: str
+    certainty: str = "confirmed"
+    confidence: float = 0.6
+
+
+@dataclass
+class GraphClusterDTO:
+    id: str
+    label: str
+    x: float
+    y: float
+    size: int
+
 
 @dataclass
 class GraphDataDTO:
     nodes: List[GraphNodeDTO]
     edges: List[GraphEdgeDTO]
+    clusters: List[GraphClusterDTO] = field(default_factory=list)
+
 
 @dataclass
 class ScoredKnowledgeItemDTO:
     item: KnowledgeItemDTO
     similarity_score: float
+
+
+@dataclass
+class ScoredEntityDTO:
+    entity: EntityDTO
+    score: float
+
+
+@dataclass
+class GraphSearchDTO:
+    entities: List[ScoredEntityDTO]
+    relationships: List[RelationshipDTO]
+
 
 @dataclass
 class CaptureUploadResultDTO:
@@ -58,6 +116,8 @@ class CaptureUploadResultDTO:
     status: str
     knowledge_item: Optional[KnowledgeItemDTO]
     relationships: List[RelationshipDTO]
+    entities: List[EntityDTO] = field(default_factory=list)
+
 
 @dataclass
 class SystemHealthDTO:
@@ -70,6 +130,8 @@ class SystemHealthDTO:
     embeddings_count: int
     audio_storage_bytes: int
     active_jobs_count: int
+    entity_count: int = 0
+
 
 @dataclass
 class ProcessingJobDTO:
@@ -88,6 +150,7 @@ class ProcessingJobDTO:
     lease_expires_at: str = ""
     stage_outputs: str = "{}"
 
+
 @dataclass
 class DetailedCaptureViewDTO:
     capture_id: str
@@ -101,3 +164,95 @@ class DetailedCaptureViewDTO:
     error_message: Optional[str]
     resolved_item: Optional[KnowledgeItemDTO]
 
+
+@dataclass
+class CitationDTO:
+    id: str
+    kind: str
+    target_id: str
+    name: str
+    deleted: bool = False
+
+
+@dataclass
+class MessageDTO:
+    id: str
+    role: str
+    content: str
+    status: str
+    error_class: str
+    error_message: str
+    created_at: str
+    citations: List[CitationDTO] = field(default_factory=list)
+
+
+@dataclass
+class ConversationDTO:
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+    messages: List[MessageDTO] = field(default_factory=list)
+
+
+@dataclass
+class AnswerDTO:
+    conversation_id: str
+    message: MessageDTO
+    facts: List[str] = field(default_factory=list)
+    inferences: List[str] = field(default_factory=list)
+    contradictions: List[str] = field(default_factory=list)
+    refused: bool = False
+    refusal_reason: str = ""
+
+
+@dataclass
+class ExtractionResult:
+    """Everything one transcription produces, with provenance (KG-01)."""
+
+    knowledge_item: KnowledgeItemEntity
+    entities: List[ExtractedEntity] = field(default_factory=list)
+    relationships: List[RelationshipEntity] = field(default_factory=list)
+
+
+@dataclass
+class EvidenceItem:
+    """One retrieval hit passed to the answer provider.
+
+    ``text`` is a summary/description derived from extracted knowledge, never
+    the raw transcript.
+    """
+
+    kind: str
+    target_id: str
+    name: str
+    entity_type: str = ""
+    description: str = ""
+    certainty: str = "confirmed"
+    confidence: float = 0.0
+    score: float = 0.0
+    relation_type: str = ""
+    related_name: str = ""
+    source_capture_id: str = ""
+
+
+@dataclass
+class AnswerDraft:
+    text: str
+    facts: List[str] = field(default_factory=list)
+    inferences: List[str] = field(default_factory=list)
+    contradictions: List[str] = field(default_factory=list)
+    citations: List["CitationDTO"] = field(default_factory=list)
+    refused: bool = False
+    refusal_reason: str = ""
+
+
+@dataclass
+class ProviderInfoDTO:
+    id: str
+    name: str
+    kind: str
+    receives: List[str]
+    trains_on_data: bool
+    available: bool
+    detail: str = ""
