@@ -81,6 +81,12 @@ class ProcessingJobDTO:
     error_message: Optional[str]
     created_at: str
     updated_at: str
+    user_id: str = ""
+    attempt: int = 0
+    error_class: str = ""
+    lease_owner: str = ""
+    lease_expires_at: str = ""
+    stage_outputs: str = "{}"
 
 @dataclass
 class DetailedCaptureViewDTO:

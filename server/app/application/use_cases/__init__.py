@@ -1,15 +1,15 @@
 import os
 import time
-import uuid
-from typing import List, Optional, Tuple, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from server.app.domain.entities import (
     KnowledgeItemEntity,
     RelationshipEntity,
     CaptureEntity,
     EvalRecordEntity,
 )
-from server.app.domain.value_objects import CaptureStatus, RelationType, RelationStatus
-from server.app.domain.errors import AudioProcessingError, EntityNotFoundError, ValidationError
+from server.app.domain.value_objects import CaptureStatus
+from server.app.domain.errors import AudioProcessingError, EntityNotFoundError
 from ..ports import (
     KnowledgeRepositoryPort,
     RelationshipRepositoryPort,
@@ -20,6 +20,12 @@ from ..ports import (
     AudioTranscriptionPort,
     KnowledgeExtractionPort,
     EmbeddingProviderPort,
+    UserRepositoryPort,
+    SessionRepositoryPort,
+    EmailTokenRepositoryPort,
+    ConsentRepositoryPort,
+    TombstoneRepositoryPort,
+    RecordSupportRepositoryPort,
 )
 from ..dto import (
     KnowledgeItemDTO,
@@ -31,6 +37,7 @@ from ..dto import (
     ProcessingJobDTO,
     DetailedCaptureViewDTO,
 )
+
 
 def entity_to_dto(e: KnowledgeItemEntity) -> KnowledgeItemDTO:
     return KnowledgeItemDTO(
@@ -49,6 +56,7 @@ def entity_to_dto(e: KnowledgeItemEntity) -> KnowledgeItemDTO:
         updated_at=e.updated_at,
     )
 
+
 def rel_to_dto(r: RelationshipEntity) -> RelationshipDTO:
     return RelationshipDTO(
         id=r.id,
@@ -58,6 +66,7 @@ def rel_to_dto(r: RelationshipEntity) -> RelationshipDTO:
         status=r.status,
         created_at=r.created_at,
     )
+
 
 class ProcessAudioCaptureUseCase:
     def __init__(
@@ -87,12 +96,11 @@ class ProcessAudioCaptureUseCase:
         capture_id: str,
         idempotency_key: str,
         audio_file_path: str,
+        user_id: str,
         duration_ms: int = 0,
-        consent_given: bool = False,
     ) -> CaptureUploadResultDTO:
-        job_id = capture_id
         job = ProcessingJobDTO(
-            id=job_id,
+            id=capture_id,
             capture_id=capture_id,
             stage="received",
             status="processing",
@@ -100,13 +108,15 @@ class ProcessAudioCaptureUseCase:
             error_message=None,
             created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            user_id=user_id,
         )
         self.job_repo.record_job(job)
 
         capture = CaptureEntity(
             id=capture_id,
             idempotency_key=idempotency_key,
-            audio_path=audio_file_path if consent_given else "",
+            audio_path=audio_file_path,
+            user_id=user_id,
             duration_ms=duration_ms,
             status="received",
         )
@@ -114,18 +124,21 @@ class ProcessAudioCaptureUseCase:
 
         try:
             # 1. Transcribe
-            self.job_repo.update_job_status(capture_id, "transcribing", "processing")
+            self.job_repo.update_job_status(capture_id, "transcribing", "processing", user_id=user_id)
             transcript = self.transcriber.transcribe(audio_file_path)
             if not transcript or not transcript.strip():
                 raise AudioProcessingError("No intelligible speech detected in recording.")
 
             # 2. Extract structured knowledge
-            self.job_repo.update_job_status(capture_id, "extracting", "processing")
-            knowledge_item = self.extractor.extract(transcript, capture_id)
+            self.job_repo.update_job_status(capture_id, "extracting", "processing", user_id=user_id)
+            knowledge_item = self.extractor.extract(transcript, capture_id, user_id=user_id)
+            knowledge_item.user_id = user_id
 
-            # 3. Connect to existing knowledge
-            existing_items = self.knowledge_repo.get_all()
+            # 3. Connect to existing knowledge in this user's own graph only
+            existing_items = self.knowledge_repo.get_all(user_id=user_id)
             relationships = self.extractor.connect(knowledge_item, existing_items)
+            for rel in relationships:
+                rel.user_id = user_id
 
             # 4. Persist
             self.knowledge_repo.save(knowledge_item)
@@ -133,21 +146,15 @@ class ProcessAudioCaptureUseCase:
                 self.rel_repo.save(rel)
 
             # 5. Embed
-            self.job_repo.update_job_status(capture_id, "indexing", "processing")
+            self.job_repo.update_job_status(capture_id, "indexing", "processing", user_id=user_id)
             try:
                 vec_bytes = self.embedder.embed_item(knowledge_item)
-                self.embedding_repo.save(knowledge_item.id, vec_bytes)
+                self.embedding_repo.save(knowledge_item.id, vec_bytes, user_id=user_id)
             except Exception as embed_err:
                 print(f"[Embedding Error] {embed_err}")
 
-            # 6. Audio retention policy: purge if no consent
-            if not consent_given and os.path.exists(audio_file_path):
-                try:
-                    os.remove(audio_file_path)
-                except Exception:
-                    pass
-
-            self.job_repo.update_job_status(capture_id, "completed", "ready")
+            # Audio is retained for the owner's playback (VR-01/VR-02).
+            self.job_repo.update_job_status(capture_id, "completed", "ready", user_id=user_id)
             capture.status = "ready"
             self.capture_repo.save(capture)
 
@@ -159,15 +166,15 @@ class ProcessAudioCaptureUseCase:
             )
 
         except Exception as e:
-            self.job_repo.update_job_status(capture_id, "failed", "failed", error_message=str(e))
+            self.job_repo.update_job_status(
+                capture_id, "failed", "failed", error_message=str(e), user_id=user_id
+            )
             capture.status = "failed"
             self.capture_repo.save(capture)
-            if not consent_given and os.path.exists(audio_file_path):
-                try:
-                    os.remove(audio_file_path)
-                except Exception:
-                    pass
+            # Never discard unprocessed audio here. The recording remains
+            # available for the user's manual retry (REC-05).
             raise
+
 
 class SemanticRecallUseCase:
     def __init__(
@@ -180,19 +187,18 @@ class SemanticRecallUseCase:
         self.embedding_repo = embedding_repo
         self.embedder = embedder
 
-    def execute(self, query: str, limit: int = 20) -> List[ScoredKnowledgeItemDTO]:
+    def execute(self, query: str, user_id: str, limit: int = 20) -> List[ScoredKnowledgeItemDTO]:
         query_text = query.strip()
         if not query_text:
             return []
 
         q_bytes = self.embedder.embed_text(query_text)
-        stored_embeddings = self.embedding_repo.get_all()
+        stored_embeddings = self.embedding_repo.get_all(user_id=user_id)
         if not stored_embeddings:
             return []
 
-        all_items = {item.id: item for item in self.knowledge_repo.get_all()}
+        all_items = {item.id: item for item in self.knowledge_repo.get_all(user_id=user_id)}
         scored: List[ScoredKnowledgeItemDTO] = []
-
         for item_id, vec_bytes in stored_embeddings:
             if item_id not in all_items:
                 continue
@@ -204,6 +210,7 @@ class SemanticRecallUseCase:
 
         scored.sort(key=lambda x: x.similarity_score, reverse=True)
         return scored[:limit]
+
 
 class ManageKnowledgeUseCase:
     def __init__(
@@ -220,20 +227,20 @@ class ManageKnowledgeUseCase:
         self.extractor = extractor
         self.embedder = embedder
 
-    def list_knowledge(self, query: str = "", limit: Optional[int] = None, offset: int = 0) -> List[KnowledgeItemDTO]:
-        items = self.knowledge_repo.get_all(query=query, limit=limit, offset=offset)
+    def list_knowledge(self, user_id: Optional[str], query: str = "", limit: Optional[int] = None, offset: int = 0) -> List[KnowledgeItemDTO]:
+        items = self.knowledge_repo.get_all(query=query, limit=limit, offset=offset, user_id=user_id)
         return [entity_to_dto(i) for i in items]
 
-    def get_knowledge(self, item_id: str) -> KnowledgeItemDTO:
-        item = self.knowledge_repo.get_by_id(item_id)
+    def get_knowledge(self, item_id: str, user_id: Optional[str]) -> KnowledgeItemDTO:
+        item = self.knowledge_repo.get_by_id(item_id, user_id=user_id)
         if not item:
             raise EntityNotFoundError("KnowledgeItem", item_id)
         return entity_to_dto(item)
 
-    def save_or_sync_knowledge(self, item_dto: KnowledgeItemDTO) -> KnowledgeItemDTO:
-        existing = self.knowledge_repo.get_by_id(item_dto.id)
+    def save_or_sync_knowledge(self, item_dto: KnowledgeItemDTO, user_id: str) -> KnowledgeItemDTO:
+        existing = self.knowledge_repo.get_by_id(item_dto.id, user_id=user_id)
         if not existing and item_dto.capture_id:
-            existing = self.knowledge_repo.get_by_capture_id(item_dto.capture_id)
+            existing = self.knowledge_repo.get_by_capture_id(item_dto.capture_id, user_id=user_id)
 
         target_id = existing.id if existing else item_dto.id
         entity = KnowledgeItemEntity(
@@ -241,6 +248,7 @@ class ManageKnowledgeUseCase:
             capture_id=item_dto.capture_id,
             title=item_dto.title,
             core_idea=item_dto.core_idea,
+            user_id=user_id,
             details=item_dto.details,
             transcript=item_dto.transcript,
             concepts=item_dto.concepts,
@@ -254,35 +262,49 @@ class ManageKnowledgeUseCase:
         self.knowledge_repo.save(entity)
 
         if not existing:
-            all_items = self.knowledge_repo.get_all()
+            all_items = self.knowledge_repo.get_all(user_id=user_id)
             new_rels = self.extractor.connect(entity, all_items)
             for r in new_rels:
+                r.user_id = user_id
                 self.rel_repo.save(r)
 
-        # Update embedding
         try:
             vec_bytes = self.embedder.embed_item(entity)
-            self.embedding_repo.save(entity.id, vec_bytes)
+            self.embedding_repo.save(entity.id, vec_bytes, user_id=user_id)
         except Exception as e:
             print(f"[Embedding Sync Error] {e}")
 
         return entity_to_dto(entity)
 
-    def delete_knowledge(self, item_id: str) -> None:
-        self.knowledge_repo.delete(item_id)
+    def delete_knowledge(self, item_id: str, user_id: Optional[str]) -> None:
+        self.knowledge_repo.delete(item_id, user_id=user_id)
+
 
 class ManageRelationshipsUseCase:
     def __init__(self, rel_repo: RelationshipRepositoryPort):
         self.rel_repo = rel_repo
 
-    def get_graph(self) -> GraphDataDTO:
-        return self.rel_repo.get_graph()
+    def get_graph(self, user_id: Optional[str]) -> GraphDataDTO:
+        return self.rel_repo.get_graph(user_id=user_id)
 
-    def update_relationship(self, rel_id: str, status: str, relation_type: Optional[str] = None) -> None:
-        self.rel_repo.update_status(rel_id, status=status, relation_type=relation_type)
+    def update_relationship(
+        self,
+        rel_id: str,
+        status: str,
+        user_id: Optional[str],
+        relation_type: Optional[str] = None,
+    ) -> bool:
+        if not self.rel_repo.get_by_id(rel_id, user_id=user_id):
+            return False
+        self.rel_repo.update_status(rel_id, status=status, relation_type=relation_type, user_id=user_id)
+        return True
 
-    def delete_relationship(self, rel_id: str) -> None:
-        self.rel_repo.delete(rel_id)
+    def delete_relationship(self, rel_id: str, user_id: Optional[str]) -> bool:
+        if not self.rel_repo.get_by_id(rel_id, user_id=user_id):
+            return False
+        self.rel_repo.delete(rel_id, user_id=user_id)
+        return True
+
 
 class BackfillEmbeddingsUseCase:
     def __init__(
@@ -304,12 +326,13 @@ class BackfillEmbeddingsUseCase:
             if item.id not in stored_ids:
                 try:
                     vec_bytes = self.embedder.embed_item(item)
-                    self.embedding_repo.save(item.id, vec_bytes)
+                    self.embedding_repo.save(item.id, vec_bytes, user_id=item.user_id)
                     indexed += 1
                 except Exception as e:
                     print(f"[Embedding Backfill Error on {item.id}] {e}")
                     failed += 1
         return {"total_items": len(all_items), "newly_indexed": indexed, "failed": failed}
+
 
 class DeleteCaptureUseCase:
     """Deletes a complete capture lifecycle idempotently.
@@ -324,16 +347,18 @@ class DeleteCaptureUseCase:
         knowledge_repo: KnowledgeRepositoryPort,
         job_repo: JobStatusRepositoryPort,
         eval_repo: EvalRecordRepositoryPort,
+        support_repo: RecordSupportRepositoryPort,
         upload_dir: str,
     ):
         self.capture_repo = capture_repo
         self.knowledge_repo = knowledge_repo
         self.job_repo = job_repo
         self.eval_repo = eval_repo
+        self.support_repo = support_repo
         self.upload_dir = upload_dir
 
-    def execute(self, capture_id: str) -> Dict[str, Any]:
-        capture = self.capture_repo.get_by_id(capture_id)
+    def execute(self, capture_id: str, user_id: str) -> Dict[str, Any]:
+        capture = self.capture_repo.get_by_id(capture_id, user_id=user_id)
         audio_removed = False
         if capture and capture.audio_path:
             real_path = os.path.realpath(capture.audio_path)
@@ -344,11 +369,12 @@ class DeleteCaptureUseCase:
                 os.remove(real_path)
                 audio_removed = True
 
-        self.knowledge_repo.delete(capture_id)
-        jobs_deleted = self.job_repo.delete_by_capture_id(capture_id)
-        eval_deleted = self.eval_repo.delete_by_capture_id(capture_id)
+        supports_removed = self.support_repo.delete_for_record(user_id, capture_id)
+        self.knowledge_repo.delete(capture_id, user_id=user_id)
+        jobs_deleted = self.job_repo.delete_by_capture_id(capture_id, user_id=user_id)
+        eval_deleted = self.eval_repo.delete_by_capture_id(capture_id, user_id=user_id)
         if capture:
-            self.capture_repo.delete(capture_id)
+            self.capture_repo.delete(capture_id, user_id=user_id)
 
         return {
             "deleted": capture is not None,
@@ -356,20 +382,21 @@ class DeleteCaptureUseCase:
             "audio_removed": audio_removed,
             "jobs_deleted": jobs_deleted,
             "eval_records_deleted": eval_deleted,
+            "supports_removed": supports_removed,
         }
 
 
 class PurgeRetainedAudioUseCase:
-    """Removes all server-retained capture audio after consent withdrawal."""
+    """Removes server-retained capture audio after consent withdrawal."""
 
     def __init__(self, capture_repo: CaptureRepositoryPort, upload_dir: str):
         self.capture_repo = capture_repo
         self.upload_dir = upload_dir
 
-    def execute(self) -> int:
+    def execute(self, user_id: Optional[str] = None) -> int:
         upload_root = os.path.realpath(self.upload_dir)
         removed = 0
-        for capture in self.capture_repo.list_all():
+        for capture in self.capture_repo.list_all(user_id=user_id):
             if not capture.audio_path:
                 continue
             real_path = os.path.realpath(capture.audio_path)
@@ -378,8 +405,90 @@ class PurgeRetainedAudioUseCase:
             if os.path.exists(real_path):
                 os.remove(real_path)
                 removed += 1
-            self.capture_repo.clear_audio_path(capture.id)
+            self.capture_repo.clear_audio_path(capture.id, user_id=user_id)
         return removed
+
+
+class AccountDeletionUseCase:
+    """Hard-deletes one user's data and revokes access immediately."""
+
+    def __init__(
+        self,
+        user_repo: UserRepositoryPort,
+        session_repo: SessionRepositoryPort,
+        email_token_repo: EmailTokenRepositoryPort,
+        consent_repo: ConsentRepositoryPort,
+        capture_repo: CaptureRepositoryPort,
+        knowledge_repo: KnowledgeRepositoryPort,
+        rel_repo: RelationshipRepositoryPort,
+        embedding_repo: EmbeddingRepositoryPort,
+        job_repo: JobStatusRepositoryPort,
+        eval_repo: EvalRecordRepositoryPort,
+        tombstone_repo: TombstoneRepositoryPort,
+        support_repo: RecordSupportRepositoryPort,
+        upload_dir: str,
+    ):
+        self.user_repo = user_repo
+        self.session_repo = session_repo
+        self.email_token_repo = email_token_repo
+        self.consent_repo = consent_repo
+        self.capture_repo = capture_repo
+        self.knowledge_repo = knowledge_repo
+        self.rel_repo = rel_repo
+        self.embedding_repo = embedding_repo
+        self.job_repo = job_repo
+        self.eval_repo = eval_repo
+        self.tombstone_repo = tombstone_repo
+        self.support_repo = support_repo
+        self.upload_dir = upload_dir
+
+    def execute(self, user_id: str) -> Dict[str, Any]:
+        upload_root = os.path.realpath(self.upload_dir)
+        removed_audio = 0
+        for capture in self.capture_repo.list_all(user_id=user_id):
+            if not capture.audio_path:
+                continue
+            real_path = os.path.realpath(capture.audio_path)
+            if real_path == upload_root or real_path.startswith(upload_root + os.sep):
+                if os.path.exists(real_path):
+                    os.remove(real_path)
+                    removed_audio += 1
+
+        # Revoke access before removing rows.
+        sessions_revoked = self.session_repo.revoke_all_for_user(user_id)
+
+        items = self.knowledge_repo.get_all(user_id=user_id)
+        for item in items:
+            self.knowledge_repo.delete(item.id, user_id=user_id)
+        for rel in self.rel_repo.get_all(user_id=user_id):
+            self.rel_repo.delete(rel.id, user_id=user_id)
+        for item_id, _ in self.embedding_repo.get_all(user_id=user_id):
+            self.embedding_repo.delete(item_id, user_id=user_id)
+
+        for capture in self.capture_repo.list_all(user_id=user_id):
+            self.job_repo.delete_by_capture_id(capture.id, user_id=user_id)
+            self.capture_repo.delete(capture.id, user_id=user_id)
+
+        self.eval_repo.delete_for_user(user_id)
+        self.support_repo.delete_for_user(user_id)
+        self.tombstone_repo.delete_for_user(user_id)
+        self.consent_repo.delete_for_user(user_id)
+        self.email_token_repo.delete_for_user(user_id)
+        self.session_repo.delete_for_user(user_id)
+        self.user_repo.delete(user_id)
+
+        user_upload_dir = os.path.join(upload_root, user_id)
+        if os.path.realpath(user_upload_dir).startswith(upload_root + os.sep) and os.path.isdir(user_upload_dir):
+            try:
+                os.rmdir(user_upload_dir)
+            except OSError:
+                pass
+
+        return {
+            "deleted": True,
+            "sessions_revoked": sessions_revoked,
+            "audio_files_removed": removed_audio,
+        }
 
 
 class AdminSystemStatusUseCase:
@@ -436,22 +545,17 @@ class AdminSystemStatusUseCase:
         captures = self.capture_repo.list_recent(limit=limit)
         results: List[DetailedCaptureViewDTO] = []
         for c in captures:
-            # Check for physical audio file existence
             has_audio = bool(c.audio_path and os.path.exists(c.audio_path))
             audio_url = f"/api/admin/captures/{c.id}/audio" if has_audio else None
 
-            # Get resolved knowledge item if present
             k_item = self.knowledge_repo.get_by_capture_id(c.id)
             if not k_item:
                 k_item = self.knowledge_repo.get_by_id(c.id)
-            
-            # Get job status
+
             job = self.job_repo.get_by_capture_id(c.id)
             stage = job.stage if job else ("ready" if k_item else c.status)
             status = job.status if job else ("ready" if k_item else c.status)
             error_message = job.error_message if job else None
-
-            # Original transcript if available on knowledge item
             original_transcript = k_item.transcript if k_item else None
 
             results.append(DetailedCaptureViewDTO(
@@ -497,4 +601,3 @@ class AdminSystemStatusUseCase:
             error_message=error_message,
             resolved_item=entity_to_dto(k_item) if k_item else None,
         )
-

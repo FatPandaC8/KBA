@@ -10,7 +10,6 @@ from server.app.adapters.inbound.http.schemas import (
     ProcessingJobResponse,
     BackfillResponse,
     ServerConfigResponse,
-    ServerConfigUpdateRequest,
     KnowledgeItem,
     DetailedCaptureResponse,
 )
@@ -72,8 +71,8 @@ def retry_job(
         capture_id=capture.id,
         idempotency_key=f"retry-{capture.idempotency_key}",
         audio_file_path=capture.audio_path,
+        user_id=capture.user_id,
         duration_ms=capture.duration_ms,
-        consent_given=True,
     )
     return {"status": "retried", "capture_id": res.capture_id}
 
@@ -185,7 +184,7 @@ def admin_delete_knowledge(
     item_id: str,
     container: Container = Depends(get_container),
 ):
-    container.manage_knowledge_uc.delete_knowledge(item_id)
+    container.manage_knowledge_uc.delete_knowledge(item_id, user_id=None)
     return {"deleted": True, "id": item_id}
 
 
@@ -196,7 +195,7 @@ def list_admin_knowledge(
     offset: int = Query(default=0, ge=0),
     container: Container = Depends(get_container),
 ):
-    items = container.manage_knowledge_uc.list_knowledge(query=q, limit=limit, offset=offset)
+    items = container.manage_knowledge_uc.list_knowledge(user_id=None, query=q, limit=limit, offset=offset)
     return [
         KnowledgeItem(
             id=i.id,
@@ -231,34 +230,15 @@ def get_config(container: Container = Depends(get_container)):
     return ServerConfigResponse(
         environment=s.app_env,
         pipeline_version=s.pipeline_version,
-        model=s.openai_model,
-        base_url=s.openai_base_url,
-        has_api_key=bool(s.openai_api_key),
+        stt_provider="faster-whisper (local)",
+        extraction_provider="local rule-based extraction",
+        embedding_provider="fastembed BAAI/bge-small-en-v1.5 (local)",
         upload_dir=s.upload_dir,
         max_voice_seconds=s.max_voice_seconds,
+        consent_version=s.consent_version,
+        google_sign_in_configured=bool(s.google_client_id),
+        email_delivery="local outbox (not a real mailbox)",
     )
-
-@admin_router.post("/config", response_model=ServerConfigResponse)
-def update_config(
-    update: ServerConfigUpdateRequest,
-    container: Container = Depends(get_container),
-):
-    s = container.settings
-    if update.model is not None:
-        s.openai_model = update.model
-        container.extractor.model = update.model
-    if update.base_url is not None:
-        s.openai_base_url = update.base_url
-        container.extractor.base_url = update.base_url
-        container.embedder.base_url = update.base_url
-        container.transcriber.base_url = update.base_url
-    if update.api_key is not None and update.api_key.strip():
-        s.openai_api_key = update.api_key.strip()
-        container.extractor.api_key = update.api_key.strip()
-        container.embedder.api_key = update.api_key.strip()
-        container.transcriber.api_key = update.api_key.strip()
-
-    return get_config(container)
 
 @admin_router.get("/logs")
 def get_recent_logs(

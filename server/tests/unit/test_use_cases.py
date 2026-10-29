@@ -11,7 +11,7 @@ from server.app.domain.entities import KnowledgeItemEntity
 class FakeKnowledgeRepo(KnowledgeRepositoryPort):
     def __init__(self, items):
         self.items = {i.id: i for i in items}
-    def get_all(self, query="", limit=None, offset=0):
+    def get_all(self, query="", limit=None, offset=0, user_id=None):
         return list(self.items.values())
     def get_by_id(self, item_id): return self.items.get(item_id)
     def get_by_capture_id(self, capture_id): return None
@@ -22,7 +22,7 @@ class FakeKnowledgeRepo(KnowledgeRepositoryPort):
 class FakeEmbeddingRepo(EmbeddingRepositoryPort):
     def __init__(self, embeddings):
         self.embeddings = embeddings  # dict of item_id -> bytes
-    def get_all(self):
+    def get_all(self, user_id=None):
         return list(self.embeddings.items())
     def get_by_item_id(self, item_id): return self.embeddings.get(item_id)
     def save(self, item_id, vector_bytes): self.embeddings[item_id] = vector_bytes
@@ -67,7 +67,7 @@ def test_semantic_recall_use_case():
         embedder=FakeEmbedder(),
     )
 
-    results = uc.execute(query="Search query", limit=10)
+    results = uc.execute(query="Search query", user_id="", limit=10)
     assert len(results) == 2
     assert results[0].item.id == "item-1"
     assert results[0].similarity_score == 1.0

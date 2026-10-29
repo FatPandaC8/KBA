@@ -37,9 +37,12 @@ def test_admin_config_get_and_update():
     resp = client.get("/api/admin/config", headers=headers)
     assert resp.status_code == 200
     cfg = resp.json()
-    assert cfg["model"] == settings.openai_model
-    # Ensure secrets are never returned
-    assert "api_key" not in cfg or cfg.get("has_api_key") is not None
+    assert cfg["stt_provider"] == "faster-whisper (local)"
+    assert cfg["extraction_provider"] == "local rule-based extraction"
+    assert cfg["embedding_provider"] == "fastembed BAAI/bge-small-en-v1.5 (local)"
+    # Admin config intentionally omits credentials and provider secrets.
+    assert "openai" not in cfg
+    assert "api_key" not in cfg
 
 def test_admin_ui_page_serves():
     resp = client.get("/admin")

@@ -1,84 +1,29 @@
-import json
 import re
 import string
-import urllib.request
-from typing import List, Tuple, Optional
+from typing import List
+
 from server.app.application.ports import KnowledgeExtractionPort
 from server.app.domain.entities import KnowledgeItemEntity, RelationshipEntity
 from server.app.domain.value_objects import RelationType, RelationStatus
 from server.app.domain.errors import ValidationError
 
+
 class SemanticKnowledgeExtractor(KnowledgeExtractionPort):
-    def __init__(self, api_key: str = "", base_url: str = "https://api.openai.com/v1", model: str = "gpt-4o-mini", pipeline_version: str = "v1.2-echo-real"):
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
-        self.model = model
+    """Free, on-server extraction.
+
+    No remote/paid provider is used. The local linguistic extractor is a
+    placeholder for the entity/relationship extraction delivered in M3; it
+    never sends transcript text to a third party.
+    """
+
+    def __init__(self, pipeline_version: str = "v2.0-echo-mvp"):
         self.pipeline_version = pipeline_version
 
-    def extract(self, transcript: str, capture_id: str) -> KnowledgeItemEntity:
+    def extract(self, transcript: str, capture_id: str, user_id: str = "") -> KnowledgeItemEntity:
         clean_text = transcript.strip()
         if not clean_text:
             raise ValidationError("Cannot extract knowledge from empty transcript")
 
-        # 1. Remote LLM extraction if API key configured
-        if self.api_key:
-            try:
-                system_prompt = (
-                    "You are the knowledge extraction engine for Echo. "
-                    "Extract structured knowledge from this short spoken thought.\n"
-                    "Return ONLY valid JSON with exactly these keys:\n"
-                    "{\n"
-                    '  "title": "string (concise, max 5 words)",\n'
-                    '  "core_idea": "1-sentence summary of the main point",\n'
-                    '  "details": "concrete supporting details or observations",\n'
-                    '  "concepts": ["concept1", "concept2"],\n'
-                    '  "tags": ["tag1", "tag2"],\n'
-                    '  "open_questions": ["question 1"],\n'
-                    '  "candidate_relations": ["related topic or entity"]\n'
-                    "}"
-                )
-                payload = {
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": clean_text}
-                    ],
-                    "temperature": 0.2
-                }
-                req = urllib.request.Request(
-                    f"{self.base_url}/chat/completions",
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
-                    }
-                )
-                with urllib.request.urlopen(req, timeout=20) as res:
-                    data = json.loads(res.read().decode("utf-8"))
-                    content = data["choices"][0]["message"]["content"].strip()
-                    if content.startswith("```json"):
-                        content = content[7:-3]
-                    elif content.startswith("```"):
-                        content = content[3:-3]
-                    parsed = json.loads(content.strip())
-
-                    return KnowledgeItemEntity.create(
-                        id=capture_id,
-                        capture_id=capture_id,
-                        title=parsed.get("title", self._generate_title_from_text(clean_text)),
-                        core_idea=parsed.get("core_idea", clean_text),
-                        details=parsed.get("details", clean_text),
-                        transcript=clean_text,
-                        concepts=parsed.get("concepts", []),
-                        tags=parsed.get("tags", []),
-                        open_questions=parsed.get("open_questions", []),
-                        candidate_relations=parsed.get("candidate_relations", []),
-                        provenance=f"voice-pipeline-{self.pipeline_version}-ai",
-                    )
-            except Exception as e:
-                print(f"[Extract] Remote LLM error: {e}. Falling back to linguistic extractor.")
-
-        # 2. Local semantic linguistic knowledge extractor
         title = self._generate_title_from_text(clean_text)
         core_idea = self._extract_core_idea(clean_text)
         details = clean_text
@@ -90,6 +35,7 @@ class SemanticKnowledgeExtractor(KnowledgeExtractionPort):
         return KnowledgeItemEntity.create(
             id=capture_id,
             capture_id=capture_id,
+            user_id=user_id,
             title=title,
             core_idea=core_idea,
             details=details,

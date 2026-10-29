@@ -1,9 +1,10 @@
+"""M2 client API security: session auth, ownership isolation, transcript privacy."""
+
 import os
 import uuid
 
 from fastapi.testclient import TestClient
 
-from server.app.main import app
 from server.app.api.dependencies import get_container
 from server.app.application.dto import ProcessingJobDTO
 from server.app.domain.entities import (
@@ -12,180 +13,303 @@ from server.app.domain.entities import (
     KnowledgeItemEntity,
     RelationshipEntity,
 )
-
-from server.app.infrastructure.config import get_settings
+from server.app.main import app
 
 client = TestClient(app)
-
-
-def _headers():
-    return {"Authorization": f"Bearer {get_settings().client_token}"}
 
 
 def _container():
     return get_container()
 
 
-def _insert_capture_with_audio(capture_id: str) -> str:
+def _insert_capture(user_id: str, capture_id: str = None, with_audio: bool = True, status: str = "ready"):
     container = _container()
-    os.makedirs(container.settings.upload_dir, exist_ok=True)
-    path = os.path.join(container.settings.upload_dir, f"{capture_id}.m4a")
-    with open(path, "wb") as handle:
-        handle.write(b"audio")
-    container.capture_repo.save(
-        CaptureEntity(
-            id=capture_id,
-            idempotency_key=capture_id,
-            audio_path=path,
-            duration_ms=1000,
-            status="ready",
-        )
+    capture_id = capture_id or str(uuid.uuid4())
+    user_dir = os.path.join(container.settings.upload_dir, user_id)
+    os.makedirs(user_dir, exist_ok=True)
+    audio_path = os.path.join(user_dir, f"{capture_id}.m4a")
+    if with_audio:
+        with open(audio_path, "wb") as handle:
+            handle.write(b"audio-bytes")
+    capture = CaptureEntity(
+        id=capture_id,
+        idempotency_key=f"key-{capture_id}",
+        audio_path=audio_path if with_audio else "",
+        user_id=user_id,
+        duration_ms=1000,
+        status=status,
     )
-    return path
+    container.capture_repo.save(capture)
+    return capture, audio_path
 
 
-def _insert_knowledge(capture_id: str):
+def _insert_knowledge(user_id: str, capture_id: str, transcript: str = "private transcript"):
     container = _container()
     item = KnowledgeItemEntity.create(
-        id=capture_id,
+        id=str(uuid.uuid4()),
         capture_id=capture_id,
-        title="Delete me",
-        core_idea="A test idea",
-        transcript="A test transcript",
+        title="Private item",
+        core_idea="A private idea",
+        transcript=transcript,
+        user_id=user_id,
     )
     container.knowledge_repo.save(item)
-    container.embedding_repo.save(item.id, b"\x00" * 16)
+    container.embedding_repo.save(item.id, b"\x00" * 16, user_id=user_id)
     return item
 
 
-def test_client_endpoints_require_token():
-    token = get_settings().client_token
+def test_client_endpoints_require_a_session(user_factory):
+    assert client.get("/api/recordings").status_code == 401
     assert client.get("/api/knowledge").status_code == 401
+    assert client.get("/api/graph").status_code == 401
+    assert client.get("/api/knowledge/semantic-search?q=hello").status_code == 401
+    assert client.delete(f"/api/captures/{uuid.uuid4()}").status_code == 401
+    assert client.get(f"/api/recordings/{uuid.uuid4()}/audio").status_code == 401
     assert client.get(
-        "/api/knowledge", headers={"X-Client-Token": token}
-    ).status_code == 200
+        "/api/knowledge", headers={"Authorization": "Bearer not-a-session"}
+    ).status_code == 401
+
+    # The admin shared secret is not a user session and must not unlock client data.
+    from server.app.infrastructure.config import get_settings
+
     assert client.get(
-        "/api/knowledge", headers={"Authorization": "Bearer wrong"}
+        "/api/knowledge",
+        headers={"Authorization": f"Bearer {get_settings().admin_token}"},
     ).status_code == 401
 
 
-def test_client_auth_fails_closed_when_token_is_not_configured(monkeypatch):
-    monkeypatch.setattr(get_settings(), "client_token", "")
-    response = client.get("/api/knowledge")
-    assert response.status_code == 503
-
-
-def test_upload_rejects_non_uuid_capture_id():
-    files = {"file": ("capture.m4a", b"\x00" * 32, "audio/mp4")}
-    data = {
-        "capture_id": "../escape",
-        "idempotency_key": "key",
-        "duration_ms": "1000",
-    }
-    response = client.post(
-        "/api/captures/upload", files=files, data=data, headers=_headers()
+def test_unverified_user_cannot_create_or_read_records(user_factory):
+    user = user_factory(client, verified=False)
+    assert client.get("/api/auth/me", headers=user.headers).status_code == 200
+    assert client.get("/api/knowledge", headers=user.headers).status_code == 403
+    assert client.get("/api/recordings", headers=user.headers).status_code == 403
+    upload = client.post(
+        "/api/captures/upload",
+        headers=user.headers,
+        files={"file": ("capture.m4a", b"\x00" * 32, "audio/mp4")},
+        data={
+            "capture_id": str(uuid.uuid4()),
+            "idempotency_key": str(uuid.uuid4()),
+            "duration_ms": "1000",
+        },
     )
-    assert response.status_code == 400
-    upload_root = os.path.realpath(_container().settings.upload_dir)
-    escaped = os.path.realpath(os.path.join(upload_root, "..", "escape.m4a"))
-    assert not os.path.exists(escaped)
+    assert upload.status_code == 403
 
 
-def test_upload_rejects_oversized_body(monkeypatch):
-    container = _container()
-    monkeypatch.setattr(container.settings, "max_upload_bytes", 10)
-    capture_id = str(uuid.uuid4())
-    files = {"file": ("capture.m4a", b"\x00" * 64, "audio/mp4")}
-    data = {
-        "capture_id": capture_id,
-        "idempotency_key": capture_id,
-        "duration_ms": "1000",
-    }
-    response = client.post(
-        "/api/captures/upload", files=files, data=data, headers=_headers()
-    )
-    assert response.status_code == 413
-    assert not os.path.exists(
-        os.path.join(container.settings.upload_dir, f"{capture_id}.m4a")
-    )
+def test_missing_consent_blocks_data_routes(user_factory):
+    user = user_factory(client, consent=False)
+    assert client.get("/api/knowledge", headers=user.headers).status_code == 403
+    assert client.get("/api/graph", headers=user.headers).status_code == 403
+    assert client.get("/api/consent", headers=user.headers).json()["granted"] is False
 
 
-def test_delete_capture_removes_all_associated_data():
-    capture_id = str(uuid.uuid4())
-    audio_path = _insert_capture_with_audio(capture_id)
-    item = _insert_knowledge(capture_id)
+def test_transcripts_are_never_exposed_to_clients(user_factory):
+    user = user_factory(client)
+    capture, _ = _insert_capture(user.id)
+    item = _insert_knowledge(user.id, capture.id, transcript="TOP-SECRET-TRANSCRIPT")
 
-    container = _container()
-    related = _insert_knowledge(str(uuid.uuid4()))
+    listing = client.get("/api/knowledge", headers=user.headers)
+    assert listing.status_code == 200
+    assert "TOP-SECRET-TRANSCRIPT" not in listing.text
+    assert all("transcript" not in entry for entry in listing.json())
+
+    detail = client.get(f"/api/knowledge/{item.id}", headers=user.headers)
+    assert detail.status_code == 200
+    assert "transcript" not in detail.json()
+    assert "TOP-SECRET-TRANSCRIPT" not in detail.text
+
+    # The owner may still play the retained audio, but never receives the text.
+    audio = client.get(f"/api/recordings/{capture.id}/audio", headers=user.headers)
+    assert audio.status_code == 200
+    assert audio.content == b"audio-bytes"
+
+
+def test_users_cannot_read_or_mutate_each_others_records(user_factory):
+    alice = user_factory(client)
+    bob = user_factory(client)
+
+    capture, audio_path = _insert_capture(alice.id)
+    item = _insert_knowledge(alice.id, capture.id)
+    other = _insert_knowledge(alice.id, str(uuid.uuid4()))
     relation = RelationshipEntity.create(
-        from_id=item.id, to_id=related.id, id=str(uuid.uuid4())
+        from_id=item.id, to_id=other.id, user_id=alice.id
     )
-    container.rel_repo.save(relation)
-    container.job_repo.record_job(
+    _container().rel_repo.save(relation)
+    _container().job_repo.record_job(
         ProcessingJobDTO(
-            id=capture_id,
-            capture_id=capture_id,
+            id=capture.id,
+            capture_id=capture.id,
             stage="completed",
             status="ready",
             duration_ms=1000,
             error_message=None,
             created_at="2026-01-01T00:00:00Z",
             updated_at="2026-01-01T00:00:00Z",
+            user_id=alice.id,
+        )
+    )
+
+    assert client.get("/api/knowledge", headers=bob.headers).json() == []
+    assert client.get(f"/api/knowledge/{item.id}", headers=bob.headers).status_code == 404
+    assert client.delete(f"/api/knowledge/{item.id}", headers=bob.headers).status_code == 404
+    assert client.get(f"/api/knowledge/{item.id}", headers=alice.headers).status_code == 200
+
+    assert client.get("/api/recordings", headers=bob.headers).json() == []
+    assert client.get(f"/api/recordings/{capture.id}/status", headers=bob.headers).status_code == 404
+    assert client.get(f"/api/recordings/{capture.id}/audio", headers=bob.headers).status_code == 404
+
+    graph = client.get("/api/graph", headers=bob.headers).json()
+    assert graph["nodes"] == [] and graph["edges"] == []
+
+    assert client.patch(
+        f"/api/relationships/{relation.id}?status=confirmed", headers=bob.headers
+    ).status_code == 404
+    assert client.delete(f"/api/relationships/{relation.id}", headers=bob.headers).status_code == 404
+    assert _container().rel_repo.get_by_id(relation.id, user_id=alice.id) is not None
+
+    # Deleting another user's capture reports nothing deleted and keeps the data.
+    response = client.delete(f"/api/captures/{capture.id}", headers=bob.headers)
+    assert response.status_code == 200
+    assert response.json()["deleted"] is False
+    assert _container().capture_repo.get_by_id(capture.id, user_id=alice.id) is not None
+    assert os.path.exists(audio_path)
+
+    # Alice still sees her own records.
+    alice_recordings = client.get("/api/recordings", headers=alice.headers).json()
+    assert [r["capture_id"] for r in alice_recordings] == [capture.id]
+    assert alice_recordings[0]["knowledge_item_id"] == item.id
+    assert client.get(f"/api/recordings/{capture.id}/status", headers=alice.headers).json()["status"] == "ready"
+
+
+def test_upload_rejects_non_uuid_and_foreign_capture_ids(user_factory):
+    alice = user_factory(client)
+    bob = user_factory(client)
+    alice_capture, alice_audio = _insert_capture(alice.id)
+
+    escape = client.post(
+        "/api/captures/upload",
+        headers=bob.headers,
+        files={"file": ("capture.m4a", b"\x00" * 32, "audio/mp4")},
+        data={
+            "capture_id": "../escape",
+            "idempotency_key": "key",
+            "duration_ms": "1000",
+        },
+    )
+    assert escape.status_code == 400
+    upload_root = os.path.realpath(_container().settings.upload_dir)
+    assert not os.path.exists(os.path.realpath(os.path.join(upload_root, "..", "escape.m4a")))
+
+    conflict = client.post(
+        "/api/captures/upload",
+        headers=bob.headers,
+        files={"file": ("capture.m4a", b"bob-audio", "audio/mp4")},
+        data={
+            "capture_id": alice_capture.id,
+            "idempotency_key": str(uuid.uuid4()),
+            "duration_ms": "1000",
+        },
+    )
+    assert conflict.status_code == 409
+    with open(alice_audio, "rb") as handle:
+        assert handle.read() == b"audio-bytes"
+
+
+def test_upload_rejects_oversized_body(user_factory, monkeypatch):
+    user = user_factory(client)
+    container = _container()
+    monkeypatch.setattr(container.settings, "max_upload_bytes", 10)
+    capture_id = str(uuid.uuid4())
+
+    response = client.post(
+        "/api/captures/upload",
+        headers=user.headers,
+        files={"file": ("capture.m4a", b"\x00" * 64, "audio/mp4")},
+        data={
+            "capture_id": capture_id,
+            "idempotency_key": capture_id,
+            "duration_ms": "1000",
+        },
+    )
+    assert response.status_code == 413
+    # The partial file is removed and never escapes the user's own directory.
+    assert not os.path.exists(
+        os.path.join(container.settings.upload_dir, user.id, f"{capture_id}.m4a")
+    )
+
+
+def test_upload_is_idempotent_per_user(user_factory):
+    user = user_factory(client)
+    capture, _ = _insert_capture(user.id, status="ready")
+    item = _insert_knowledge(user.id, capture.id)
+    # The existing capture uses this idempotency key.
+    idem = capture.idempotency_key
+
+    response = client.post(
+        "/api/captures/upload",
+        headers=user.headers,
+        files={"file": ("capture.m4a", b"replacement-audio", "audio/mp4")},
+        data={
+            "capture_id": str(uuid.uuid4()),
+            "idempotency_key": idem,
+            "duration_ms": "1000",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["capture_id"] == capture.id
+    assert body["knowledge_item"]["id"] == item.id
+    assert "transcript" not in body["knowledge_item"]
+    # No new capture was created for the same key.
+    assert _container().capture_repo.count(user_id=user.id) == 1
+
+
+def test_delete_capture_removes_all_owned_data(user_factory):
+    user = user_factory(client)
+    capture, audio_path = _insert_capture(user.id)
+    item = _insert_knowledge(user.id, capture.id)
+    related = _insert_knowledge(user.id, str(uuid.uuid4()))
+    relation = RelationshipEntity.create(
+        from_id=item.id, to_id=related.id, user_id=user.id
+    )
+    container = _container()
+    container.rel_repo.save(relation)
+    container.job_repo.record_job(
+        ProcessingJobDTO(
+            id=capture.id,
+            capture_id=capture.id,
+            stage="completed",
+            status="ready",
+            duration_ms=1000,
+            error_message=None,
+            created_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
+            user_id=user.id,
         )
     )
     container.eval_repo.save(
         EvalRecordEntity(
             id=str(uuid.uuid4()),
-            capture_id=capture_id,
+            capture_id=capture.id,
             transcript="test",
             structured_json="{}",
+            user_id=user.id,
             consent_given=True,
         )
     )
 
-    response = client.delete(f"/api/captures/{capture_id}", headers=_headers())
+    response = client.delete(f"/api/captures/{capture.id}", headers=user.headers)
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["deleted"] is True
     assert body["audio_removed"] is True
     assert not os.path.exists(audio_path)
-    assert container.capture_repo.get_by_id(capture_id) is None
-    assert container.knowledge_repo.get_by_id(capture_id) is None
-    assert container.job_repo.get_by_capture_id(capture_id) is None
-    assert container.eval_repo.get_all_consented() == []
-    assert container.rel_repo.get_by_id(relation.id) is None
+    assert container.capture_repo.get_by_id(capture.id, user_id=user.id) is None
+    assert container.knowledge_repo.get_by_id(item.id, user_id=user.id) is None
+    assert container.job_repo.get_by_capture_id(capture.id, user_id=user.id) is None
+    assert container.eval_repo.get_all_consented(user_id=user.id) == []
+    assert container.rel_repo.get_by_id(relation.id, user_id=user.id) is None
 
-
-def test_delete_capture_is_idempotent():
-    capture_id = str(uuid.uuid4())
-    first = client.delete(f"/api/captures/{capture_id}", headers=_headers())
-    second = client.delete(f"/api/captures/{capture_id}", headers=_headers())
-    assert first.status_code == 200
+    second = client.delete(f"/api/captures/{capture.id}", headers=user.headers)
     assert second.status_code == 200
     assert second.json()["deleted"] is False
-
-
-def test_consent_withdrawal_purges_retained_audio_and_eval_records():
-    container = _container()
-    capture_id = str(uuid.uuid4())
-    audio_path = _insert_capture_with_audio(capture_id)
-    container.eval_repo.save(
-        EvalRecordEntity(
-            id=str(uuid.uuid4()),
-            capture_id=capture_id,
-            transcript="test",
-            structured_json="{}",
-            consent_given=True,
-        )
-    )
-
-    response = client.post(
-        "/api/eval/consent",
-        json={"consent_given": False},
-        headers=_headers(),
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["purged_audio_files"] >= 1
-    assert not os.path.exists(audio_path)
-    assert container.capture_repo.get_by_id(capture_id).audio_path == ""
-    assert container.eval_repo.get_all_consented() == []

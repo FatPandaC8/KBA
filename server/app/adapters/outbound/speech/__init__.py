@@ -1,9 +1,8 @@
 import os
-import json
 import subprocess
-import urllib.request
+
 import numpy as np
-from typing import Optional
+
 from server.app.application.ports import AudioTranscriptionPort
 from server.app.domain.errors import AudioProcessingError
 
@@ -36,9 +35,10 @@ def decode_audio_ffmpeg(file_path: str, sr: int = 16000) -> np.ndarray:
     return np.frombuffer(raw_bytes, np.int16).flatten().astype(np.float32) / 32768.0
 
 class FasterWhisperSpeechAdapter(AudioTranscriptionPort):
-    def __init__(self, api_key: str = "", base_url: str = "https://api.openai.com/v1"):
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
+    """Local faster-whisper STT. No remote or paid provider is used."""
+
+    def __init__(self):
+        pass
 
     def transcribe(self, audio_file_path: str) -> str:
         if not os.path.exists(audio_file_path):
@@ -48,38 +48,6 @@ class FasterWhisperSpeechAdapter(AudioTranscriptionPort):
         if file_size < 100:
             raise AudioProcessingError(f"Audio file is too small or corrupted ({file_size} bytes)")
 
-        # 1. If remote OpenAI API key is configured, attempt remote Whisper first
-        if self.api_key:
-            try:
-                boundary = "----WebKitFormBoundaryEchoSTT7MA4"
-                with open(audio_file_path, "rb") as f:
-                    file_bytes = f.read()
-
-                body = (
-                    f"--{boundary}\r\n"
-                    f'Content-Disposition: form-data; name="model"\r\n\r\nwhisper-1\r\n'
-                    f"--{boundary}\r\n"
-                    f'Content-Disposition: form-data; name="file"; filename="audio.m4a"\r\n'
-                    f"Content-Type: audio/m4a\r\n\r\n"
-                ).encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
-
-                req = urllib.request.Request(
-                    f"{self.base_url}/audio/transcriptions",
-                    data=body,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": f"multipart/form-data; boundary={boundary}"
-                    }
-                )
-                with urllib.request.urlopen(req, timeout=20) as res:
-                    data = json.loads(res.read().decode("utf-8"))
-                    text = data.get("text", "").strip()
-                    if text:
-                        return text
-            except Exception as e:
-                print(f"[STT] Remote Whisper failed: {e}. Falling back to local faster-whisper.")
-
-        # 2. Local real faster-whisper STT
         whisper_model = get_whisper_model()
         if whisper_model is None:
             raise AudioProcessingError("Local faster-whisper STT engine is not available")
