@@ -1,0 +1,9 @@
+[
+  {
+    "id": "qa-003",
+    "question": "What was the user's third capture about obscure 17th-century poetry?",
+    "expected_answer": null,
+    "expected_entities": [],
+    "refusal": true
+  }
+]
