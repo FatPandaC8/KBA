@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 
 import 'package:mobile/core/theme/echo_colors.dart';
 import 'package:mobile/services/backend_service.dart';
@@ -29,7 +30,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   late final TextEditingController _emailController;
   late final TextEditingController _passwordController;
-  late final TextEditingController _serverController;
   late final TextEditingController _tokenController;
 
   bool _obscurePassword = true;
@@ -43,9 +43,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _emailController = TextEditingController();
     _passwordController = TextEditingController();
-    _serverController = TextEditingController(
-      text: widget.settingsService.serverUrl,
-    );
     _tokenController = TextEditingController();
     _mode = widget.settingsService.isAuthenticated
         ? _SettingsMode.settings
@@ -57,7 +54,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
-    _serverController.dispose();
     _tokenController.dispose();
     super.dispose();
   }
@@ -201,61 +197,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       _setStatus(
           'Consent update failed. The change was not applied: $e', false);
-    }
-  }
-
-  Future<void> _saveServer() async {
-    final rawUrl = _serverController.text.trim();
-    final uri = Uri.tryParse(rawUrl);
-    if (uri == null ||
-        !uri.hasScheme ||
-        (uri.scheme != 'http' && uri.scheme != 'https') ||
-        uri.host.isEmpty) {
-      _setStatus(
-          'Enter a valid URL starting with http:// or https://.', false);
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      widget.settingsService.serverUrl = rawUrl.replaceAll(RegExp(r'/+$'), '');
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _statusMessage = 'Server URL saved.';
-        _statusOk = true;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _statusMessage = 'Could not save server URL: $e';
-        _statusOk = false;
-      });
-    }
-  }
-
-  Future<void> _testConnection() async {
-    await _saveServer();
-    if (!mounted || _statusMessage == null) return;
-    setState(() {
-      _saving = true;
-      _statusMessage = 'Testing connection…';
-    });
-    try {
-      final result = await widget.backendService.testConnection();
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _statusOk = result.ok;
-        _statusMessage = result.message;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _statusOk = false;
-        _statusMessage = 'Could not reach server: $e';
-      });
     }
   }
 
@@ -492,79 +433,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         const SizedBox(height: 20),
 
-        const Text(
-          'SERVER CONNECTION',
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.2,
-            color: EchoColors.muted,
+        if (kDebugMode) ...[
+          const Text(
+            'SERVER CONNECTION (debug only)',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.2,
+              color: EchoColors.muted,
+            ),
           ),
-        ),
-        const SizedBox(height: 10),
-        Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: EchoColors.border),
-          ),
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextField(
-                controller: _serverController,
-                keyboardType: TextInputType.url,
-                autocorrect: false,
-                decoration: const InputDecoration(
-                  labelText: 'Backend URL',
-                  hintText: 'http://192.168.1.20:8000',
-                  helperText:
-                      'USB development: adb reverse tcp:8000 tcp:8000',
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _saving ? null : _saveServer,
-                      child: const Text('Save'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _saving ? null : _testConnection,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: EchoColors.forest,
-                        foregroundColor: Colors.white,
-                      ),
-                      child: const Text('Test connection'),
-                    ),
-                  ),
-                ],
-              ),
-              if (_statusMessage != null) ...[
-                const SizedBox(height: 10),
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: EchoColors.border),
+            ),
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 Text(
-                  _statusMessage!,
-                  style: TextStyle(
+                  'Backend URL: ${widget.settingsService.serverUrl}',
+                  style: const TextStyle(
                     fontSize: 12,
-                    height: 1.4,
-                    color: _statusOk
-                        ? EchoColors.forest
-                        : EchoColors.danger,
+                    fontWeight: FontWeight.w600,
+                    color: EchoColors.ink,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Configured at build time (--dart-define BACKEND_URL=...). '
+                  'Not user-editable; never shipped in release builds.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: EchoColors.muted,
                   ),
                 ),
               ],
-            ],
+            ),
           ),
-        ),
-
-        const SizedBox(height: 24),
-
+          const SizedBox(height: 24),
+        ],
         const Text(
           'AI-PROVIDER CONSENT',
           style: TextStyle(

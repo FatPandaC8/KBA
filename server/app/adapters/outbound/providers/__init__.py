@@ -1,11 +1,5 @@
-"""Free-only provider registry.
-
-Every provider listed here runs on the server or on the user's device. There is
-no paid fallback: if a local component is unavailable the API reports the
-component and the affected feature, never an alternative vendor (NET-01).
-"""
-
 import importlib.util
+import os
 import shutil
 from typing import List
 
@@ -27,6 +21,7 @@ class LocalProviderRegistry(ProviderRegistryPort):
     def list_providers(self) -> List[ProviderInfoDTO]:
         stt_ready = _module_available("faster_whisper") and shutil.which("ffmpeg") is not None
         embeddings_ready = _module_available("fastembed")
+        groq_ready = bool(os.getenv("GROQ_API_KEY"))
         return [
             ProviderInfoDTO(
                 id="stt_local",
@@ -61,5 +56,23 @@ class LocalProviderRegistry(ProviderRegistryPort):
                 receives=["entity and relationship summaries"],
                 trains_on_data=False,
                 available=True,
+            ),
+            ProviderInfoDTO(
+                id="extraction_groq",
+                name="Groq free models (hosted)",
+                kind="extraction",
+                receives=["transcript text"],
+                trains_on_data=False,
+                available=groq_ready,
+                detail="" if groq_ready else "GROQ_API_KEY is not set",
+            ),
+            ProviderInfoDTO(
+                id="answering_groq",
+                name="Groq free models (hosted)",
+                kind="question_answering",
+                receives=["entity and relationship summaries"],
+                trains_on_data=False,
+                available=groq_ready,
+                detail="" if groq_ready else "GROQ_API_KEY is not set",
             ),
         ]

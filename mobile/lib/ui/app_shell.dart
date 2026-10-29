@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:mobile/services/audio_service.dart';
@@ -60,6 +62,11 @@ class _AppShellState extends State<AppShell> {
   /// immediately, without a relaunch.
   void _onSessionChanged() {
     if (!mounted) return;
+    // On logout, clear the local notes cache so nothing user-specific survives
+    // in echo_notes.db (the token is already cleared by SettingsService).
+    if (!widget.settingsService.isAuthenticated) {
+      unawaited(widget.noteProvider.clearLocalNotes());
+    }
     setState(() {
       _isSettingsOpen = false;
       _selectedNoteId = null;

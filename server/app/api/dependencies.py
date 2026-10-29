@@ -29,8 +29,10 @@ from server.app.adapters.outbound.persistence import (
 from server.app.adapters.outbound.embeddings import FastEmbedProvider
 from server.app.adapters.outbound.speech import FasterWhisperSpeechAdapter
 from server.app.adapters.outbound.extraction import SemanticKnowledgeExtractor
+from server.app.adapters.outbound.extraction.groq import GroqExtractionAdapter
 from server.app.adapters.outbound.providers import LocalProviderRegistry
 from server.app.adapters.outbound.answering import LocalGraphAnswerProvider
+from server.app.adapters.outbound.answering.groq import GroqAnswerProvider
 from server.app.adapters.outbound.identity import LogEmailAdapter, GoogleTokenInfoVerifier
 from server.app.application.use_cases import (
     ProcessCaptureUseCase,
@@ -80,8 +82,14 @@ class Container:
         # Free/local AI adapters only. No paid provider or paid fallback exists.
         self.embedder = FastEmbedProvider()
         self.transcriber = FasterWhisperSpeechAdapter()
-        self.extractor = SemanticKnowledgeExtractor(pipeline_version=settings.pipeline_version)
-        self.answerer = LocalGraphAnswerProvider()
+        if settings.groq_api_key:
+            self.extractor = GroqExtractionAdapter(api_key=settings.groq_api_key, model=settings.groq_model, pipeline_version=settings.pipeline_version)
+        else:
+            self.extractor = SemanticKnowledgeExtractor(pipeline_version=settings.pipeline_version)
+        if settings.groq_api_key:
+            self.answerer = GroqAnswerProvider(api_key=settings.groq_api_key, model=settings.groq_model)
+        else:
+            self.answerer = LocalGraphAnswerProvider()
         self.provider_registry = LocalProviderRegistry(pipeline_version=settings.pipeline_version)
         self.email_port = LogEmailAdapter(settings.email_outbox_path)
         self.google_verifier = GoogleTokenInfoVerifier(settings.google_client_id)

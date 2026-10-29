@@ -45,6 +45,14 @@ async def lifespan(app: FastAPI):
 settings = get_settings()
 container = get_container()
 
+# Log the resolved dev DB path at startup so operators can confirm exactly
+# which SQLite file owns this environment (one DB per environment rule).
+import logging as _logging
+_logging.getLogger("echo").info("Resolved ECHO_DB_PATH: %s", settings.db_path)
+_logging.getLogger("echo").info("ECHO_ENV: %s | consent_version: %s | worker_enabled: %s",
+                                settings.app_env, settings.consent_version,
+                                settings.worker_enabled)
+
 app = FastAPI(
     title="Echo Knowledge API",
     version=settings.pipeline_version,

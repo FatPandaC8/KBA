@@ -31,6 +31,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   GraphDataModel? _graph;
   bool _loading = true;
   String? _loadError;
+  String? _graphErrorMessage;
+  String? _graphErrorSubmessage;
 
   String _query = '';
   bool _searching = false;
@@ -41,6 +43,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   int _focusSequence = 0;
 
   Set<String> _readySignature = {};
+  Timer? _reloadTimer;
 
   @override
   void initState() {
@@ -64,6 +67,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   void dispose() {
     widget.noteProvider.removeListener(_onProviderChanged);
     _debounce?.cancel();
+    _reloadTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -89,6 +93,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
       setState(() {
         _loading = true;
         _loadError = null;
+        _graphErrorMessage = null;
+        _graphErrorSubmessage = null;
       });
     }
     try {
@@ -98,14 +104,69 @@ class _LibraryScreenState extends State<LibraryScreen> {
         _graph = graph;
         _loading = false;
         _loadError = null;
+        _graphErrorMessage = null;
+        _graphErrorSubmessage = null;
       });
-    } catch (e) {
+      // Connectivity returned: stop the background reload attempts.
+      _reloadTimer?.cancel();
+      _reloadTimer = null;
+    } on FormatException catch (_) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _loadError = e.toString();
+        _graphErrorMessage = 'Unable to load graph';
+        _graphErrorSubmessage =
+            'The server returned an invalid response. Please retry when the server is reachable.';
       });
+      _scheduleAutoReload();
+    } catch (e) {
+      if (!mounted) return;
+      // Determine error type for user-friendly messaging
+      final errorText = e.toString().toLowerCase();
+      setState(() {
+        _loading = false;
+        _graphErrorMessage = 'Could not load graph';
+        if (errorText.contains('socket') ||
+            errorText.contains('timeout') ||
+            errorText.contains('network') ||
+            errorText.contains('unreachable') ||
+            errorText.contains('connection')) {
+          _graphErrorSubmessage =
+              'No internet connection. Please check your connection and retry.';
+        } else if (errorText.contains('401') || errorText.contains('403')) {
+          _graphErrorSubmessage =
+              'Authentication failed. Please sign in again and retry.';
+        } else {
+          _graphErrorSubmessage =
+              'Server error. Please retry when the server is reachable.';
+        }
+      });
+      _scheduleAutoReload();
     }
+  }
+
+  /// When the graph fails to load, poll the health endpoint in the background
+  /// and auto-reload once connectivity returns. The manual Retry button keeps
+  /// working at any time (NET-01).
+  void _scheduleAutoReload() {
+    if (_reloadTimer != null || _graphErrorMessage == null) return;
+    _reloadTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+      if (!mounted) {
+        _reloadTimer?.cancel();
+        _reloadTimer = null;
+        return;
+      }
+      try {
+        final healthy = await widget.noteProvider.backendService.checkHealth();
+        if (!healthy) return;
+      } catch (_) {
+        return;
+      }
+      // Connectivity is back: reload and stop polling.
+      _reloadTimer?.cancel();
+      _reloadTimer = null;
+      if (mounted) _loadGraph();
+    });
   }
 
   void _onQueryChanged(String value) {
@@ -448,17 +509,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
               size: 26,
             ),
             const SizedBox(height: 10),
-            const Text(
-              'Your graph could not be loaded.',
-              style: TextStyle(
+            Text(
+              _graphErrorMessage ?? 'Could not load graph',
+              style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
                 color: EchoColors.ink,
               ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 4),
-            const Text(
-              'Nothing was changed. Retry when the server is reachable.',
+            Text(
+              _graphErrorSubmessage ?? 'Please retry when the server is reachable',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 11, color: EchoColors.muted),
             ),

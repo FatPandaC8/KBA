@@ -79,4 +79,23 @@ class NoteRepository {
     );
     return results.map((m) => Note.fromMap(m)).toList();
   }
+
+  /// Deletes every local note and its local audio file. Used on logout so no
+  /// user-specific data survives in the client database (echo_notes.db).
+  Future<void> clearAllNotes() async {
+    final db = await _dbHelper.database;
+    final maps = await db.query('notes');
+    for (final m in maps) {
+      final note = Note.fromMap(m);
+      if (note.audioPath != null && note.audioPath!.isNotEmpty) {
+        try {
+          final file = File(note.audioPath!);
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (_) {}
+      }
+    }
+    await db.delete('notes');
+  }
 }

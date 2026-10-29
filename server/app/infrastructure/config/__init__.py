@@ -52,7 +52,9 @@ class ServerSettings:
     expose_dev_tokens: bool = os.getenv("ECHO_ENV", "production") in ("test", "development")
 
     # Consent. Bump the version when the provider list or data use changes.
-    consent_version: str = os.getenv("ECHO_CONSENT_VERSION", "2026-10-29-v1")
+    consent_version: str = os.getenv("ECHO_CONSENT_VERSION", "2026-10-29-v3")
+    groq_api_key: str = os.getenv("GROQ_API_KEY", "")
+    groq_model: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
     ai_providers_json: str = os.getenv("ECHO_AI_PROVIDERS", "")
 
     # Processing jobs (PRC-02 … PRC-05)

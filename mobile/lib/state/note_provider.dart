@@ -724,6 +724,13 @@ class NoteProvider extends ChangeNotifier {
     }
   }
 
+  /// Clears every locally cached note (and its audio) so nothing user-specific
+  /// survives in echo_notes.db after logout.
+  Future<void> clearLocalNotes() async {
+    await _repository.clearAllNotes();
+    await loadNotes();
+  }
+
   void clearAskError() {
     _askError = null;
     notifyListeners();
