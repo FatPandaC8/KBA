@@ -57,9 +57,8 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
       await widget.noteProvider.retryNote(note.id);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Retry failed: $e')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Retry failed: $e')));
     } finally {
       if (mounted) setState(() => _busyId = null);
     }
@@ -124,9 +123,8 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
                       final expanded = _expandedId == note.id;
                       final failed = note.status == ProcessingStatus.failed;
                       final busy = _busyId == note.id;
-                      final date = DateFormat(
-                        'MMM d, yyyy · h:mm a',
-                      ).format(note.createdAt);
+                      final date = DateFormat('MMM d, yyyy · h:mm a')
+                          .format(note.createdAt);
 
                       return Container(
                         decoration: BoxDecoration(

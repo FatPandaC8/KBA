@@ -102,11 +102,7 @@ void main() {
     repo = MockNoteRepository();
     final backendService = BackendService(settingsService);
 
-    noteProvider = NoteProvider(
-      repo,
-      backendService,
-      settingsService,
-    );
+    noteProvider = NoteProvider(repo, backendService, settingsService);
     await noteProvider.loadNotes();
     audioService = TestableAudioService();
   });

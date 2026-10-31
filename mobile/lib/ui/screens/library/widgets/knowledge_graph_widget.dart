@@ -229,9 +229,7 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
   Future<void> _openRelationshipDetail(GraphEdgeModel edge) async {
     if (_detailOpen) return;
     _detailOpen = true;
-    final titles = {
-      for (final node in widget.graph.nodes) node.id: node.title,
-    };
+    final titles = {for (final node in widget.graph.nodes) node.id: node.title};
     final relationship = EntityRelationshipModel(
       id: edge.id,
       fromId: edge.fromNode,
@@ -281,7 +279,9 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
   List<GraphEdgeModel> _validEdges(GraphDataModel graph) {
     final ids = graph.nodes.map((node) => node.id).toSet();
     return graph.edges
-        .where((edge) => ids.contains(edge.fromNode) && ids.contains(edge.toNode))
+        .where(
+          (edge) => ids.contains(edge.fromNode) && ids.contains(edge.toNode),
+        )
         .toList();
   }
 
@@ -535,7 +535,11 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
           Tooltip(
             message: 'Zoom out',
             child: IconButton(
-              icon: const Icon(Icons.remove, size: 18, color: EchoColors.forest),
+              icon: const Icon(
+                Icons.remove,
+                size: 18,
+                color: EchoColors.forest,
+              ),
               onPressed: () => _zoomBy(1 / 1.3),
               constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
               padding: EdgeInsets.zero,
@@ -764,10 +768,7 @@ class _RelationshipSheetState extends State<_RelationshipSheet> {
             _SheetRow(label: 'Type', value: rel.relationType),
             _SheetRow(label: 'Target', value: rel.toName),
             _SheetRow(label: 'Status', value: rel.status),
-            _SheetRow(
-              label: 'Certainty',
-              value: rel.certainty,
-            ),
+            _SheetRow(label: 'Certainty', value: rel.certainty),
             if (_error != null) ...[
               const SizedBox(height: 6),
               Text(
@@ -823,12 +824,7 @@ class _SheetRow extends StatelessWidget {
 /// Draws a path respecting the certainty encoding (KG-06): solid for confirmed,
 /// dashed for uncertain and dotted for conflicting. Line style — not colour —
 /// carries the meaning, so it survives grayscale.
-void drawPatternedPath(
-  Canvas canvas,
-  Path path,
-  Paint paint,
-  String pattern,
-) {
+void drawPatternedPath(Canvas canvas, Path path, Paint paint, String pattern) {
   if (pattern == 'solid') {
     canvas.drawPath(path, paint);
     return;
@@ -893,9 +889,7 @@ class _GraphEdgePainter extends CustomPainter {
         ..color = focused
             ? EchoColors.forest
             : (connected ? const Color(0xFF3F5A48) : const Color(0xFFAAB8AC))
-        ..strokeWidth = focused
-            ? 2.8
-            : (connected ? 2.1 : 1.2)
+        ..strokeWidth = focused ? 2.8 : (connected ? 2.1 : 1.2)
         ..style = PaintingStyle.stroke;
 
       final path = Path()
@@ -939,10 +933,7 @@ class _GraphEdgePainter extends CustomPainter {
       );
       painter.paint(
         canvas,
-        Offset(
-          anchor.dx - painter.width / 2,
-          anchor.dy - painter.height / 2,
-        ),
+        Offset(anchor.dx - painter.width / 2, anchor.dy - painter.height / 2),
       );
     }
   }

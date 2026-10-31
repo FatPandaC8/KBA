@@ -62,11 +62,7 @@ void main() {
 
     final mockRepo = MockNoteRepository();
     final backendService = BackendService(settingsService);
-    final provider = NoteProvider(
-      mockRepo,
-      backendService,
-      settingsService,
-    );
+    final provider = NoteProvider(mockRepo, backendService, settingsService);
 
     final n1 = Note(
       id: 'note-1',

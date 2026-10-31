@@ -91,8 +91,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   bool get _usesHostedProvider => _consentProviders.any(
-        (provider) => provider['id'].toString().contains('groq'),
-      );
+    (provider) => provider['id'].toString().contains('groq'),
+  );
 
   bool get _needsReconsent =>
       _recordedConsentVersion != null &&
@@ -207,22 +207,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _setConsent(bool value) async {    final previous = _consentGranted;
+  Future<void> _setConsent(bool value) async {
+    final previous = _consentGranted;
     setState(() => _consentGranted = value);
     try {
       await widget.backendService.updateConsent(value);
       if (!mounted) return;
       setState(() {
         _statusOk = true;
-        _statusMessage = value
-            ? 'AI-provider consent granted.'
-            : 'Consent withdrawn. Recording is blocked until consent is re-granted.';
+        _statusMessage = value ? 'AI-provider consent granted.' : 'Consent withdrawn. Recording is blocked until consent is re-granted.';
       });
     } catch (e) {
       setState(() => _consentGranted = previous);
       if (!mounted) return;
       _setStatus(
-          'Consent update failed. The change was not applied: $e', false);
+        'Consent update failed. The change was not applied: $e',
+        false,
+      );
     }
   }
 
@@ -402,9 +403,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           controller: _tokenController,
           autocorrect: false,
           enableSuggestions: false,
-          decoration: const InputDecoration(
-            labelText: 'Verification token',
-          ),
+          decoration: const InputDecoration(labelText: 'Verification token'),
         ),
         const SizedBox(height: 18),
         if (_statusMessage != null) ...[
@@ -422,9 +421,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             Expanded(
               child: OutlinedButton(
-                onPressed: _saving ? null : () {
-                  setState(() => _mode = _SettingsMode.signIn);
-                },
+                onPressed: _saving
+                    ? null
+                    : () {
+                        setState(() => _mode = _SettingsMode.signIn);
+                      },
                 child: const Text('Back to sign in'),
               ),
             ),
@@ -493,10 +494,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Text(
                   'Configured at build time (--dart-define BACKEND_URL=...). '
                   'Not user-editable; never shipped in release builds.',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: EchoColors.muted,
-                  ),
+                  style: TextStyle(fontSize: 11, color: EchoColors.muted),
                 ),
               ],
             ),
@@ -553,12 +551,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: Text(
                   _usesHostedProvider
                       ? 'Audio is transcribed on your server and never leaves '
-                          'it. Transcript text, and the notes retrieved for a '
-                          'question, are sent to $_hostedProviderName for '
-                          'extraction and answers.'
+                            'it. Transcript text, and the notes retrieved for a '
+                            'question, are sent to $_hostedProviderName for '
+                            'extraction and answers.'
                       : 'Recordings are transcribed and processed entirely on '
-                          'your configured server. Declining or withdrawing '
-                          'blocks recording until consent is re-granted.',
+                            'your configured server. Declining or withdrawing '
+                            'blocks recording until consent is re-granted.',
                   style: const TextStyle(
                     fontSize: 11,
                     color: EchoColors.muted,
@@ -566,8 +564,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 value: _consentGranted,
-                onChanged:
-                    widget.settingsService.isAuthenticated ? _setConsent : null,
+                onChanged: widget.settingsService.isAuthenticated
+                    ? _setConsent
+                    : null,
               ),
               if (_usesHostedProvider)
                 Padding(
@@ -590,12 +589,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       const SizedBox(height: 8),
                       const SelectableText(
                         'Privacy: https://console.groq.com/docs/your-data',
-                        style: TextStyle(fontSize: 10, color: EchoColors.forest),
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: EchoColors.forest,
+                        ),
                       ),
                       const SizedBox(height: 2),
                       const SelectableText(
                         'Terms: https://groq.com/terms-of-use',
-                        style: TextStyle(fontSize: 10, color: EchoColors.forest),
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: EchoColors.forest,
+                        ),
                       ),
                       if (_consentVersion.isNotEmpty) ...[
                         const SizedBox(height: 6),
@@ -629,10 +634,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Text(
                 'Transparent Processing',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
               ),
               SizedBox(height: 6),
               Text(
