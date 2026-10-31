@@ -152,14 +152,18 @@ app.include_router(protected_client_router)
 app.include_router(admin_router)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+ADMIN_BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../admin/dist"))
 if os.path.exists(STATIC_DIR):
     app.mount("/admin-assets", StaticFiles(directory=STATIC_DIR), name="static")
+if os.path.exists(ADMIN_BUILD_DIR):
+    app.mount("/admin-app", StaticFiles(directory=ADMIN_BUILD_DIR, html=True), name="admin-app")
 
 
 @app.get("/admin", include_in_schema=False)
 @app.get("/admin/", include_in_schema=False)
 def serve_admin():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    built = os.path.join(ADMIN_BUILD_DIR, "index.html")
+    return FileResponse(built if os.path.exists(built) else os.path.join(STATIC_DIR, "index.html"))
 
 
 @app.get("/", include_in_schema=False)

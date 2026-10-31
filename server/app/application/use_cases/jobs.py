@@ -217,6 +217,42 @@ class ProcessCaptureUseCase:
                 self.capture_repo.save(capture)
         return reset
 
+    def rerun_extraction_from_transcript(self, capture_id: str, user_id: str, transcript: str) -> Dict[str, int]:
+        """Replace graph output for one capture using its edited transcript.
+
+        Extraction is performed before removing the prior output. Shared graph
+        records remain attached to their other captures; capture-exclusive
+        records are removed through the same support index used by deletion.
+        """
+        result = self.extractor.extract_graph(
+            transcript.strip(), capture_id, user_id=user_id,
+            registry_snapshot=self._registry_snapshot(user_id),
+        )
+        supports = self.support_repo.list_for_record(user_id, capture_id)
+        entity_ids = {x["target_id"] for x in supports if x["target_kind"] == "entity"}
+        rel_ids = {x["target_id"] for x in supports if x["target_kind"] == "relationship"}
+        entity_ids.update(e.id for e in self.entity_repo.list_by_capture(capture_id, user_id=user_id))
+        rel_ids.update(r.id for r in self.rel_repo.get_all(user_id=user_id) if r.source_capture_id == capture_id)
+        self.support_repo.delete_for_record(user_id, capture_id)
+        removed_entities = removed_relationships = 0
+        for entity_id in entity_ids:
+            if self.support_repo.list_for_target(user_id, "entity", entity_id):
+                continue
+            removed_relationships += self.rel_repo.delete_for_entity(entity_id, user_id=user_id)
+            self.duplicate_repo.delete_for_entity(entity_id, user_id=user_id)
+            self.embedding_repo.delete(entity_id, user_id=user_id)
+            self.entity_repo.delete(entity_id, user_id=user_id)
+            removed_entities += 1
+        for rel_id in rel_ids:
+            if self.support_repo.list_for_target(user_id, "relationship", rel_id):
+                continue
+            if self.rel_repo.get_by_id(rel_id, user_id=user_id):
+                self.rel_repo.delete(rel_id, user_id=user_id)
+                self.embedding_repo.delete(rel_id, user_id=user_id)
+                removed_relationships += 1
+        self._save_extraction(user_id, capture_id, self._serialise_extraction(result))
+        return {"entities_removed": removed_entities, "relationships_removed": removed_relationships}
+
     # ---------------------------------------------------------------- worker
     def process_next(self, worker_id: str = "worker-1") -> Optional[ProcessingJobDTO]:
         now = current_utc_iso()

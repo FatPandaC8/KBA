@@ -9,8 +9,8 @@ import 'package:mobile/state/note_provider.dart';
 import 'screens/detail/note_detail_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/library/library_screen.dart';
-import 'screens/recordings/recordings_screen.dart';
 import 'screens/settings/settings_screen.dart';
+import 'screens/auth/welcome_screen.dart';
 import 'widgets/echo_bottom_nav.dart';
 
 /// Two tabs (PRD v2 navigation, Ask AI removed): Record (0), Graph (1).
@@ -34,7 +34,6 @@ class _AppShellState extends State<AppShell> {
   int _currentTab = 0;
   String? _selectedNoteId;
   bool _isSettingsOpen = false;
-  bool _isRecordingsOpen = false;
   bool _isRecording = false;
   final List<int> _tabHistory = [0];
 
@@ -69,7 +68,6 @@ class _AppShellState extends State<AppShell> {
     setState(() {
       _isSettingsOpen = false;
       _selectedNoteId = null;
-      _isRecordingsOpen = false;
       _currentTab = 0;
       _tabHistory
         ..clear()
@@ -102,7 +100,6 @@ class _AppShellState extends State<AppShell> {
     }
     _selectedNoteId = null;
     _isSettingsOpen = false;
-    _isRecordingsOpen = false;
     setState(() {});
   }
 
@@ -140,27 +137,8 @@ class _AppShellState extends State<AppShell> {
     });
   }
 
-  void _openRecordings() {
-    if (_isRecording) {
-      _showRecordingGuard();
-      return;
-    }
-    setState(() {
-      _isRecordingsOpen = true;
-      _selectedNoteId = null;
-      _isSettingsOpen = false;
-    });
-  }
-
-  void _closeRecordings() {
-    setState(() {
-      _isRecordingsOpen = false;
-    });
-  }
-
   bool get _canPopInternally =>
       _isSettingsOpen ||
-      _isRecordingsOpen ||
       _selectedNoteId != null ||
       _tabHistory.length > 1 ||
       _currentTab != 0;
@@ -168,8 +146,6 @@ class _AppShellState extends State<AppShell> {
   void _handlePop() {
     if (_isSettingsOpen) {
       _closeSettings();
-    } else if (_isRecordingsOpen) {
-      _closeRecordings();
     } else if (_selectedNoteId != null) {
       _closeDetail();
     } else if (_tabHistory.length > 1) {
@@ -188,13 +164,11 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
-    // When not signed in, the Settings screen doubles as the auth gateway
-    // (sign in / sign up / verify email). No other part of the app is usable.
+    // Logged-out users see only the welcoming auth experience.
     if (!widget.settingsService.isAuthenticated) {
-      return SettingsScreen(
+      return WelcomeScreen(
         settingsService: widget.settingsService,
         backendService: widget.noteProvider.backendService,
-        onBack: () {},
       );
     }
 
@@ -208,7 +182,7 @@ class _AppShellState extends State<AppShell> {
             onOpenDetail: _openDetail,
             onOpenSettings: _openSettings,
             onOpenLibrary: () => _switchTab(1),
-            onOpenRecordings: _openRecordings,
+            onOpenRecordings: () {},
             onRecordingStateChanged: (value) {
               if (_isRecording != value) {
                 setState(() => _isRecording = value);
@@ -221,7 +195,6 @@ class _AppShellState extends State<AppShell> {
       bottomNavigationBar: EchoBottomNav(
         currentIndex: _currentTab,
         onTap: (index) => _switchTab(index),
-        onCenterCapture: () => _switchTab(0),
       ),
     );
 
@@ -236,13 +209,6 @@ class _AppShellState extends State<AppShell> {
           // Kept mounted at all times so tab/search/filter state survives
           // navigation and detail/settings overlays.
           tabScaffold,
-          if (_isRecordingsOpen)
-            Positioned.fill(
-              child: RecordingsScreen(
-                noteProvider: widget.noteProvider,
-                onBack: _closeRecordings,
-              ),
-            ),
           if (_selectedNoteId != null)
             Positioned.fill(
               child: NoteDetailScreen(

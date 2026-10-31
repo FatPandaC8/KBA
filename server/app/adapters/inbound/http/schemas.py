@@ -379,3 +379,16 @@ class DetailedCaptureResponse(BaseModel):
     status: str
     error_message: Optional[str] = None
     resolved_item: Optional[KnowledgeItem] = None
+
+
+class AdminUserCreateRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AdminUserUpdateRequest(BaseModel):
+    email: str
+
+
+class AdminTranscriptUpdateRequest(BaseModel):
+    transcript: str

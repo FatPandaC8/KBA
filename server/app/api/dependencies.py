@@ -46,6 +46,7 @@ from server.app.application.use_cases import (
     DeleteCaptureUseCase,
     PurgeRetainedAudioUseCase,
     AccountDeletionUseCase,
+    AdminConsoleUseCase,
 )
 from server.app.application.auth import AuthService, ConsentService
 from server.app.domain.entities import UserEntity
@@ -216,6 +217,17 @@ class Container:
         )
 
         self.worker = JobWorker(self.process_capture_uc, poll_interval=settings.job_poll_seconds)
+        self.admin_console_uc = AdminConsoleUseCase(
+            db=self.db_manager,
+            auth_service=self.auth_service,
+            user_repo=self.user_repo,
+            account_delete=self.delete_account_uc,
+            capture_delete=self.delete_capture_uc,
+            process_capture=self.process_capture_uc,
+            worker=self.worker,
+            upload_dir=settings.upload_dir,
+            password_min_length=settings.password_min_length,
+        )
 
     # ---------------------------------------------------------- AI configuration
     def ai_config(self) -> Dict[str, Any]:

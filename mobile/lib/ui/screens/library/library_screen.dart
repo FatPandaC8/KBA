@@ -50,7 +50,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
     super.initState();
     widget.noteProvider.addListener(_onProviderChanged);
     _readySignature = _currentReadySignature();
-    _loadGraph();
+    // Graph is intentionally lazy: the initial canvas is a quiet search
+    // surface, not a dump of every entity in the account.
+    _loading = false;
   }
 
   @override
@@ -85,7 +87,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final signature = _currentReadySignature();
     if (setEquals(signature, _readySignature)) return;
     _readySignature = signature;
-    _loadGraph();
+    if (_graph != null) _loadGraph();
   }
 
   Future<void> _loadGraph() async {
@@ -115,8 +117,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       setState(() {
         _loading = false;
         _graphErrorMessage = 'Unable to load graph';
-        _graphErrorSubmessage =
-            'The server returned an invalid response. Please retry when the server is reachable.';
+        _graphErrorSubmessage = 'The server returned an invalid response. Please retry when the server is reachable.';
       });
       _scheduleAutoReload();
     } catch (e) {
@@ -192,7 +193,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
       _searchError = null;
     });
     try {
-      final result = await widget.noteProvider.backendService.searchGraph(query);
+      final result = await widget.noteProvider.backendService.searchGraph(
+        query,
+      );
       if (!mounted || _query != query) return;
       setState(() {
         _result = result;
@@ -207,19 +210,20 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
-  void _focusEntity(String entityId) {
+  Future<void> _focusEntity(String entityId) async {
     FocusScope.of(context).unfocus();
+    if (_graph == null) await _loadGraph();
+    if (!mounted) return;
     setState(() {
       _focusSequence++;
-      _focus = GraphFocusRequest(
-        entityId: entityId,
-        sequence: _focusSequence,
-      );
+      _focus = GraphFocusRequest(entityId: entityId, sequence: _focusSequence);
     });
   }
 
-  void _focusRelationship(String relationshipId) {
+  Future<void> _focusRelationship(String relationshipId) async {
     FocusScope.of(context).unfocus();
+    if (_graph == null) await _loadGraph();
+    if (!mounted) return;
     setState(() {
       _focusSequence++;
       _focus = GraphFocusRequest(
@@ -352,11 +356,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         ),
         child: Row(
           children: [
-            const Icon(
-              Icons.error_outline,
-              size: 15,
-              color: EchoColors.danger,
-            ),
+            const Icon(Icons.error_outline, size: 15, color: EchoColors.danger),
             const SizedBox(width: 6),
             Expanded(
               child: Text(
@@ -401,60 +401,60 @@ class _LibraryScreenState extends State<LibraryScreen> {
           shrinkWrap: true,
           padding: const EdgeInsets.symmetric(vertical: 4),
           children: [
-          for (final scored in result.entities)
-            ListTile(
-              dense: true,
-              visualDensity: VisualDensity.compact,
-              leading: const Icon(
-                Icons.circle,
-                size: 8,
-                color: EchoColors.forest,
-              ),
-              title: Text(
-                scored.entity.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: EchoColors.ink,
+            for (final scored in result.entities)
+              ListTile(
+                dense: true,
+                visualDensity: VisualDensity.compact,
+                leading: const Icon(
+                  Icons.circle,
+                  size: 8,
+                  color: EchoColors.forest,
                 ),
-              ),
-              subtitle: Text(
-                _entityContext(scored.entity),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 10),
-              ),
-              onTap: () => _focusEntity(scored.entity.id),
-            ),
-          for (final relationship in result.relationships)
-            ListTile(
-              dense: true,
-              visualDensity: VisualDensity.compact,
-              leading: const Icon(
-                Icons.link,
-                size: 14,
-                color: EchoColors.muted,
-              ),
-              title: Text(
-                '${_nodeTitle(relationship.fromId)} → ${_nodeTitle(relationship.toId)}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: EchoColors.ink,
+                title: Text(
+                  scored.entity.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: EchoColors.ink,
+                  ),
                 ),
+                subtitle: Text(
+                  _entityContext(scored.entity),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 10),
+                ),
+                onTap: () => _focusEntity(scored.entity.id),
               ),
-              subtitle: Text(
-                '${relationship.relationType} · ${relationship.status}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 10),
+            for (final relationship in result.relationships)
+              ListTile(
+                dense: true,
+                visualDensity: VisualDensity.compact,
+                leading: const Icon(
+                  Icons.link,
+                  size: 14,
+                  color: EchoColors.muted,
+                ),
+                title: Text(
+                  '${_nodeTitle(relationship.fromId)} → ${_nodeTitle(relationship.toId)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: EchoColors.ink,
+                  ),
+                ),
+                subtitle: Text(
+                  '${relationship.relationType} · ${relationship.status}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 10),
+                ),
+                onTap: () => _focusRelationship(relationship.id),
               ),
-              onTap: () => _focusRelationship(relationship.id),
-            ),
           ],
         ),
       ),
@@ -520,22 +520,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ),
             const SizedBox(height: 4),
             Text(
-              _graphErrorSubmessage ?? 'Please retry when the server is reachable',
+              _graphErrorSubmessage ??
+                  'Please retry when the server is reachable',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 11, color: EchoColors.muted),
             ),
             const SizedBox(height: 8),
-            TextButton(
-              onPressed: _loadGraph,
-              child: const Text('Retry'),
-            ),
+            TextButton(onPressed: _loadGraph, child: const Text('Retry')),
           ],
         ),
       );
     }
 
     return KnowledgeGraphWidget(
-      graph: _graph ?? GraphDataModel(nodes: const [], edges: const [], clusters: const []),
+      graph:
+          _graph ??
+          GraphDataModel(nodes: const [], edges: const [], clusters: const []),
       backend: widget.noteProvider.backendService,
       focus: _focus,
       onGraphMutated: _loadGraph,

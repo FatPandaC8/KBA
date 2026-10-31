@@ -264,6 +264,42 @@ class DatabaseManager:
                 value TEXT NOT NULL,
                 updated_at TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS admin_seed_registry (
+                seed_name TEXT NOT NULL,
+                record_type TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(seed_name, record_type, record_id)
+            );
+            """
+        )
+
+        # SQLite cannot add these constraints to legacy tables without a
+        # destructive table rebuild. These triggers provide DB-level ownership
+        # guards for new non-empty records while keeping historical import rows
+        # with an empty user_id readable only to internal/admin tooling.
+        c.executescript(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_capture_owner_exists
+            BEFORE INSERT ON captures
+            WHEN NEW.user_id <> '' AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            BEGIN SELECT RAISE(ABORT, 'capture owner does not exist'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_entity_owner_exists
+            BEFORE INSERT ON entities
+            WHEN NEW.user_id <> '' AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            BEGIN SELECT RAISE(ABORT, 'entity owner does not exist'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_relationship_owner_exists
+            BEFORE INSERT ON relationships
+            WHEN NEW.user_id <> '' AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            BEGIN SELECT RAISE(ABORT, 'relationship owner does not exist'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_relationship_endpoints_same_owner
+            BEFORE INSERT ON relationships
+            WHEN NEW.user_id <> '' AND (
+              NOT EXISTS (SELECT 1 FROM entities WHERE id = NEW.from_id AND user_id = NEW.user_id)
+              OR NOT EXISTS (SELECT 1 FROM entities WHERE id = NEW.to_id AND user_id = NEW.user_id)
+            )
+            BEGIN SELECT RAISE(ABORT, 'relationship endpoints must share owner'); END;
             """
         )
 

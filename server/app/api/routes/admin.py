@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from server.app.api.dependencies import Container, get_container, verify_admin_auth
+from server.app.domain.errors import ValidationError
 from server.app.adapters.inbound.http.schemas import (
     SystemHealthResponse,
     ProcessingJobResponse,
@@ -16,6 +17,9 @@ from server.app.adapters.inbound.http.schemas import (
     AIConfigRequest,
     AIConfigResponse,
     AITestResponse,
+    AdminUserCreateRequest,
+    AdminUserUpdateRequest,
+    AdminTranscriptUpdateRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -353,3 +357,138 @@ def get_recent_logs(
     from server.app.infrastructure.logging import get_recent_memory_logs
     logs = get_recent_memory_logs(limit=limit, level=level)
     return {"logs": logs, "count": len(logs)}
+
+
+# ---------------------------------------------------------------------------
+# Admin console API. These endpoints are deliberately separate from the
+# legacy operational endpoints above so the existing mobile/admin contracts
+# remain stable while the React console gains pagination and ownership-aware
+# views.
+
+def _page_args(limit: int, offset: int):
+    return max(1, min(limit, 100)), max(0, offset)
+
+
+@admin_router.get("/overview")
+def admin_overview(container: Container = Depends(get_container)):
+    return container.admin_console_uc.overview()
+
+
+@admin_router.get("/users")
+def admin_users(q: str = Query(default=""), limit: int = Query(default=25, ge=1, le=100), offset: int = Query(default=0, ge=0), container: Container = Depends(get_container)):
+    limit, offset = _page_args(limit, offset)
+    return container.admin_console_uc.users(q, limit, offset)
+
+
+@admin_router.post("/users")
+def admin_create_user(payload: AdminUserCreateRequest, request: Request, container: Container = Depends(get_container)):
+    try:
+        created = container.admin_console_uc.create_user(payload.email, payload.password)
+    except (ValueError, ValidationError) as exc:
+        _audit(request, container, "user.create", "user", outcome="rejected", detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
+    _audit(request, container, "user.create", "user", created["id"])
+    return created
+
+
+@admin_router.get("/users/{user_id}")
+def admin_user_detail(user_id: str, container: Container = Depends(get_container)):
+    try:
+        return container.admin_console_uc.user_detail(user_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="User not found")
+
+
+@admin_router.patch("/users/{user_id}")
+def admin_update_user(user_id: str, payload: AdminUserUpdateRequest, request: Request, container: Container = Depends(get_container)):
+    try:
+        updated = container.admin_console_uc.update_user(user_id, payload.email)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="User not found")
+    except (ValueError, ValidationError) as exc:
+        _audit(request, container, "user.update", "user", user_id, outcome="rejected", detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
+    _audit(request, container, "user.update", "user", user_id)
+    return updated
+
+
+@admin_router.delete("/users/{user_id}")
+def admin_delete_user(user_id: str, request: Request, container: Container = Depends(get_container)):
+    try:
+        result = container.admin_console_uc.delete_user(user_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Do not include PII in the audit detail. AccountDeletionUseCase removes
+    # user-scoped audit rows before the final user delete.
+    _audit(request, container, "user.delete", "user", user_id)
+    return result
+
+
+@admin_router.get("/captures-page")
+def admin_capture_page(q: str = Query(default=""), user_id: str = Query(default=""), status: str = Query(default=""), limit: int = Query(default=25, ge=1, le=100), offset: int = Query(default=0, ge=0), container: Container = Depends(get_container)):
+    limit, offset = _page_args(limit, offset)
+    return container.admin_console_uc.captures(q, user_id, status, limit, offset)
+
+
+@admin_router.get("/captures/{capture_id}/console")
+def admin_capture_console(capture_id: str, container: Container = Depends(get_container)):
+    capture = container.admin_console_uc.capture(capture_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    return capture
+
+
+@admin_router.patch("/captures/{capture_id}/transcript")
+def admin_update_transcript(capture_id: str, payload: AdminTranscriptUpdateRequest, request: Request, container: Container = Depends(get_container)):
+    try:
+        result = container.admin_console_uc.update_transcript(capture_id, payload.transcript)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    except (ValueError, ValidationError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _audit(request, container, "capture.transcript.update", "capture", capture_id)
+    return result
+
+
+@admin_router.post("/captures/{capture_id}/rerun-extraction")
+def admin_rerun_extraction(capture_id: str, request: Request, container: Container = Depends(get_container)):
+    try:
+        result = container.admin_console_uc.rerun_extraction(capture_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    except (ValueError, ValidationError) as exc:
+        _audit(request, container, "capture.extraction.rerun", "capture", capture_id, outcome="rejected", detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        _audit(request, container, "capture.extraction.rerun", "capture", capture_id, outcome="failed", detail="pipeline failure")
+        raise HTTPException(status_code=502, detail="Extraction failed; existing graph output was preserved.")
+    _audit(request, container, "capture.extraction.rerun", "capture", capture_id)
+    return result
+
+
+@admin_router.delete("/captures/{capture_id}")
+def admin_delete_capture(capture_id: str, request: Request, container: Container = Depends(get_container)):
+    try:
+        result = container.admin_console_uc.delete_capture(capture_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    _audit(request, container, "capture.delete", "capture", capture_id)
+    return result
+
+
+@admin_router.get("/graph/entities")
+def admin_entities(q: str = Query(default=""), user_id: str = Query(default=""), limit: int = Query(default=25, ge=1, le=100), offset: int = Query(default=0, ge=0), container: Container = Depends(get_container)):
+    limit, offset = _page_args(limit, offset)
+    return container.admin_console_uc.graph_entities(q, user_id, limit, offset)
+
+
+@admin_router.get("/graph/relationships")
+def admin_relationships(q: str = Query(default=""), user_id: str = Query(default=""), limit: int = Query(default=25, ge=1, le=100), offset: int = Query(default=0, ge=0), container: Container = Depends(get_container)):
+    limit, offset = _page_args(limit, offset)
+    return container.admin_console_uc.graph_relationships(q, user_id, limit, offset)
+
+
+@admin_router.get("/audit-log/page")
+def admin_audit_page(action: str = Query(default=""), user_id: str = Query(default=""), limit: int = Query(default=25, ge=1, le=100), offset: int = Query(default=0, ge=0), container: Container = Depends(get_container)):
+    limit, offset = _page_args(limit, offset)
+    return container.admin_console_uc.audit(action, user_id, limit, offset)

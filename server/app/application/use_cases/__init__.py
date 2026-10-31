@@ -602,3 +602,4 @@ class AdminSystemStatusUseCase:
 # M3 use cases live in focused modules; re-exported for container wiring.
 from .jobs import ProcessCaptureUseCase, name_similarity  # noqa: E402,F401
 from .graph import GraphQueryUseCase  # noqa: E402,F401
+from .admin_console import AdminConsoleUseCase  # noqa: E402,F401

@@ -93,8 +93,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (note == null) return;
 
     final status = note.status;
-    if (status != ProcessingStatus.ready &&
-        status != ProcessingStatus.failed) {
+    if (status != ProcessingStatus.ready && status != ProcessingStatus.failed) {
       return;
     }
 
@@ -288,9 +287,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       body: ListenableBuilder(
         listenable: widget.noteProvider,
         builder: (context, _) {
-          final recentNotes = widget.noteProvider.notes;
-          final totalCount = recentNotes.length;
-
           return SafeArea(
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -311,7 +307,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           children: [
                             // Header
                             const Text(
-                              'Capture what matters.',
+                              'Record a thought.',
                               style: TextStyle(
                                 fontSize: 28,
                                 fontWeight: FontWeight.w700,
@@ -323,7 +319,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             Row(
                               children: [
                                 Text(
-                                  '$totalCount ${totalCount == 1 ? 'capture' : 'captures'}',
+                                  'Voice becomes connected knowledge',
                                   style: const TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
@@ -340,13 +336,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                const Text(
-                                  'Personal Knowledge',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: EchoColors.muted,
-                                  ),
-                                ),
+                                const SizedBox.shrink(),
                               ],
                             ),
 
@@ -460,24 +450,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     ),
                                   ],
                                 ],
-                              ),
-                            ),
-
-                            const SizedBox(height: 14),
-                            TextButton.icon(
-                              onPressed: widget.onOpenRecordings,
-                              icon: const Icon(
-                                Icons.queue_music_outlined,
-                                size: 18,
-                                color: EchoColors.forest,
-                              ),
-                              label: const Text(
-                                'My recordings',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: EchoColors.forest,
-                                ),
                               ),
                             ),
 
