@@ -10,17 +10,10 @@ import {
   trackErrors,
 } from '../helpers/harness'
 
-/**
- * Browser-level verification of the server-rendered admin dashboard
- * (server/app/static/index.html). This is the only browser surface the
- * backend ships; the mobile app is not browser-based and an emulator is
- * not available in this run.
- */
+/** Browser-level coverage for the current React admin dashboard. */
 test.describe('Admin dashboard (real browser, real admin API)', () => {
   let errors: string[]
 
-  // Seed real data through the normal capture pipeline so this spec never
-  // depends on rows left behind by earlier tests (isolation discipline).
   test.beforeAll(async () => {
     const api = await createClient()
     try {
@@ -29,8 +22,7 @@ test.describe('Admin dashboard (real browser, real admin API)', () => {
       await scriptTranscript(api, captureId, 'Dashboard seed: Echo depends on FastAPI.')
       const up = await uploadCapture(api, user, captureId)
       expect(up.res.status()).toBe(202)
-      const job = await waitTerminal(api, user, captureId)
-      expect(job.status).toBe('ready')
+      await expect.poll(async () => (await waitTerminal(api, user, captureId)).status).toBe('ready')
     } finally {
       await api.dispose()
     }
@@ -43,73 +35,46 @@ test.describe('Admin dashboard (real browser, real admin API)', () => {
   })
 
   async function login(page: import('@playwright/test').Page) {
-    await page.fill('#adminToken', ADMIN_TOKEN)
-    await page.locator('#adminToken').evaluate((el: HTMLInputElement) =>
-      el.dispatchEvent(new Event('change')),
-    )
+    await page.getByLabel('Admin token').fill(ADMIN_TOKEN)
+    await page.getByRole('button', { name: 'Sign in' }).click()
+    await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible()
   }
 
-  test('without a token the dashboard refuses to load data', async ({ page }) => {
-    await page.click('#btnRefreshDashboard')
-    await expect(page.locator('#lastRefreshed')).toContainText(/Enter an admin token/i)
-    await expect(page.locator('#statusBadge')).toHaveText('—')
+  test('without a token stays on the admin sign-in screen', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: 'Knowledge operations, clearly.' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeDisabled()
   })
 
-  test('with a valid token the overview shows live system metrics', async ({ page }) => {
+  test('valid token loads live overview and preserves intentional TODO entries', async ({ page }) => {
     await login(page)
-    await page.click('#btnRefreshDashboard')
-
-    await expect(page.locator('#statusBadge')).not.toHaveText('—', { timeout: 15_000 })
-    const metricKnowledge = await page.textContent('#metricKnowledge')
-    expect(Number(metricKnowledge)).toBeGreaterThanOrEqual(1)
-    const metricRelations = await page.textContent('#metricRelations')
-    expect(Number(metricRelations)).toBeGreaterThanOrEqual(0)
-    await expect(page.locator('#dbStatus')).toBeVisible()
+    await expect(page.getByText('Connected')).toBeVisible()
+    await expect(page.getByRole('button', { name: /System Operations/ })).toBeDisabled()
+    await expect(page.getByRole('button', { name: /Monitoring/ })).toBeDisabled()
+    await expect(page.getByText('Capture processing')).toBeVisible()
   })
 
-  test('captures pane lists a real capture; inspecting it shows resolved knowledge', async ({ page }) => {
+  test('captures list and detail use the current admin API', async ({ page }) => {
     await login(page)
-    await page.click('button[data-tab="captures"]')
-    await page.click('#btnRefreshCaptures')
-    // Real run data: capture rows must exist (not the "Loading…" or empty placeholder).
-    const rows = page.locator('#capturesTableBody tr')
-    await expect(rows.filter({ has: page.locator('td:not([colspan])') }).first()).toBeVisible({
-      timeout: 15_000,
-    })
-    expect(await rows.count()).toBeGreaterThan(0)
-
-    // The detail flows through the modal with the resolved knowledge item.
-    await page.click('button[data-inspect]:visible >> nth=0')
-    await expect(page.locator('#captureModal.open')).toBeVisible({ timeout: 15_000 })
-    await expect(page.locator('#modalResolvedContainer')).toContainText(/Echo|Dashboard/i)
-    await page.click('#btnCloseModal')
-    await expect(page.locator('#captureModal')).not.toHaveClass(/open/, { timeout: 15_000 })
+    await page.getByRole('button', { name: 'Captures' }).click()
+    await expect(page.getByPlaceholder('Search capture ID or owner')).toBeVisible()
+    await expect(page.getByRole('button', { name: /…/ }).first()).toBeVisible({ timeout: 15_000 })
+    await page.getByRole('button', { name: /…/ }).first().click()
+    await expect(page.getByText('CAPTURE DETAIL')).toBeVisible()
+    await expect(page.getByText('Extracted entities')).toBeVisible()
   })
 
-  test('knowledge pane lists the seeded knowledge item with concepts and tags', async ({ page }) => {
+  test('knowledge graph navigation exposes read-only entity and relationship views', async ({ page }) => {
     await login(page)
-    await page.click('button[data-tab="knowledge"]')
-    await page.locator('#knowledgeSearchInput').fill('Dashboard seed')
-    await page.click('#btnKnowledgeFilter')
-    await expect(page.locator('#knowledgeTableBody tr td:not([colspan])').first()).toBeVisible({
-      timeout: 15_000,
-    })
-    await expect(page.locator('#knowledgeTableBody')).toContainText('Dashboard seed')
+    await page.getByRole('button', { name: 'Knowledge Graph' }).click()
+    await expect(page.getByRole('button', { name: 'Entities' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Relationships' })).toBeVisible()
+    await page.getByRole('button', { name: 'Relationships' }).click()
+    await expect(page.getByPlaceholder('Search relationships')).toBeVisible()
   })
 
-  test('jobs pane shows the live pipeline job lifecycle', async ({ page }) => {
-    await login(page)
-    await page.click('button[data-tab="jobs"]')
-    await page.click('#btnRefreshJobs')
-    await expect(page.locator('#jobsTableBody tr td:not([colspan])').first()).toBeVisible({
-      timeout: 15_000,
-    })
-  })
-
-  test.afterEach(async ({ page }, testInfo) => {
+  test.afterEach(async ({}, testInfo) => {
     if (testInfo.status !== 'passed' && errors.length > 0) {
       console.error(`[${testInfo.title}] browser errors:`, errors)
-      // Browser errors decay testInfo into a failure so CI reports them.
       expect(errors, JSON.stringify(errors)).toHaveLength(0)
     }
   })

@@ -2,9 +2,10 @@
 
 API- and browser-level end-to-end tests for the Echo backend. Each run boots one
 **real** FastAPI server (uvicorn, SQLite persistence, background job worker,
-rule-based extraction, local fastembed embeddings, admin dashboard) and drives
-the entire user journeys over real HTTP. No admin frontend exists to skip and
-none is built.
+rule-based extraction, local fastembed embeddings, and the React admin
+dashboard) and drives the user journeys over real HTTP. The Playwright config
+builds `../admin` before starting the server so `/admin` exercises the current
+dashboard rather than the legacy fallback.
 
 ## What is real vs scripted (transparency)
 
@@ -66,9 +67,9 @@ captures incl. admin-only transcript access, user-visible transcript redaction,
 knowledge delete + U4 audit rows, config/ai-config (no key material returned),
 backfill, admin job retry.
 
-06 Admin dashboard (real browser) — token gate, live metrics, captures table +
-Inspect modal with resolved knowledge, knowledge filter, jobs table; browser
-console errors fail the test.
+06 Admin dashboard (real browser) — token gate, live overview, users/captures/
+graph navigation, capture inspection, and intentional TODO navigation entries;
+browser console errors fail the test.
 
 07 Persistence integrity (actual SQLite dump via `e2e/db_inspect.py`) — captures,
 jobs, knowledge, entities, relationships rows really exist and link up; password

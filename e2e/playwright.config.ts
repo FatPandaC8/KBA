@@ -29,7 +29,7 @@ export default defineConfig({
   },
   outputDir: 'artifacts/test-results',
   webServer: {
-    command: `python3 server_launcher.py`,
+    command: `npm --prefix ../admin run build && python3 server_launcher.py`,
     url: `${BASE_URL}/api/health`,
     timeout: 60_000,
     reuseExistingServer: false,
