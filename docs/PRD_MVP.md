@@ -9,7 +9,7 @@
 
 Echo is an Android-first Flutter app (with a viable path to iOS) that turns a user's spoken recordings into a persistent knowledge graph of entities and relationships. Users explore the graph, search it by entity name, type, and keyword, verify extracted knowledge, correct it when needed, and navigate connections across recordings.
 
-**Navigation: three tabs — Record, Graph, My Recordings.** Search lives inside the Graph tab and operates over entities and relationships.
+**Navigation: two workspaces — Record and Graph.** Record is the voice-ingestion surface. Search lives inside Graph and operates over entities and relationships; graph state is preserved when switching workspaces.
 
 Echo is a personal knowledge management tool. It is not a conversational AI assistant. The knowledge layer — storage, graph traversal, search, and retrieval — operates independently of any LLM reasoning engine.
 
@@ -20,7 +20,7 @@ Echo is a personal knowledge management tool. It is not a conversational AI assi
 | D1 | Reprocessing | Only *resume* unfinished stages. Entities the user deleted get a tombstone and are never recreated. Names/descriptions the user edited get a `user_edited` flag and are never overwritten by AI. |
 | D2 | Free providers that may train on data | Allowed, but only with clear notice and explicit user consent. |
 | D3 | Mic denied / offline | Block the whole app, except logout, account deletion and policy pages. |
-| D4 | Admin authentication | Email allowlist in environment variables plus a separate admin login. No 2FA in the MVP. |
+| D4 | Admin authentication | Separate admin access using the existing server admin token mechanism. No extra admin management UI or 2FA in the MVP. |
 | D5 | Voice records | Users can play back their own audio. Transcripts are internal processing artifacts; access is restricted to admins. |
 | D6 | Recording | Press-and-hold only; release to send. No tap-to-toggle mode. |
 | D7 | Auth | Email verification and password reset via a free email-sending service. |

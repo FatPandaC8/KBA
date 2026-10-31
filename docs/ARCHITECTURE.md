@@ -250,16 +250,21 @@ entity_embeddings (
 |---|---|---|---|
 | `/api/knowledge/search` | GET | User | Hybrid entity/relationship search (embedding + lexical) — no transcript content in results |
 
-### Admin (requires admin authentication + mandatory audit log)
+### Admin (requires the configured admin token; mutations are audited)
 
 | Endpoint | Method | Auth | Purpose |
 |---|---|---|---|
-| `/api/admin/captures/{id}/transcript` | GET | Admin | Transcript text and segment timestamps for pipeline debugging |
-| `/api/admin/captures/{id}/transcript` | PATCH | Admin | Correct transcript text; persisted with `user_edited = 1` |
-| `/api/admin/captures/{id}` | GET | Admin | Full pipeline debug view: audio, transcript, extraction output, job stages |
-| `/api/admin/ai-config` | GET / PUT | Admin | Read or update STT, extraction, and embedding provider configuration |
-| `/api/admin/ai-config/test` | POST | Admin | Verify active configuration with a live test call |
-| `/api/admin/users` | GET / PATCH | Admin | User management (lock, unlock, view) |
+| `/api/admin/overview` | GET | Admin | Counts, processing statuses, failures, and recent activity |
+| `/api/admin/users` | GET / POST | Admin | Paginated user list and user creation |
+| `/api/admin/users/{id}` | GET / PATCH / DELETE | Admin | User detail, email update, and hard delete |
+| `/api/admin/captures-page` | GET | Admin | Paginated capture list with search and status/user filters |
+| `/api/admin/captures/{id}/console` | GET | Admin | Capture detail, transcript, audio metadata, and extraction results |
+| `/api/admin/captures/{id}/transcript` | PATCH | Admin | Save transcript without starting extraction |
+| `/api/admin/captures/{id}/rerun-extraction` | POST | Admin | Replace extraction output after successful re-run |
+| `/api/admin/captures/{id}` | DELETE | Admin | Hard delete capture, audio, and capture-exclusive graph data |
+| `/api/admin/graph/entities` | GET | Admin | Paginated read-only entity list |
+| `/api/admin/graph/relationships` | GET | Admin | Paginated read-only relationship list |
+| `/api/admin/audit-log/page` | GET | Admin | Paginated mutation audit log |
 
 ---
 
@@ -313,6 +318,6 @@ The mobile graph visualization uses `DeterministicGraphLayout` (`mobile/lib/ui/s
 | Authentication & authorization | Implemented and verified |
 | Evaluation opt-in & audio retention | Implemented and verified |
 | Processing reliability (retry, lease recovery) | Implemented and verified |
-| Admin transcript inspection & correction | **Gap — not yet implemented** |
-| Admin dashboard (full) | **Gap — partially implemented** |
+| Admin transcript inspection & correction | Implemented |
+| Admin dashboard | Implemented; System Operations and Monitoring are TODO |
 | Evaluation pipeline (WER, F1 measurement) | **Gap — extraction benchmark only** |

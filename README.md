@@ -31,7 +31,7 @@ Echo is **not** a long-form audio transcription tool, meeting assistant, generic
 
 1. **Voice Capture:** Voice recordings are the primary and only ingestion channel for new knowledge in the MVP. Up to 2 minutes per recording (configurable via `ECHO_MAX_VOICE_SECONDS`).
 2. **Raw Input Preservation:** The original audio file and transcript are preserved verbatim as internal artifacts; extracted entities, relationships, and user corrections to knowledge are editable but protected from AI overwrite.
-3. **Capture-First Home UI:** Navigation features a centered Floating Action Bar (FAB) prioritizing instant voice recording, with secondary tabs for Graph and My Recordings.
+3. **Two-workspace mobile UI:** Navigation has exactly two workspaces, Record and Graph. Recording stays in Record; graph search and exploration stay in Graph. There is no shared FAB or sidebar.
 4. **Knowledge Retrieval:** Entity and relationship search uses hybrid embedding similarity and lexical ranking. Knowledge retrieval does not require an LLM reasoning engine.
 5. **Privacy & Consent-Gated Retention:** Audio retention on the server is gated strictly behind explicit, opt-in evaluation consent.
 6. **No Offline Sync:** Offline synchronization is explicitly removed from product scope. The app operates with local persistence and online backend processing.
@@ -55,10 +55,10 @@ Based on M3 implementation (2026-10-29, branch `mvp_v2_prd`). See `docs/M3_REPOR
 | **Authentication & Multi-user** | **Implemented and verified** | Email/password, Google Sign-In, email verification, password reset, revocable sessions, rate limiting, per-user data isolation. |
 | **Consent & Privacy** | **Implemented and verified** | Provider consent screen; evaluation opt-in (default off); withdrawal purges retained audio. |
 | **Processing Reliability** | **Implemented and verified** | Async job worker; lease-based fault recovery; up to 3 retries for recoverable errors; permanent errors fail cleanly with typed error class. |
-| **Capture-First Centered FAB Navigation** | **Implemented (M3)** | Three-tab layout: Record (centre mic FAB), Graph, Recordings. Note: the M3 implementation included an "Ask AI" tab which is no longer part of the product scope; see `docs/M3_REPORT.md` for historical details. |
+| **Record + Graph navigation** | **Implemented** | Record is a minimal voice-ingestion workspace. Graph starts empty, searches unique entities, loads one-hop connections, and preserves its state when switching tabs. |
+| **Admin Dashboard** | **Implemented** | React + TypeScript app in `admin/`, served at `/admin` after a production build. System Operations and Monitoring remain intentional TODO entries. |
 
-> [!NOTE]
-> The Ask AI tab was implemented in M3 and is present in the codebase. It is **excluded from the current product scope**. See `docs/PRODUCT_DIRECTION.md` §5 and `docs/M3_REPORT.md` for details.
+> Historical milestone documents retain their original implementation notes; they are not the current navigation specification.
 
 
 ---
@@ -74,7 +74,8 @@ Based on M3 implementation (2026-10-29, branch `mvp_v2_prd`). See `docs/M3_REPOR
 │   ├── AI_PIPELINE.md                 # Audio constraints, STT, extraction, entity resolution
 │   ├── ROADMAP.md                     # Feature status matrix and implementation milestones
 │   ├── PRD_MVP.md                     # Product requirements (updated for current direction)
-│   ├── M3_REPORT.md                   # M3 milestone report (historical; includes Ask AI implementation)
+│   ├── ADMIN.md                       # Admin dashboard run, seed, reset, and test commands
+│   ├── M3_REPORT.md                   # M3 milestone report (historical)
 │   └── M1_AUDIT.md                    # M1 pre-auth audit report (historical)
 ├── mobile/                            # Flutter Android application
 │   ├── lib/
@@ -94,8 +95,10 @@ Based on M3 implementation (2026-10-29, branch `mvp_v2_prd`). See `docs/M3_REPOR
     │   ├── domain/                    # Entities and domain errors
     │   ├── infrastructure/            # Configuration
     │   ├── pipeline.py                # faster-whisper STT + entity/relationship extraction
-    │   └── static/                    # Admin dashboard
+    │   └── static/                    # Legacy fallback dashboard when admin/dist is absent
     └── uploads/                       # Consent-gated audio retention (purged on withdrawal)
+├── admin/                             # React + TypeScript Admin Dashboard
+└── e2e/                               # Playwright API and browser tests
 ```
 
 ---
@@ -107,13 +110,13 @@ Based on M3 implementation (2026-10-29, branch `mvp_v2_prd`). See `docs/M3_REPOR
 - **Backend:** Python 3.10+, `ffmpeg` installed and available on system `$PATH`.
 
 ### Required Environment Variables & Settings
-- `ECHO_CLIENT_TOKEN` (**Required**): Shared token used by the Android client. If it is empty, protected client endpoints fail closed with HTTP 503.
 - `ECHO_ADMIN_TOKEN` (**Required for the admin dashboard**): Admin token. There is no default. If it is empty, admin endpoints fail closed with HTTP 503.
 - `ECHO_CORS_ORIGINS` (Optional): Comma-separated browser origins. CORS is disabled unless this is set; the Android client does not need CORS.
 - `ECHO_DB_PATH` (Optional): Backend database path (defaults to `server/echo_backend.db`).
 - `ECHO_UPLOAD_DIR` (Optional): Audio upload directory (defaults to `server/uploads`).
 - `ECHO_MAX_UPLOAD_BYTES` (Optional): Upload size limit (defaults to 25 MiB).
-- `OPENAI_API_KEY` (Optional): If set on the backend host, enables remote OpenAI Whisper STT and GPT-4o-mini knowledge extraction. If unset, the backend falls back to local `faster-whisper` and local linguistic extraction.
+- `ECHO_LLM_PROVIDER` (Optional): `groq` or `rule_based`; production defaults to `groq` and fails closed without `GROQ_API_KEY`.
+- `GROQ_API_KEY` (Required when `ECHO_LLM_PROVIDER=groq`): Server-side hosted extraction key; never put it in the mobile or admin client.
 
 ### Platform Scope
 
@@ -129,11 +132,10 @@ Debug builds are signed with the Flutter debug key and are **not** production ar
 
 ### 1. Run the Backend Server
 ```bash
-# From repository root:
+# From repository root (or use `bash scripts/dev_server.sh`):
 python3 -m venv .venv
 source .venv/bin/activate
 pip install fastapi uvicorn faster-whisper numpy pydantic python-multipart
-export ECHO_CLIENT_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export ECHO_ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 python3 -m uvicorn server.app.main:app --host 0.0.0.0 --port 8000
 ```
@@ -146,7 +148,17 @@ curl -s http://localhost:8000/api/health
 # Response: {"status":"ok","service":"Echo Knowledge Backend","pipeline_version":"v1.2-echo-real"}
 ```
 
-Protected endpoints require `Authorization: Bearer <ECHO_CLIENT_TOKEN>` (or `X-Client-Token`).
+The mobile app uses its authenticated session token. Admin requests use `X-Admin-Token: <ECHO_ADMIN_TOKEN>`.
+
+### 4. Run the Admin Dashboard
+```bash
+cd admin
+npm install
+npm run dev                 # http://127.0.0.1:5174, proxies /api to :8000
+npm run build               # backend serves generated admin/dist at /admin
+```
+
+See [Admin Dashboard](docs/ADMIN.md) for seed, reset, and end-to-end commands.
 
 ### 2. Forward ADB Port for Android
 When running on a physical Android phone over USB:
@@ -183,7 +195,6 @@ The explicit environment variables below still work if you prefer to choose the 
 ECHO_DB_PATH=/tmp/echo-test/echo.db \
 ECHO_UPLOAD_DIR=/tmp/echo-test/uploads \
 ECHO_ADMIN_TOKEN=test-admin-token \
-ECHO_CLIENT_TOKEN=test-client-token \
 python -m pytest server/tests -q
 ```
 
@@ -202,5 +213,6 @@ flutter build apk --debug
 - [AI Pipeline Reference](docs/AI_PIPELINE.md): Audio decoding, STT models, entity/relationship extraction, entity resolution, knowledge search, and extraction benchmark.
 - [Product Requirements (PRD)](docs/PRD_MVP.md): Functional requirements, acceptance criteria, and confirmed product decisions.
 - [Project Roadmap](docs/ROADMAP.md): Feature status matrix, remaining milestones, and explicit scope boundaries.
-- [M3 Milestone Report](docs/M3_REPORT.md): Historical report of the M3 implementation (recording pipeline, knowledge graph, search, Ask AI). Preserved as a record; Ask AI section reflects implementation state, not current MVP scope.
+- [Admin Dashboard](docs/ADMIN.md): Run, seed, reset, and test the React admin app.
+- [M3 Milestone Report](docs/M3_REPORT.md): Historical report of the M3 implementation. Preserved as a record; it is not the current navigation specification.
 - [M1 Audit Report](docs/M1_AUDIT.md): Historical audit of the pre-M2 codebase. Preserved for reference.
