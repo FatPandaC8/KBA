@@ -385,7 +385,13 @@ class NoteProvider extends ChangeNotifier {
 
   String _errorClassFor(Object error) {
     if (error is BackendException) {
-      if (error.statusCode == 401 || error.statusCode == 403) return 'auth';
+      if (error.statusCode == 401) return 'auth';
+      if (error.statusCode == 403) {
+        final message = error.message.toLowerCase();
+        if (message.contains('consent')) return 'consent_required';
+        if (message.contains('verify')) return 'verification_required';
+        return 'forbidden';
+      }
       if (error.statusCode == 422) return 'invalid_input';
       if (error.statusCode == 429) return 'quota_exhausted';
       if (error.statusCode != null && error.statusCode! >= 500) {
@@ -406,6 +412,15 @@ class NoteProvider extends ChangeNotifier {
   String _friendlyError(Object error, String errorClass) {
     if (errorClass == 'auth') {
       return 'Your session is no longer valid. Sign in again; the recording is kept on this device.';
+    }
+    if (errorClass == 'consent_required') {
+      return 'AI-provider consent is required. Open Settings and grant consent before recording.';
+    }
+    if (errorClass == 'verification_required') {
+      return 'Verify your email before recording. Your capture is kept on this device.';
+    }
+    if (errorClass == 'forbidden') {
+      return 'The server rejected this recording request. Your capture is kept on this device.';
     }
     if (errorClass == 'invalid_input') {
       return 'This recording could not be processed. It may be silent, corrupted, or not in English. No knowledge was created.';
@@ -431,6 +446,12 @@ class NoteProvider extends ChangeNotifier {
         return 'This recording could not be processed. It may be silent, corrupted, or not in English. No knowledge was created.';
       case 'auth':
         return 'Your session is no longer valid. Sign in again; the recording is kept on this device.';
+      case 'consent_required':
+        return 'AI-provider consent is required. Open Settings and grant consent before recording.';
+      case 'verification_required':
+        return 'Verify your email before recording. Your capture is kept on this device.';
+      case 'forbidden':
+        return 'The server rejected this recording request. Your capture is kept on this device.';
       default:
         final text = (rawMessage ?? '').trim();
         if (text.isEmpty) {

@@ -143,6 +143,12 @@ class FakeBackendService extends BackendService {
     if (uploadGate != null) {
       await uploadGate!.future;
     }
+    if (failAuth) {
+      throw BackendException(
+        'AI provider consent is required before recording.',
+        statusCode: 403,
+      );
+    }
     if (failUpload) {
       throw BackendException('upload failed', statusCode: 500);
     }

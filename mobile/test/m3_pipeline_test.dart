@@ -162,6 +162,22 @@ void main() {
     },
   );
 
+  test('consent rejection is not reported as an invalid session', () async {
+    backend.failAuth = true;
+
+    final note = await provider.createAudioNote(
+      audioPath: writeAudio('consent-required.m4a'),
+      durationMs: 2000,
+    );
+
+    await waitFor(() => noteFor(note.id).status == ProcessingStatus.failed);
+
+    final failed = noteFor(note.id);
+    expect(failed.errorClass, 'consent_required');
+    expect(failed.failureReason, contains('consent'));
+    expect(failed.failureReason, isNot(contains('session')));
+  });
+
   test('a post-upload failure keeps server audio retryable without local '
       'bytes (REC-05, REC-06)', () async {
     final path = writeAudio('failed.m4a');
