@@ -1,462 +1,491 @@
-"""M5 gold-set scorer harness.
+"""Repeatable extraction benchmark against a fixed gold set.
 
-Measures entity F1, relationship F1, QA correctness / refusal correctness,
-and refusal rate against a pinned rule-based baseline.
+This is a measurement tool, not a gate. It runs the exact extraction adapter
+the pipeline uses, compares the resulting graph with hand-labelled gold
+entities/relationships, and prints precision, recall and F1.
 
-Gold-set files live in server/eval/gold/ and are JSON:
-  entities.json  -> list of {id, name, entity_type, capture_id}
-  relationships.json -> list of {id, from_id, to_id, relation_type, capture_id}
-  qa.json        -> list of {id, question, expected_answer, expected_entities, expected_rels}
+The rule-based extractor is the pinned baseline: it is deterministic, offline
+and free, so a candidate (e.g. a Groq model) can be compared on the same gold
+set without changing anything else.
 
-Baseline is pinned to a specific commit hash (default: ab47493).
-The harness uses the app's own extraction + answering ports (fastembed, rule-based)
-and never calls an external LLM — it is fully offline / deterministic.
+Gold set format (single JSON file, see server/eval_data/gold/gold_v1.json)::
 
-Usage:
-  python3 -m eval.score               # score the current repo state
-  python3 -m eval.score --baseline ab47493  # score against that commit
-  python3 -m eval.score --gold entities.json relationships.json qa.json  # custom gold
+    [
+      {
+        "id": "gold-001",
+        "transcript": "The Echo project depends on FastAPI.",
+        "entities": [{"name": "Echo project", "type": "project"}],
+        "relationships": [
+          {"source": "Echo project", "target": "FastAPI", "type": "Depends on"}
+        ]
+      }
+    ]
+
+Usage::
+
+    # Deterministic, offline baseline. Never opens a socket.
+    python -m server.eval.score --provider rule_based
+
+    # Compare the pinned baseline with the configured hosted provider.
+    python -m server.eval.score --provider groq \
+        --model openai/gpt-oss-120b --allow-real-calls
+
+Real provider calls are opt-in (``--allow-real-calls``) and use
+``GROQ_API_KEY`` from the environment. The key is never printed, logged or
+written to the report. Token usage is reported so a run can be budgeted
+against the free tier.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
-from collections import Counter
-from typing import Dict, List, Set, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-import sqlite3
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
-# ---------------------------------------------------------------------------
-# Path helpers
-# ---------------------------------------------------------------------------
+from server.app.adapters.outbound.extraction import SemanticKnowledgeExtractor
+from server.app.adapters.outbound.extraction.groq import GroqExtractionAdapter
+from server.app.adapters.outbound.llm.factory import build_llm_client
+from server.app.application.dto import ExtractionResult
+from server.app.domain.entities import normalize_key
+from server.app.domain.errors import ProviderError
+from server.app.infrastructure.config import get_settings
 
-BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SERVER = os.path.join(BASE, "server")
-sys.path.insert(0, SERVER)
+DEFAULT_GOLD = os.path.join(REPO_ROOT, "server", "eval_data", "gold", "gold_v1.json")
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 
-from server.app.domain.entities import EntityType, normalize_key
-from server.app.domain.value_objects import Certainty
-
-
-# ---------------------------------------------------------------------------
-# Gold-set I/O
-# ---------------------------------------------------------------------------
-
-def load_gold(gold_dir: str) -> Tuple[List[dict], List[dict], List[dict]]:
-    """Load entities, relationships and QA from the gold directory."""
-    entities = []
-    relationships = []
-    qa = []
-
-    g = os.path.join(gold_dir, "entities.json")
-    if os.path.isfile(g):
-        with open(g) as f:
-            entities = json.load(f)
-
-    g = os.path.join(gold_dir, "relationships.json")
-    if os.path.isfile(g):
-        with open(g) as f:
-            relationships = json.load(f)
-
-    g = os.path.join(gold_dir, "qa.json")
-    if os.path.isfile(g):
-        with open(g) as f:
-            qa = json.load(f)
-
-    return entities, relationships, qa
+_ARTICLES = ("the ", "a ", "an ")
 
 
-# ---------------------------------------------------------------------------
-# DB reader — captures + entities + relationships
-# ---------------------------------------------------------------------------
-
-def db_connect(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+# --------------------------------------------------------------------------- gold
 
 
-def fetch_entities(conn: sqlite3.Connection, user_id: str) -> List[dict]:
-    rows = conn.execute(
-        "SELECT id, name, entity_type, certainty, confidence, provenance, user_edited "
-        "FROM entities WHERE user_id = ?",
-        (user_id,),
-    ).fetchall()
-    return [dict(r) for r in rows]
+@dataclass(frozen=True)
+class GoldExample:
+    id: str
+    transcript: str
+    entities: Tuple[Tuple[str, str], ...]
+    relationships: Tuple[Tuple[str, str, str], ...]
 
 
-def fetch_relationships(conn: sqlite3.Connection, user_id: str) -> List[dict]:
-    rows = conn.execute(
-        "SELECT id, from_id, to_id, relation_type, certainty, confidence, provenance, user_edited "
-        "FROM relationships WHERE user_id = ?",
-        (user_id,),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def fetch_captures(conn: sqlite3.Connection, user_id: str) -> List[dict]:
-    rows = conn.execute(
-        "SELECT id, status, duration_ms, created_at FROM captures WHERE user_id = ?",
-        (user_id,),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-# ---------------------------------------------------------------------------
-# Very lightweight extraction / QA using the repo's own rule-based ports.
-# We import the actual adapters so that the scorer runs against the exact
-# same code path a real LLM call would use (minus the API key).
-# ---------------------------------------------------------------------------
-
-def _extract_entities_from_text(text: str) -> List[dict]:
-    """Rule-based extraction using the app's existing extraction port.
-
-    Returns a list of {name, entity_type} dicts — deterministic and
-    repeatable across runs.  The real extraction adapter (fastembed + rule
-    model) is wired into the app; this re-uses its output schema.
-    """
-    from server.app.adapters.outbound.extraction import extract_entities
-
-    # The extraction adapter takes transcript text and returns structured results.
-    # We call it with an empty provider_id/model so it falls back to the
-    # deterministic rule-based implementation.
-    result = extract_entities({"text": text, "provider_id": "", "model_version": ""})
-    entities = []
-    for e in result.get("entities", []):
-        entities.append(
-            {
-                "name": e.get("name", ""),
-                "entity_type": e.get("entity_type", EntityType.CONCEPT),
-                "confidence": e.get("confidence", 0.5),
-                "certainty": e.get("certainty", Certainty.CONFIRMED),
-            }
+def load_gold(path: str) -> List[GoldExample]:
+    with open(path, "r", encoding="utf-8") as handle:
+        raw = json.load(handle)
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("Gold file must be a non-empty JSON array of examples.")
+    examples: List[GoldExample] = []
+    seen: Set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"Gold example #{index} is not an object.")
+        example_id = str(item.get("id") or f"gold-{index:03d}")
+        if example_id in seen:
+            raise ValueError(f"Duplicate gold example id: {example_id}")
+        seen.add(example_id)
+        transcript = str(item.get("transcript") or "").strip()
+        if not transcript:
+            raise ValueError(f"Gold example {example_id} has an empty transcript.")
+        entities = []
+        for entity in item.get("entities") or []:
+            name = str(entity.get("name") or "").strip()
+            kind = str(entity.get("type") or "").strip()
+            if not name or not kind:
+                raise ValueError(f"Gold example {example_id} has an invalid entity.")
+            entities.append((canonical_name(name), kind.lower()))
+        relationships = []
+        for rel in item.get("relationships") or []:
+            source = canonical_name(str(rel.get("source") or ""))
+            target = canonical_name(str(rel.get("target") or ""))
+            kind = str(rel.get("type") or "").strip()
+            if not source or not target or not kind:
+                raise ValueError(f"Gold example {example_id} has an invalid relationship.")
+            relationships.append((source, target, kind.lower()))
+        examples.append(
+            GoldExample(
+                id=example_id,
+                transcript=transcript,
+                entities=tuple(entities),
+                relationships=tuple(relationships),
+            )
         )
-    return entities
+    return examples
 
 
-def _extract_relationships_from_entities(
-    entities: List[dict], text: str
-) -> List[dict]:
-    """Derive relationships from entity co-occurrence + keyword cues.
-
-    Very lightweight: if two entity names appear near each other in the
-    transcript we emit a `related_to` relationship.  The real extraction
-    adapter produces richer output; this mirrors its schema.
-    """
-    from server.app.application.ports import RelationStatus, Certainty as Ct
-
-    rels = []
-    # Naive co-occurrence: any pair of entities in the same capture gets a relationship.
-    # In production the extraction adapter would look at sentence-level proximity.
-    for i, e1 in enumerate(entities):
-        for e2 in entities[i + 1 :]:
-            # Simple heuristic: if both names appear in the text, link them.
-            name1 = e1.get("name", "").lower()
-            name2 = e2.get("name", "").lower()
-            if name1 and name2 and name1 in text.lower() and name2 in text.lower():
-                rels.append(
-                    {
-                        "from_id": e1.get("id", ""),
-                        "to_id": e2.get("id", ""),
-                        "relation_type": "related_to",
-                        "certainty": Ct.CONFIRMED,
-                        "status": RelationStatus.SUGGESTED,
-                        "confidence": 0.7,
-                    }
-                )
-    return rels
+def canonical_name(value: str) -> str:
+    """Case/article/punctuation-insensitive name key for fair matching."""
+    key = normalize_key(value)
+    for article in _ARTICLES:
+        if key.startswith(article):
+            key = key[len(article):]
+            break
+    return key
 
 
-def _answer_qa(question: str, entities: List[dict], relationships: List[dict]) -> dict:
-    """Rule-based QA: check if the question can be answered from the graph.
-
-    Returns {answer, supported_entities, supported_rels, refusal}.
-    """
-    q = question.lower().strip()
-
-    # Very small set of hand-crafted patterns that the rule-based QA handles.
-    # The real extraction+answering adapter would be larger; this mirrors its schema.
-    if "alice" in q or "echo project" in q:
-        answer = "Alice is mentioned in a capture about the Echo project."
-        supported = {
-            "entities": [e.get("name", "") for e in entities if "alice" in e.get("name", "").lower()],
-            "relationships": [
-                r.get("relation_type", "")
-                for r in relationships
-                if "alice" in r.get("from_id", "") or "alice" in r.get("to_id", "")
-            ],
-        }
-    elif "echo" in q or "fastapi" in q:
-        answer = "Echo depends on FastAPI (mentioned in a capture)."
-        supported = {
-            "entities": [e.get("name", "") for e in entities if "fastapi" in e.get("name", "").lower()],
-            "relationships": [],
-        }
-    else:
-        # No matching pattern -> insufficient evidence -> refusal
-        answer = None
-        supported = {"entities": [], "relationships": []}
-
-    refusal = answer is None
-    return {
-        "answer": answer,
-        "supported_entities": supported["entities"],
-        "supported_relationships": supported["relationships"],
-        "refusal": refusal,
-    }
+# ------------------------------------------------------------------- prediction
 
 
-# ---------------------------------------------------------------------------
-# Scoring helpers
-# ---------------------------------------------------------------------------
-
-def f1_score(gold_set: Set[str], predicted_set: Set[str]) -> float:
-    """Micro F1 for a single category (entity or relationship)."""
-    if not gold_set and not predicted_set:
-        return 1.0
-    if not gold_set or not predicted_set:
-        return 0.0
-    tp = len(gold_set & predicted_set)
-    fp = len(predicted_set - gold_set)
-    fn = len(gold_set - predicted_set)
-    precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall = tp / (tp + fn) if (tp + fn) else 0.0
-    if precision + recall == 0:
-        return 0.0
-    return 2 * precision * recall / (precision + recall)
+@dataclass
+class Prediction:
+    entities: Set[Tuple[str, str]]
+    relationships: Set[Tuple[str, str, str]]
+    error: str = ""
 
 
-def compute_entity_f1(gold_entities: List[dict], predicted_entities: List[dict]) -> float:
-    """Compute micro F1 over entity names + types."""
-    gold_keys = {
-        f"{e['name'].strip().lower()}|{e.get('entity_type', '')}" for e in gold_entities
-    }
-    pred_keys = {
-        f"{e['name'].strip().lower()}|{e.get('entity_type', '')}" for e in predicted_entities
-    }
-    return f1_score(gold_keys, pred_keys)
+def predict(extractor: Any, example: GoldExample) -> Prediction:
+    try:
+        result: ExtractionResult = extractor.extract_graph(
+            example.transcript, example.id, user_id="benchmark"
+        )
+    except Exception as exc:  # a failed example is a miss, not a crash
+        return Prediction(entities=set(), relationships=set(), error=type(exc).__name__)
 
-
-def compute_relationship_f1(gold_rels: List[dict], predicted_rels: List[dict]) -> float:
-    """Compute micro F1 over relationship (from_id, to_id, type) tuples."""
-    gold_keys = {
-        f"{r['from_id']}|{r['to_id']}|{r.get('relation_type', '')}" for r in gold_rels
-    }
-    pred_keys = {
-        f"{r['from_id']}|{r['to_id']}|{r.get('relation_type', '')}" for r in predicted_rels
-    }
-    return f1_score(gold_keys, pred_keys)
-
-
-def compute_qa_correctness(gold_qa: List[dict], predicted_qa: List[dict]) -> float:
-    """QA correctness: fraction of gold QAs where the answer is correct or properly refused.
-
-    A predicted QA is scored correct when:
-      - it has an answer AND the gold answer matches (substring), OR
-      - it properly refuses (gold expects refusal AND predicted refuses)
-    """
-    if not gold_qa:
-        return 1.0
-    correct = 0
-    for gold in gold_qa:
-        qid = gold.get("id", "")
-        # Find matching predicted QA by id or question text
-        pred = None
-        for p in predicted_qa:
-            if p.get("id", "") == qid or p.get("question", "") == gold.get("question", ""):
-                pred = p
-                break
-
-        if pred is None:
-            # No prediction for this question -> count as incorrect / refusal
+    names: Dict[str, str] = {}
+    entities: Set[Tuple[str, str]] = set()
+    for entity in result.entities:
+        key = canonical_name(entity.name)
+        if not key:
             continue
+        names[entity.id] = key
+        entities.add((key, str(entity.entity_type).lower()))
 
-        gold_refusal = gold.get("refusal", False)
-        pred_refusal = pred.get("refusal", False)
+    relationships: Set[Tuple[str, str, str]] = set()
+    for rel in result.relationships:
+        source = names.get(rel.from_id)
+        target = names.get(rel.to_id)
+        if not source or not target:
+            continue
+        relationships.add((source, target, str(rel.relation_type).lower()))
 
-        if gold_refusal and pred_refusal:
-            # Both correctly refuse
-            correct += 1
-        elif not gold_refusal and not pred_refusal and pred.get("answer", "").strip():
-            # Both provide an answer; check substring match
-            if gold.get("answer", "").lower() in pred.get("answer", "").lower():
-                correct += 1
-        elif gold_refusal and not pred_refusal:
-            # Gold expects refusal but prediction gives answer -> incorrect
-            pass
-        elif not gold_refusal and pred_refusal:
-            # Gold expects answer but prediction refuses -> incorrect
-            pass
-
-    return correct / len(gold_qa) if gold_qa else 1.0
+    return Prediction(entities=entities, relationships=relationships)
 
 
-def compute_refusal_rate(gold_qa: List[dict], predicted_qa: List[dict]) -> float:
-    """Fraction of gold QAs that should be refused (and were) vs those that should have answers.
+# ---------------------------------------------------------------------- metrics
 
-    For the gold-set baseline we compute: gold-refusals-that-were-refused / total-gold.
-    """
-    if not gold_qa:
-        return 0.0
-    refused = sum(1 for g in gold_qa if g.get("refusal", False))
-    predicted_refused = sum(
-        1 for p in predicted_qa if p.get("refusal", False)
+
+@dataclass
+class Score:
+    true_positives: int = 0
+    false_positives: int = 0
+    false_negatives: int = 0
+
+    @property
+    def precision(self) -> float:
+        denominator = self.true_positives + self.false_positives
+        return self.true_positives / denominator if denominator else 0.0
+
+    @property
+    def recall(self) -> float:
+        denominator = self.true_positives + self.false_negatives
+        return self.true_positives / denominator if denominator else 0.0
+
+    @property
+    def f1(self) -> float:
+        p, r = self.precision, self.recall
+        return 2 * p * r / (p + r) if (p + r) else 0.0
+
+    def add(self, gold: Iterable, predicted: Iterable) -> None:
+        gold_set, predicted_set = set(gold), set(predicted)
+        self.true_positives += len(gold_set & predicted_set)
+        self.false_positives += len(predicted_set - gold_set)
+        self.false_negatives += len(gold_set - predicted_set)
+
+
+@dataclass
+class BenchmarkResult:
+    provider: str
+    model: str
+    gold_path: str
+    gold_hash: str
+    examples: int
+    entity: Score
+    relationship: Score
+    failures: List[str]
+    resolved_model: str = ""
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "resolved_model": self.resolved_model,
+            "gold_path": self.gold_path,
+            "gold_sha256": self.gold_hash,
+            "examples": self.examples,
+            "entities": {
+                "precision": round(self.entity.precision, 4),
+                "recall": round(self.entity.recall, 4),
+                "f1": round(self.entity.f1, 4),
+                "tp": self.entity.true_positives,
+                "fp": self.entity.false_positives,
+                "fn": self.entity.false_negatives,
+            },
+            "relationships": {
+                "precision": round(self.relationship.precision, 4),
+                "recall": round(self.relationship.recall, 4),
+                "f1": round(self.relationship.f1, 4),
+                "tp": self.relationship.true_positives,
+                "fp": self.relationship.false_positives,
+                "fn": self.relationship.false_negatives,
+            },
+            "failed_examples": self.failures,
+        }
+
+
+def run_benchmark(
+    examples: Sequence[GoldExample],
+    extractor: Any,
+    *,
+    provider: str,
+    model: str,
+    gold_path: str,
+) -> Tuple[BenchmarkResult, List[Prediction]]:
+    entity = Score()
+    relationship = Score()
+    failures: List[str] = []
+    predictions: List[Prediction] = []
+
+    for example in examples:
+        prediction = predict(extractor, example)
+        predictions.append(prediction)
+        entity.add(example.entities, prediction.entities)
+        relationship.add(example.relationships, prediction.relationships)
+        if prediction.error:
+            failures.append(f"{example.id}: {prediction.error}")
+
+    result = BenchmarkResult(
+        provider=provider,
+        model=model,
+        gold_path=gold_path,
+        gold_hash=file_sha256(gold_path),
+        examples=len(examples),
+        entity=entity,
+        relationship=relationship,
+        failures=failures,
+        resolved_model=getattr(extractor, "resolved_model", "") or "",
     )
-    # Return the rate at which the system refuses what the gold says should be refused
-    if refused == 0:
-        return 0.0
-    return predicted_refused / refused if refused else 0.0
+    return result, predictions
 
 
-# ---------------------------------------------------------------------------
-# Main scoring routine
-# ---------------------------------------------------------------------------
+def file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-def score(
-    db_path: str,
-    user_id: str,
-    gold_dir: str,
-    baseline_commit: str,
-    output_path: str,
-):
-    """Run the full M5 scorer and write a JSON report."""
-    gold_entities, gold_relationships, gold_qa = load_gold(gold_dir)
 
-    conn = db_connect(db_path)
+# -------------------------------------------------------------------- providers
 
-    # --- Fetch real data from the DB ---
-    # At the M3/ab47493 baseline, the pipeline is rule-based and entities/
-    # relationships are already stored in the DB from prior captures.
-    # The "predicted" set = whatever the DB currently contains.
-    entities = fetch_entities(conn, user_id)
-    relationships = fetch_relationships(conn, user_id)
-    captures = fetch_captures(conn, user_id)
 
-    # --- Build predicted QA from knowledge items + DB entities/relationships ---
-    predicted_qa = []
-    for cap in captures:
-        cap_id = cap["id"]
-        krows = conn.execute(
-            "SELECT id, title, core_idea FROM knowledge_items WHERE capture_id = ?",
-            (cap_id,),
-        ).fetchall()
-        for krow in krows:
-            qa_pred = _answer_qa(
-                krow.get("title", ""),
-                [e for e in entities if e.get("capture_id") == cap_id],
-                [r for r in relationships if r.get("capture_id") == cap_id],
+class _MemoryUsageRepository:
+    """In-process usage ledger so the benchmark does not touch the app DB."""
+
+    def __init__(self) -> None:
+        self.rows: List[Dict[str, Any]] = []
+
+    def record(self, **kwargs: Any) -> None:
+        self.rows.append(kwargs)
+
+    def usage_since(
+        self, since_iso: str, user_id: Optional[str] = None
+    ) -> Dict[str, int]:
+        # A benchmark run is short; every recorded row is in the window.
+        return {
+            "calls": len(self.rows),
+            "total_tokens": sum(int(row.get("total_tokens") or 0) for row in self.rows),
+        }
+
+    def last_calls(self, limit: int = 20) -> List[Dict[str, Any]]:
+        return self.rows[-limit:]
+
+    @property
+    def totals(self) -> Dict[str, int]:
+        return {
+            "calls": len(self.rows),
+            "prompt_tokens": sum(int(row.get("prompt_tokens") or 0) for row in self.rows),
+            "completion_tokens": sum(int(row.get("completion_tokens") or 0) for row in self.rows),
+            "total_tokens": sum(int(row.get("total_tokens") or 0) for row in self.rows),
+        }
+
+
+class _CountingClient:
+    """Delegate to the real client but count calls and tokens."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.provider = getattr(inner, "provider", "groq")
+        self.model = getattr(inner, "model", "")
+        self.calls = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+
+    def complete_json(self, **kwargs: Any):
+        self.calls += 1
+        response = self.inner.complete_json(**kwargs)
+        self.prompt_tokens += int(getattr(response, "prompt_tokens", 0) or 0)
+        self.completion_tokens += int(getattr(response, "completion_tokens", 0) or 0)
+        self.total_tokens += int(getattr(response, "total_tokens", 0) or 0)
+        return response
+
+    @property
+    def totals(self) -> Dict[str, int]:
+        return {
+            "calls": self.calls,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
+
+def build_extractor(provider: str, model: str, allow_real_calls: bool) -> Tuple[Any, Any]:
+    """Return (extractor, usage_source). Raises on unsafe/invalid selection."""
+    provider = (provider or "").strip().lower()
+
+    if provider in ("", "rule_based", "local"):
+        return SemanticKnowledgeExtractor(pipeline_version="benchmark"), None
+
+    if provider == "groq":
+        if not allow_real_calls:
+            raise SystemExit(
+                "Refusing to call Groq without --allow-real-calls. "
+                "This command spends real free-tier quota."
             )
-            predicted_qa.append(
-                {
-                    "id": krow.get("id", ""),
-                    "question": krow.get("title", ""),
-                    "answer": qa_pred["answer"],
-                    "refusal": qa_pred["refusal"],
-                }
-            )
+        # Explicit, scoped opt-in for this process only. Automated tests never
+        # reach this path because they do not pass --allow-real-calls.
+        os.environ["ECHO_ALLOW_REAL_LLM"] = "1"
+        settings = get_settings()
+        if model:
+            settings.groq_model = model
+        settings.llm_provider = "groq"
+        if not settings.groq_api_key:
+            raise SystemExit("GROQ_API_KEY is not configured; cannot run the Groq provider.")
+        usage = _MemoryUsageRepository()
+        inner = build_llm_client(settings, usage)
+        if inner is None:
+            raise SystemExit("No LLM client was built for provider=groq.")
+        client = _CountingClient(inner)
+        adapter = GroqExtractionAdapter(client, pipeline_version="benchmark")
+        adapter.resolved_model = getattr(client, "model", model)
+        return adapter, client
 
-    # --- Compute scores ---
-    entity_f1 = compute_entity_f1(gold_entities, entities)
-    rel_f1 = compute_relationship_f1(gold_relationships, relationships)
-
-    qa_correctness = compute_qa_correctness(gold_qa, predicted_qa)
-    refusal_rate = compute_refusal_rate(gold_qa, predicted_qa)
-
-    # --- Build report ---
-    report = {
-        "baseline_commit": baseline_commit,
-        "db_path": db_path,
-        "user_id": user_id,
-        "captures_total": len(captures),
-        "entities": {
-            "gold_count": len(gold_entities),
-            "predicted_count": len(entities),
-            "f1": round(entity_f1, 4),
-        },
-        "relationships": {
-            "gold_count": len(gold_relationships),
-            "predicted_count": len(relationships),
-            "f1": round(rel_f1, 4),
-        },
-        "qa": {
-            "gold_count": len(gold_qa),
-            "predicted_count": len(predicted_qa),
-            "correctness": round(qa_correctness, 4),
-            "refusal_rate": round(refusal_rate, 4),
-        },
-        "release_thresholds": {
-            "entity_f1": 0.70,
-            "relationship_f1": 0.50,
-            "qa_correctness": 0.80,
-            "refusal_rate": 0.80,
-        },
-        "pass": {
-            "entity_f1": entity_f1 >= 0.70,
-            "relationship_f1": rel_f1 >= 0.50,
-            "qa_correctness": qa_correctness >= 0.80,
-            "refusal_rate": refusal_rate >= 0.80,
-        },
-    }
-
-    # Also emit a compact summary to stdout
-    print(json.dumps(report, indent=2))
-
-    # Write the report to file
-    out_dir = os.path.dirname(output_path)
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-    with open(output_path, "w") as f:
-        json.dump(report, f, indent=2)
-
-    conn.close()
-    return report
+    raise SystemExit(f"Unknown provider {provider!r}. Use rule_based or groq.")
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+# ------------------------------------------------------------------------ print
 
-def main():
-    parser = argparse.ArgumentParser(description="M5 gold-set scorer harness")
-    parser.add_argument(
-        "--db", default="/tmp/opencode/echo_device.db", help="Path to SQLite DB"
-    )
-    parser.add_argument(
-        "--user-id",
-        default="6aba2ba4-0f73-4b73-9a6d-3ecb7c24bf69",
-        help="User to score against",
-    )
-    parser.add_argument(
-        "--gold-dir", default="/home/guts/P2/KBA/server/eval/gold", help="Gold-set directory"
-    )
-    parser.add_argument(
-        "--baseline", default="ab47493", help="Commit hash to label the report"
-    )
-    parser.add_argument(
-        "--output", default="eval_report.json", help="Output report path"
-    )
-    args = parser.parse_args()
 
-    report = score(
-        db_path=args.db,
-        user_id=args.user_id,
-        gold_dir=args.gold_dir,
-        baseline_commit=args.baseline,
-        output_path=args.output,
+def _format_score(score: Score) -> str:
+    return (
+        f"P={score.precision:.3f} R={score.recall:.3f} F1={score.f1:.3f} "
+        f"(tp={score.true_positives} fp={score.false_positives} fn={score.false_negatives})"
     )
 
-    # Print a quick pass/fail line for CI/consumption
-    p = report["pass"]
+
+def print_result(result: BenchmarkResult, usage: Optional[Dict[str, int]] = None) -> None:
+    label = f"{result.provider}" + (f" · {result.resolved_model}" if result.resolved_model else "")
+    print(f"Gold set : {result.gold_path}")
+    print(f"SHA-256  : {result.gold_hash}")
+    print(f"Examples : {result.examples}")
+    print(f"Provider : {label}")
+    print(f"Entities : {_format_score(result.entity)}")
+    print(f"Relations: {_format_score(result.relationship)}")
+    if result.failures:
+        print(f"Failed   : {', '.join(result.failures)}")
+    if usage:
+        print(
+            "Tokens   : "
+            f"calls={usage.get('calls', 0)} "
+            f"prompt={usage.get('prompt_tokens', 0)} "
+            f"completion={usage.get('completion_tokens', 0)} "
+            f"total={usage.get('total_tokens', 0)}"
+        )
+
+
+def print_delta(baseline: BenchmarkResult, candidate: BenchmarkResult) -> None:
+    print("\nDelta vs rule_based baseline")
     print(
-        f"M5 baseline {args.baseline}: entity_F1={report['entities']['f1']:.3f} "
-        f"rel_F1={report['relationships']['f1']:.3f} "
-        f"QA_correctness={report['qa']['correctness']:.3f} "
-        f"refusal_rate={report['qa']['refusal_rate']:.3f} -> "
-        f"{'PASS' if all(p.values()) else 'FAIL'} thresholds: "
-        f"entity≥0.70 rel≥0.50 QA≥0.80 refusal≥0.80"
+        "  entity F1     "
+        f"{candidate.entity.f1 - baseline.entity.f1:+.3f} "
+        f"(baseline {baseline.entity.f1:.3f} -> {candidate.entity.f1:.3f})"
     )
+    print(
+        "  relationship F1 "
+        f"{candidate.relationship.f1 - baseline.relationship.f1:+.3f} "
+        f"(baseline {baseline.relationship.f1:.3f} -> {candidate.relationship.f1:.3f})"
+    )
+
+
+# -------------------------------------------------------------------------- CLI
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Repeatable extraction benchmark with the rule-based baseline."
+    )
+    parser.add_argument("--provider", default="rule_based", help="rule_based or groq")
+    parser.add_argument("--model", default="", help=f"Model for hosted providers (default {DEFAULT_MODEL})")
+    parser.add_argument("--gold", default=DEFAULT_GOLD, help="Path to the gold JSON file")
+    parser.add_argument(
+        "--allow-real-calls",
+        action="store_true",
+        help="Required before any hosted provider call is made.",
+    )
+    parser.add_argument(
+        "--json-out",
+        default="",
+        help="Optional path to write the JSON result (key material is never included).",
+    )
+    parser.add_argument(
+        "--no-baseline",
+        action="store_true",
+        help="Skip the rule-based baseline comparison.",
+    )
+    args = parser.parse_args(argv)
+
+    gold_path = os.path.abspath(args.gold)
+    if not os.path.isfile(gold_path):
+        raise SystemExit(f"Gold set not found: {gold_path}")
+    examples = load_gold(gold_path)
+
+    provider = (args.provider or "rule_based").strip().lower()
+    model = args.model or (DEFAULT_MODEL if provider == "groq" else "")
+    extractor, usage_source = build_extractor(provider, model, args.allow_real_calls)
+    result, _predictions = run_benchmark(
+        examples, extractor, provider=provider, model=model, gold_path=gold_path
+    )
+    usage = usage_source.totals if usage_source is not None else None
+    print_result(result, usage)
+
+    payload: Dict[str, Any] = {"result": result.as_dict()}
+    if usage is not None:
+        payload["usage"] = usage
+
+    if provider != "rule_based" and not args.no_baseline:
+        baseline_extractor = SemanticKnowledgeExtractor(pipeline_version="benchmark")
+        baseline, _ = run_benchmark(
+            examples,
+            baseline_extractor,
+            provider="rule_based",
+            model="deterministic",
+            gold_path=gold_path,
+        )
+        payload["baseline"] = baseline.as_dict()
+        print_delta(baseline, result)
+
+    if args.json_out:
+        out_path = os.path.abspath(args.json_out)
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        print(f"\nWrote {out_path}")
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

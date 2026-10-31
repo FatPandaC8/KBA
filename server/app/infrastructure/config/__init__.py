@@ -3,26 +3,76 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-DEFAULT_AI_PROVIDERS: List[Dict[str, object]] = [
-    {
-        "id": "stt_local",
-        "name": "faster-whisper (self-hosted)",
-        "receives": ["audio recording"],
-        "trains_on_data": False,
-    },
-    {
-        "id": "embeddings_local",
-        "name": "fastembed (self-hosted)",
-        "receives": ["entity and relationship text"],
-        "trains_on_data": False,
-    },
-    {
-        "id": "extraction_local",
-        "name": "local rule-based extraction (self-hosted)",
-        "receives": ["transcript text"],
-        "trains_on_data": False,
-    },
-]
+GROQ_PRIVACY_URL = "https://console.groq.com/docs/your-data"
+GROQ_TERMS_URL = "https://groq.com/terms-of-use"
+GROQ_RETENTION_SUMMARY = (
+    "Groq does not retain inference inputs/outputs by default. It may retain "
+    "them for up to 30 days only to troubleshoot platform reliability or "
+    "investigate abuse; Zero Data Retention can be enabled in Groq Data "
+    "Controls. Groq states API data is not used to train models. Data is "
+    "processed in the United States (GCP)."
+)
+
+# Free-plan limits published by Groq on 2026-10-30 for the default model.
+# The account limits page remains authoritative; these are configurable.
+GROQ_FREE_LIMITS = {
+    "openai/gpt-oss-120b": {
+        "rpm": 30,
+        "rpd": 1000,
+        "tpm": 8000,
+        "tpd": 200000,
+    }
+}
+
+
+def _provider_entry(
+    provider: str, model: str, available: bool
+) -> List[Dict[str, object]]:
+    entries: List[Dict[str, object]] = [
+        {
+            "id": "stt_local",
+            "name": "faster-whisper (self-hosted)",
+            "kind": "speech_to_text",
+            "receives": ["audio recording"],
+            "trains_on_data": False,
+            "retention": "Audio and transcript stay on your server.",
+        },
+        {
+            "id": "embeddings_local",
+            "name": "fastembed (self-hosted)",
+            "kind": "embeddings",
+            "receives": ["entity and relationship text"],
+            "trains_on_data": False,
+            "retention": "Vectors stay on your server.",
+        },
+    ]
+    if provider == "groq":
+        entries.append(
+            {
+                "id": "extraction_groq",
+                "name": f"Groq hosted model ({model})",
+                "kind": "extraction",
+                "receives": ["transcript text"],
+                "trains_on_data": False,
+                "model": model,
+                "retention": GROQ_RETENTION_SUMMARY,
+                "privacy_url": GROQ_PRIVACY_URL,
+                "terms_url": GROQ_TERMS_URL,
+                "available": available,
+            }
+        )
+    else:
+        entries.append(
+            {
+                "id": "extraction_local",
+                "name": "local rule-based extraction (self-hosted)",
+                "kind": "extraction",
+                "receives": ["transcript text"],
+                "trains_on_data": False,
+                "retention": "Text stays on your server.",
+            }
+        )
+    return entries
 
 
 @dataclass
@@ -51,10 +101,30 @@ class ServerSettings:
     # this is false, so a production deployment cannot leak verification links.
     expose_dev_tokens: bool = os.getenv("ECHO_ENV", "production") in ("test", "development")
 
-    # Consent. Bump the version when the provider list or data use changes.
-    consent_version: str = os.getenv("ECHO_CONSENT_VERSION", "2026-10-29-v3")
+    # Consent. The effective version is derived from the base version plus the
+    # active provider/model, so switching either re-prompts every user.
+    consent_version: str = os.getenv("ECHO_CONSENT_VERSION", "2026-10-30-v4")
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     groq_model: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    groq_base_url: str = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+    # Explicit provider selection. "groq" never silently degrades to the
+    # rule-based extractor: a missing key fails closed.
+    llm_provider: str = os.getenv(
+        "ECHO_LLM_PROVIDER",
+        "rule_based" if os.getenv("ECHO_ENV", "production") == "test" else "groq",
+    )
+    llm_timeout_seconds: int = int(os.getenv("ECHO_LLM_TIMEOUT_SECONDS", "45"))
+    llm_max_retries: int = int(os.getenv("ECHO_LLM_MAX_RETRIES", "3"))
+    llm_repair_attempts: int = int(os.getenv("ECHO_LLM_REPAIR_ATTEMPTS", "1"))
+    llm_max_retry_wait_seconds: int = int(os.getenv("ECHO_LLM_MAX_RETRY_WAIT_SECONDS", "8"))
+    llm_max_prompt_chars: int = int(os.getenv("ECHO_LLM_MAX_PROMPT_CHARS", "24000"))
+    groq_rpm: int = int(os.getenv("ECHO_GROQ_RPM", "30"))
+    groq_rpd: int = int(os.getenv("ECHO_GROQ_RPD", "1000"))
+    groq_tpm: int = int(os.getenv("ECHO_GROQ_TPM", "8000"))
+    groq_tpd: int = int(os.getenv("ECHO_GROQ_TPD", "200000"))
+    # A deliberate opt-in for real calls in test-like environments. Automated
+    # tests leave this unset and use the deterministic fake port.
+    allow_real_llm: bool = os.getenv("ECHO_ALLOW_REAL_LLM", "0") in ("1", "true", "True")
     ai_providers_json: str = os.getenv("ECHO_AI_PROVIDERS", "")
 
     # Processing jobs (PRC-02 … PRC-05)
@@ -75,7 +145,9 @@ class ServerSettings:
     def ai_providers(self) -> List[Dict[str, object]]:
         raw = self.ai_providers_json.strip()
         if not raw:
-            return list(DEFAULT_AI_PROVIDERS)
+            return _provider_entry(
+                self.llm_provider, self.llm_model, self.llm_provider_available
+            )
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -86,6 +158,34 @@ class ServerSettings:
             if not isinstance(entry, dict) or "id" not in entry or "name" not in entry:
                 raise ValueError("Each AI provider needs an id and a name")
         return parsed
+
+    @property
+    def llm_model(self) -> str:
+        return self.groq_model
+
+    @llm_model.setter
+    def llm_model(self, value: str) -> None:
+        if value and value.strip():
+            self.groq_model = value.strip()
+
+    @property
+    def llm_provider_available(self) -> bool:
+        if self.llm_provider == "groq":
+            return bool(self.groq_api_key)
+        return self.llm_provider in ("rule_based", "fake")
+
+    @property
+    def effective_consent_version(self) -> str:
+        """Consent version changes whenever provider or model changes."""
+        return f"{self.consent_version}:{self.llm_provider}:{self.llm_model}"
+
+    def llm_limits(self) -> Dict[str, int]:
+        return {
+            "rpm": self.groq_rpm,
+            "rpd": self.groq_rpd,
+            "tpm": self.groq_tpm,
+            "tpd": self.groq_tpd,
+        }
 
 
 _SETTINGS_INSTANCE: Optional[ServerSettings] = None

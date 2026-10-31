@@ -7,17 +7,28 @@ from server.app.application.ports import AudioTranscriptionPort
 from server.app.domain.errors import InvalidInputAudioError, ProviderError
 
 _GLOBAL_WHISPER_MODEL = None
+_GLOBAL_WHISPER_MODEL_NAME = None
+
+# `tiny` is the default because it runs comfortably on a CPU-only server.
+# `base.en` / `small.en` raise accuracy for English and are opt-in via env.
+WHISPER_MODEL_NAME = os.getenv("ECHO_WHISPER_MODEL", "tiny")
+WHISPER_COMPUTE_TYPE = os.getenv("ECHO_WHISPER_COMPUTE_TYPE", "int8")
 
 def get_whisper_model():
-    """Lazily load faster-whisper tiny model on CPU for local STT."""
-    global _GLOBAL_WHISPER_MODEL
-    if _GLOBAL_WHISPER_MODEL is None:
-        try:
-            from faster_whisper import WhisperModel
-            _GLOBAL_WHISPER_MODEL = WhisperModel("tiny", device="cpu", compute_type="int8")
-        except Exception as e:
-            print(f"[STT] Warning: Failed to load faster-whisper model: {e}")
-            _GLOBAL_WHISPER_MODEL = None
+    """Lazily load the configured faster-whisper model on CPU for local STT."""
+    global _GLOBAL_WHISPER_MODEL, _GLOBAL_WHISPER_MODEL_NAME
+    if _GLOBAL_WHISPER_MODEL is not None and _GLOBAL_WHISPER_MODEL_NAME == WHISPER_MODEL_NAME:
+        return _GLOBAL_WHISPER_MODEL
+    try:
+        from faster_whisper import WhisperModel
+        _GLOBAL_WHISPER_MODEL = WhisperModel(
+            WHISPER_MODEL_NAME, device="cpu", compute_type=WHISPER_COMPUTE_TYPE
+        )
+        _GLOBAL_WHISPER_MODEL_NAME = WHISPER_MODEL_NAME
+    except Exception as e:
+        print(f"[STT] Warning: Failed to load faster-whisper model {WHISPER_MODEL_NAME!r}: {e}")
+        _GLOBAL_WHISPER_MODEL = None
+        _GLOBAL_WHISPER_MODEL_NAME = None
     return _GLOBAL_WHISPER_MODEL
 
 def decode_audio_ffmpeg(file_path: str, sr: int = 16000) -> np.ndarray:

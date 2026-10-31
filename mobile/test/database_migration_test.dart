@@ -46,7 +46,7 @@ void main() {
   });
 
   test(
-    'v2 → v4 migration preserves existing notes and adds M3 columns',
+    'v2 → v5 migration preserves existing notes and adds M3/U3 columns',
     () async {
       final dbPath = p.join(tempDir.path, 'echo_notes.db');
       final legacy = await databaseFactory.openDatabase(
@@ -98,12 +98,15 @@ void main() {
       expect(row['stage'], '');
       expect(row['audioOnServer'], 0);
       expect(row['knowledgeItemId'], isNull);
+      // U3 local-wins flags default to unedited for migrated notes.
+      expect(row['userEditedTitle'], 0);
+      expect(row['userEditedSummary'], 0);
 
       await helper.close();
     },
   );
 
-  test('fresh database creates the v4 schema', () async {
+  test('fresh database creates the v5 schema', () async {
     final helper = DatabaseHelper.forTesting(() async => tempDir.path);
     final db = await helper.database;
     final columns = await db.rawQuery('PRAGMA table_info(notes)');
@@ -114,6 +117,9 @@ void main() {
     expect(names, contains('stage'));
     expect(names, contains('audioOnServer'));
     expect(names, contains('knowledgeItemId'));
+    // U3 local-wins flags exist in the fresh schema.
+    expect(names, contains('userEditedTitle'));
+    expect(names, contains('userEditedSummary'));
 
     await db.insert('notes', {
       'id': 'new-note',
@@ -129,6 +135,8 @@ void main() {
     expect(row['stage'], '');
     expect(row['audioOnServer'], 0);
     expect(row['knowledgeItemId'], isNull);
+    expect(row['userEditedTitle'], 0);
+    expect(row['userEditedSummary'], 0);
 
     await helper.close();
   });

@@ -64,7 +64,6 @@ class FakeBackendService extends BackendService {
   bool failDelete = false;
   bool failGraph = false;
   bool failSearch = false;
-  bool failAsk = false;
   bool failAuth = false;
 
   int uploadCalls = 0;
@@ -82,7 +81,6 @@ class FakeBackendService extends BackendService {
   int retryCalls = 0;
   int graphCalls = 0;
   int searchCalls = 0;
-  int askCalls = 0;
 
   /// Capture ids in upload order, used to prove uploads are serialized.
   final List<String> uploadedCaptureIds = [];
@@ -125,12 +123,6 @@ class FakeBackendService extends BackendService {
     relationships: const [],
   );
   final Map<String, EntityDetailModel> entityDetails = {};
-
-  final List<ConversationSummaryModel> conversations = [];
-  final Map<String, ConversationModel> conversationById = {};
-
-  /// Optional override for [ask].
-  AskResultModel Function(String question, String? conversationId)? askHandler;
 
   bool consentGranted = false;
 
@@ -364,57 +356,6 @@ class FakeBackendService extends BackendService {
             .toList(),
       );
     }
-  }
-
-  // ---------------------------------------------------------------- Ask AI
-  @override
-  Future<List<ConversationSummaryModel>> fetchConversations() async {
-    return List.unmodifiable(conversations);
-  }
-
-  @override
-  Future<ConversationModel> fetchConversation(String conversationId) async {
-    final conversation = conversationById[conversationId];
-    if (conversation == null) {
-      throw BackendException('conversation not found', statusCode: 404);
-    }
-    return conversation;
-  }
-
-  @override
-  Future<void> deleteConversation(String conversationId) async {
-    conversations.removeWhere((c) => c.id == conversationId);
-    conversationById.remove(conversationId);
-  }
-
-  @override
-  Future<AskResultModel> ask(String question, {String? conversationId}) async {
-    askCalls++;
-    if (failAsk) {
-      throw BackendException('assistant failed', statusCode: 500);
-    }
-    final handler = askHandler;
-    if (handler != null) return handler(question, conversationId);
-
-    final id = conversationId ?? 'conversation-1';
-    return AskResultModel(
-      conversationId: id,
-      message: AskMessageModel(
-        id: 'message-$askCalls',
-        role: 'assistant',
-        content: 'Answer based on your knowledge.',
-        status: 'ready',
-        errorClass: '',
-        errorMessage: '',
-        createdAt: '2026-01-01T00:00:00Z',
-        citations: const [],
-      ),
-      facts: const [],
-      inferences: const [],
-      contradictions: const [],
-      refused: false,
-      refusalReason: '',
-    );
   }
 
   // ------------------------------------------------------------------ auth

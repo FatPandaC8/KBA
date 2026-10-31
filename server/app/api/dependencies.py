@@ -1,5 +1,6 @@
+import logging
 import secrets
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import Header, HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -22,22 +23,21 @@ from server.app.adapters.outbound.persistence import (
     SqliteConsentRepository,
     SqliteTombstoneRepository,
     SqliteRecordSupportRepository,
-    SqliteConversationRepository,
-    SqliteMessageRepository,
-    SqliteCitationRepository,
+    SqliteRelationshipTypeRegistryRepository,
+    SqliteAdminAuditLogRepository,
+    SqliteLLMUsageRepository,
+    SqliteAppSettingsRepository,
 )
 from server.app.adapters.outbound.embeddings import FastEmbedProvider
 from server.app.adapters.outbound.speech import FasterWhisperSpeechAdapter
 from server.app.adapters.outbound.extraction import SemanticKnowledgeExtractor
 from server.app.adapters.outbound.extraction.groq import GroqExtractionAdapter
 from server.app.adapters.outbound.providers import LocalProviderRegistry
-from server.app.adapters.outbound.answering import LocalGraphAnswerProvider
-from server.app.adapters.outbound.answering.groq import GroqAnswerProvider
+from server.app.adapters.outbound.llm.factory import build_llm_client
 from server.app.adapters.outbound.identity import LogEmailAdapter, GoogleTokenInfoVerifier
 from server.app.application.use_cases import (
     ProcessCaptureUseCase,
     GraphQueryUseCase,
-    AskQuestionUseCase,
     SemanticRecallUseCase,
     ManageKnowledgeUseCase,
     ManageRelationshipsUseCase,
@@ -52,6 +52,7 @@ from server.app.domain.entities import UserEntity
 from server.app.domain.errors import AuthError
 
 security = HTTPBearer(auto_error=False)
+logger = logging.getLogger("echo.container")
 
 
 class Container:
@@ -75,22 +76,36 @@ class Container:
         self.consent_repo = SqliteConsentRepository(self.db_manager)
         self.tombstone_repo = SqliteTombstoneRepository(self.db_manager)
         self.support_repo = SqliteRecordSupportRepository(self.db_manager)
-        self.conversation_repo = SqliteConversationRepository(self.db_manager)
-        self.message_repo = SqliteMessageRepository(self.db_manager)
-        self.citation_repo = SqliteCitationRepository(self.db_manager)
+        self.rel_type_repo = SqliteRelationshipTypeRegistryRepository(self.db_manager)
+        self.audit_repo = SqliteAdminAuditLogRepository(self.db_manager)
+        self.llm_usage_repo = SqliteLLMUsageRepository(self.db_manager)
+        self.app_settings_repo = SqliteAppSettingsRepository(self.db_manager)
 
-        # Free/local AI adapters only. No paid provider or paid fallback exists.
+        # Runtime overrides from the admin console survive a restart. The env
+        # var remains the default; the persisted selection wins only when an
+        # operator explicitly chose it.
+        stored_provider = self.app_settings_repo.get("llm_provider")
+        stored_model = self.app_settings_repo.get("llm_model")
+        if stored_provider:
+            settings.llm_provider = stored_provider.strip().lower()
+        if stored_model:
+            settings.groq_model = stored_model.strip()
+
+        # STT and embeddings stay local. Only text ever reaches a hosted LLM.
         self.embedder = FastEmbedProvider()
         self.transcriber = FasterWhisperSpeechAdapter()
-        if settings.groq_api_key:
-            self.extractor = GroqExtractionAdapter(api_key=settings.groq_api_key, model=settings.groq_model, pipeline_version=settings.pipeline_version)
-        else:
-            self.extractor = SemanticKnowledgeExtractor(pipeline_version=settings.pipeline_version)
-        if settings.groq_api_key:
-            self.answerer = GroqAnswerProvider(api_key=settings.groq_api_key, model=settings.groq_model)
-        else:
-            self.answerer = LocalGraphAnswerProvider()
-        self.provider_registry = LocalProviderRegistry(pipeline_version=settings.pipeline_version)
+        self.llm_client = build_llm_client(settings, self.llm_usage_repo)
+        self.extractor = (
+            GroqExtractionAdapter(
+                self.llm_client,
+                pipeline_version=settings.pipeline_version,
+                repair_attempts=settings.llm_repair_attempts,
+                max_prompt_chars=settings.llm_max_prompt_chars,
+            )
+            if self.llm_client is not None
+            else SemanticKnowledgeExtractor(pipeline_version=settings.pipeline_version)
+        )
+        self.provider_registry = LocalProviderRegistry(settings)
         self.email_port = LogEmailAdapter(settings.email_outbox_path)
         self.google_verifier = GoogleTokenInfoVerifier(settings.google_client_id)
 
@@ -124,6 +139,7 @@ class Container:
             flag_threshold=settings.duplicate_flag_threshold,
             retry_limit=settings.job_retry_limit,
             lease_seconds=settings.job_lease_seconds,
+            relationship_type_repo=self.rel_type_repo,
         )
         self.graph_query_uc = GraphQueryUseCase(
             entity_repo=self.entity_repo,
@@ -133,17 +149,6 @@ class Container:
             duplicate_repo=self.duplicate_repo,
             support_repo=self.support_repo,
             tombstone_repo=self.tombstone_repo,
-        )
-        self.ask_uc = AskQuestionUseCase(
-            conversation_repo=self.conversation_repo,
-            message_repo=self.message_repo,
-            citation_repo=self.citation_repo,
-            entity_repo=self.entity_repo,
-            rel_repo=self.rel_repo,
-            embedding_repo=self.embedding_repo,
-            embedder=self.embedder,
-            answerer=self.answerer,
-            graph_query=self.graph_query_uc,
         )
         self.semantic_recall_uc = SemanticRecallUseCase(
             knowledge_repo=self.knowledge_repo,
@@ -159,6 +164,7 @@ class Container:
         )
         self.manage_relationships_uc = ManageRelationshipsUseCase(
             rel_repo=self.rel_repo,
+            relationship_type_repo=self.rel_type_repo,
         )
         self.backfill_embeddings_uc = BackfillEmbeddingsUseCase(
             knowledge_repo=self.knowledge_repo,
@@ -175,8 +181,6 @@ class Container:
             job_repo=self.job_repo,
             eval_repo=self.eval_repo,
             support_repo=self.support_repo,
-            citation_repo=self.citation_repo,
-            message_repo=self.message_repo,
             upload_dir=settings.upload_dir,
         )
         self.purge_audio_uc = PurgeRetainedAudioUseCase(
@@ -198,10 +202,8 @@ class Container:
             eval_repo=self.eval_repo,
             tombstone_repo=self.tombstone_repo,
             support_repo=self.support_repo,
-            conversation_repo=self.conversation_repo,
-            message_repo=self.message_repo,
-            citation_repo=self.citation_repo,
             upload_dir=settings.upload_dir,
+            audit_repo=self.audit_repo,
         )
         self.admin_status_uc = AdminSystemStatusUseCase(
             knowledge_repo=self.knowledge_repo,
@@ -214,6 +216,182 @@ class Container:
         )
 
         self.worker = JobWorker(self.process_capture_uc, poll_interval=settings.job_poll_seconds)
+
+    # ---------------------------------------------------------- AI configuration
+    def ai_config(self) -> Dict[str, Any]:
+        """Admin-visible AI configuration. Never includes the API key."""
+        from datetime import datetime, timedelta, timezone
+
+        since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        usage = self.llm_usage_repo.usage_since(since)
+        return {
+            "provider": self.settings.llm_provider,
+            "model": self.settings.llm_model,
+            "provider_available": self.settings.llm_provider_available,
+            "key_configured": bool(self.settings.groq_api_key),
+            "local_only": self.llm_client is None,
+            "limits": self.settings.llm_limits(),
+            "consent_version": self.settings.effective_consent_version,
+            "last_24h_calls": usage["calls"],
+            "last_24h_tokens": usage["total_tokens"],
+            "recent_calls": self.llm_usage_repo.last_calls(10),
+            "providers": [
+                {"provider": "rule_based", "model": "", "available": True, "hosted": False},
+                {
+                    "provider": "groq",
+                    "model": self.settings.groq_model,
+                    "available": bool(self.settings.groq_api_key),
+                    "hosted": True,
+                },
+            ],
+        }
+
+    def configure_llm(self, provider: str, model: str) -> Dict[str, Any]:
+        from server.app.domain.errors import ValidationError
+
+        provider = (provider or "").strip().lower()
+        model = (model or "").strip()
+        allowed = {"rule_based", "groq"}
+        if self.settings.app_env == "test":
+            allowed.add("fake")
+        if provider not in allowed:
+            raise ValidationError(f"Unsupported LLM provider: {provider!r}")
+        if provider == "groq" and not self.settings.groq_api_key:
+            raise ValidationError(
+                "GROQ_API_KEY is not configured on the server; refusing to select Groq."
+            )
+        if provider == "groq" and not model:
+            raise ValidationError("A model name is required when selecting Groq.")
+
+        previous_provider, previous_model = self.settings.llm_provider, self.settings.groq_model
+        self.settings.llm_provider = provider
+        if model:
+            self.settings.groq_model = model
+        try:
+            client = build_llm_client(self.settings, self.llm_usage_repo)
+        except Exception:
+            self.settings.llm_provider = previous_provider
+            self.settings.groq_model = previous_model
+            raise
+
+        self.llm_client = client
+        self.extractor = (
+            GroqExtractionAdapter(
+                client,
+                pipeline_version=self.settings.pipeline_version,
+                repair_attempts=self.settings.llm_repair_attempts,
+                max_prompt_chars=self.settings.llm_max_prompt_chars,
+            )
+            if client is not None
+            else SemanticKnowledgeExtractor(
+                pipeline_version=self.settings.pipeline_version
+            )
+        )
+        # Use cases hold references; swap the adapters in place so a running
+        # worker picks up the new provider without a restart.
+        self.process_capture_uc.extractor = self.extractor
+        self.manage_knowledge_uc.extractor = self.extractor
+        self.provider_registry.settings = self.settings
+
+        self.app_settings_repo.set("llm_provider", provider)
+        self.app_settings_repo.set("llm_model", self.settings.llm_model)
+        logger.info(
+            "ai_config_changed provider=%s model=%s",
+            provider,
+            self.settings.llm_model,
+        )
+        return self.ai_config()
+
+    def test_llm(self) -> Dict[str, Any]:
+        """Minimal provider call for ADM-07. Returns status, never the key."""
+        from server.app.adapters.outbound.llm.validation import (
+            TEST_SCHEMA,
+            TEST_SCHEMA_NAME,
+        )
+        from server.app.domain.errors import (
+            ProviderError,
+            ProviderNetworkError,
+            ProviderSchemaError,
+            QuotaExhaustedError,
+        )
+
+        if self.llm_client is None:
+            return {
+                "ok": True,
+                "provider": self.settings.llm_provider,
+                "model": self.settings.llm_model,
+                "network_call": False,
+                "detail": "Local rule-based provider selected; no hosted call is made.",
+            }
+        try:
+            response = self.llm_client.complete_json(
+                operation="admin_test",
+                system="Return the JSON object {\"ok\": true} and nothing else.",
+                user="ping",
+                schema=TEST_SCHEMA,
+                schema_name=TEST_SCHEMA_NAME,
+                # gpt-oss is a reasoning model: a tiny JSON answer still spends
+                # reasoning tokens, so 16 was rejected as json_validate_failed
+                # (empty generation). 128 is the smallest reliable bound.
+                max_tokens=128,
+                temperature=0.0,
+            )
+            return {
+                "ok": True,
+                "provider": response.provider,
+                "model": response.model,
+                "network_call": True,
+                "total_tokens": response.total_tokens,
+                "latency_ms": response.latency_ms,
+                "detail": "Provider answered successfully.",
+            }
+        except QuotaExhaustedError as exc:
+            return {
+                "ok": False,
+                "provider": self.settings.llm_provider,
+                "model": self.settings.llm_model,
+                "network_call": True,
+                "error_class": "quota_exhausted",
+                "retry_after": getattr(exc, "retry_after", 0),
+                "detail": str(exc),
+            }
+        except ProviderSchemaError as exc:
+            return {
+                "ok": False,
+                "provider": self.settings.llm_provider,
+                "model": self.settings.llm_model,
+                "network_call": True,
+                "error_class": "schema_invalid",
+                "detail": str(exc),
+            }
+        except ProviderNetworkError as exc:
+            return {
+                "ok": False,
+                "provider": self.settings.llm_provider,
+                "model": self.settings.llm_model,
+                "network_call": True,
+                "error_class": "network_error",
+                "detail": str(exc),
+            }
+        except ProviderError as exc:
+            return {
+                "ok": False,
+                "provider": self.settings.llm_provider,
+                "model": self.settings.llm_model,
+                "network_call": True,
+                "error_class": getattr(exc, "error_class", "provider_failure"),
+                "detail": str(exc),
+            }
+        except Exception as exc:  # never leak a traceback to the admin UI
+            logger.warning("ai_test_failed error=%s", type(exc).__name__)
+            return {
+                "ok": False,
+                "provider": self.settings.llm_provider,
+                "model": self.settings.llm_model,
+                "network_call": True,
+                "error_class": "unknown",
+                "detail": "The provider test failed.",
+            }
 
 
 _CONTAINER: Optional[Container] = None

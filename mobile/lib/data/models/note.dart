@@ -34,6 +34,12 @@ class Note {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  /// Local-only "local wins" flags (U3): server sync must never overwrite a
+  /// user-edited title or summary. They are not synced to the server and are
+  /// never set for other fields.
+  final bool userEditedTitle;
+  final bool userEditedSummary;
+
   Note({
     required this.id,
     this.audioPath,
@@ -54,6 +60,8 @@ class Note {
     this.knowledgeItemId,
     required this.createdAt,
     required this.updatedAt,
+    this.userEditedTitle = false,
+    this.userEditedSummary = false,
   });
 
   bool get hasLocalAudio => audioPath != null && audioPath!.isNotEmpty;
@@ -87,6 +95,10 @@ class Note {
     Object? knowledgeItemId = _unset,
     DateTime? createdAt,
     DateTime? updatedAt,
+    Object? titleEdit = _unset,
+    Object? summaryEdit = _unset,
+    bool? userEditedTitle,
+    bool? userEditedSummary,
   }) {
     return Note(
       id: id ?? this.id,
@@ -118,6 +130,8 @@ class Note {
           : knowledgeItemId as String?,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      userEditedTitle: userEditedTitle ?? this.userEditedTitle,
+      userEditedSummary: userEditedSummary ?? this.userEditedSummary,
     );
   }
 
@@ -142,6 +156,8 @@ class Note {
       'knowledgeItemId': knowledgeItemId,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
+      'userEditedTitle': userEditedTitle ? 1 : 0,
+      'userEditedSummary': userEditedSummary ? 1 : 0,
     };
   }
 
@@ -185,6 +201,8 @@ class Note {
       updatedAt:
           DateTime.tryParse(map['updatedAt'] as String? ?? '') ??
           DateTime.now(),
+      userEditedTitle: ((map['userEditedTitle'] as int?) ?? 0) == 1,
+      userEditedSummary: ((map['userEditedSummary'] as int?) ?? 0) == 1,
     );
   }
 }

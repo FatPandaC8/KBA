@@ -1,7 +1,8 @@
+import logging
 import os
 import json
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from server.app.api.dependencies import Container, get_container, verify_admin_auth
@@ -12,13 +13,50 @@ from server.app.adapters.inbound.http.schemas import (
     ServerConfigResponse,
     KnowledgeItem,
     DetailedCaptureResponse,
+    AIConfigRequest,
+    AIConfigResponse,
+    AITestResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 admin_router = APIRouter(
     prefix="/api/admin",
     dependencies=[Depends(verify_admin_auth)],
     tags=["admin"],
 )
+
+
+def _audit(
+    request: Request,
+    container: Container,
+    action: str,
+    resource_type: str = "",
+    resource_id: str = "",
+    user_id: str = "",
+    outcome: str = "success",
+    detail: str = "",
+) -> None:
+    """Append one admin audit row (U4). Audit failures never break the route.
+
+    The actor is the shared admin token identity ("admin"); the request IP is
+    stored when it is available and "unknown" otherwise. No token or other
+    secret material is ever written to a row.
+    """
+    try:
+        client_ip = request.client.host if (request and request.client) else "unknown"
+        container.audit_repo.record(
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            user_id=user_id,
+            ip_address=client_ip,
+            outcome=outcome,
+            detail=detail,
+            actor="admin",
+        )
+    except Exception:
+        logger.warning("admin audit write failed for action=%s", action, exc_info=True)
 
 @admin_router.get("/status", response_model=SystemHealthResponse)
 def get_system_status(container: Container = Depends(get_container)):
@@ -58,20 +96,25 @@ def get_recent_jobs(
 @admin_router.post("/jobs/{capture_id}/retry", response_model=Dict[str, Any])
 def retry_job(
     capture_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ):
     capture = container.capture_repo.get_by_id(capture_id)
     if not capture:
+        _audit(request, container, "jobs.retry", "capture", capture_id, outcome="not_found")
         raise HTTPException(status_code=404, detail="Capture not found")
     if not capture.audio_path or not os.path.exists(capture.audio_path):
+        _audit(request, container, "jobs.retry", "capture", capture_id, outcome="rejected", detail="audio purged")
         raise HTTPException(status_code=400, detail="Cannot retry: Audio was purged per privacy consent policy.")
 
     if not container.process_capture_uc.retry(capture.id, capture.user_id):
         job = container.job_repo.get_by_capture_id(capture.id, user_id=capture.user_id)
+        _audit(request, container, "jobs.retry", "capture", capture_id, outcome="rejected", detail="job not retryable")
         if not job or job.status != "failed":
             raise HTTPException(status_code=409, detail="Job is already queued or running")
         raise HTTPException(status_code=409, detail="Job cannot be retried")
     container.worker.kick()
+    _audit(request, container, "jobs.retry", "capture", capture_id, user_id=capture.user_id)
     return {"status": "queued", "capture_id": capture.id}
 
 @admin_router.get("/captures", response_model=List[DetailedCaptureResponse])
@@ -180,9 +223,11 @@ def get_capture_audio(
 @admin_router.delete("/knowledge/{item_id}")
 def admin_delete_knowledge(
     item_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ):
     container.manage_knowledge_uc.delete_knowledge(item_id, user_id=None)
+    _audit(request, container, "knowledge.delete", "knowledge_item", item_id)
     return {"deleted": True, "id": item_id}
 
 
@@ -214,8 +259,16 @@ def list_admin_knowledge(
     ]
 
 @admin_router.post("/embeddings/backfill", response_model=BackfillResponse)
-def trigger_backfill(container: Container = Depends(get_container)):
+def trigger_backfill(request: Request, container: Container = Depends(get_container)):
     res = container.backfill_embeddings_uc.execute()
+    _audit(
+        request,
+        container,
+        "embeddings.backfill",
+        "knowledge_item",
+        "",
+        detail=f"newly_indexed={res['newly_indexed']} failed={res['failed']}",
+    )
     return BackfillResponse(
         total_items=res["total_items"],
         newly_indexed=res["newly_indexed"],
@@ -229,14 +282,67 @@ def get_config(container: Container = Depends(get_container)):
         environment=s.app_env,
         pipeline_version=s.pipeline_version,
         stt_provider="faster-whisper (local)",
-        extraction_provider="local rule-based extraction",
+        extraction_provider=(
+            f"groq {s.llm_model}" if s.llm_provider == "groq" else "local rule-based extraction"
+        ),
         embedding_provider="fastembed BAAI/bge-small-en-v1.5 (local)",
         upload_dir=s.upload_dir,
         max_voice_seconds=s.max_voice_seconds,
-        consent_version=s.consent_version,
+        consent_version=s.effective_consent_version,
         google_sign_in_configured=bool(s.google_client_id),
         email_delivery="local outbox (not a real mailbox)",
     )
+
+@admin_router.get("/ai-config", response_model=AIConfigResponse)
+def get_ai_config(container: Container = Depends(get_container)):
+    """ADM-07: active provider/model, limits and usage. Never returns the key."""
+    return AIConfigResponse(**container.ai_config())
+
+
+@admin_router.put("/ai-config", response_model=AIConfigResponse)
+def update_ai_config(
+    payload: AIConfigRequest,
+    request: Request,
+    container: Container = Depends(get_container),
+):
+    """ADM-07: switch provider/model. Persisted and applied without restart.
+
+    A provider switch changes the effective consent version, so every user is
+    re-prompted before their next recording or answer.
+    """
+    from server.app.domain.errors import ValidationError
+
+    try:
+        config = container.configure_llm(payload.provider, payload.model)
+    except (ValueError, ValidationError) as exc:
+        _audit(request, container, "ai_config.update", "settings", "", outcome="rejected", detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
+    _audit(
+        request,
+        container,
+        "ai_config.update",
+        "settings",
+        "",
+        detail=f"provider={config['provider']} model={config['model']}",
+    )
+    return AIConfigResponse(**config)
+
+
+@admin_router.post("/ai-config/test", response_model=AITestResponse)
+def test_ai_config(container: Container = Depends(get_container)):
+    """ADM-07: minimal live call. Reports success/failure without the key."""
+    return AITestResponse(**container.test_llm())
+
+
+@admin_router.get("/audit-log")
+def get_admin_audit_log(
+    limit: int = Query(default=100, ge=1, le=500),
+    container: Container = Depends(get_container),
+):
+    """U4: recent admin audit rows, newest first. Never includes secrets."""
+    rows = container.audit_repo.list_recent(limit=limit)
+    return {"rows": rows, "count": len(rows)}
+
 
 @admin_router.get("/logs")
 def get_recent_logs(

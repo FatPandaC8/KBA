@@ -299,6 +299,7 @@
       <button data-tab="knowledge">Knowledge & Embeddings</button>
       <button data-tab="config">Configuration</button>
       <button data-tab="logs">Logs & Diagnostics</button>
+      <button data-tab="audit">Audit Log</button>
     </nav>
     <div class="auth-box">
       <label>Admin Access Key</label>
@@ -475,26 +476,42 @@
         </div>
       </header>
 
-      <div class="card" style="max-width: 600px;">
+      <div class="card" style="max-width: 680px;">
         <form id="configForm">
           <div class="form-group">
-            <label>OpenAI Model Identifier</label>
-            <input type="text" id="cfgModel" value="gpt-4o-mini">
+            <label>AI Provider (ADM-07)</label>
+            <select id="cfgProvider" style="width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px;">
+              <option value="groq">Groq (hosted)</option>
+              <option value="rule_based">Local rule-based (no network)</option>
+            </select>
+            <small style="color: var(--muted); display: block; margin-top: 4px;">
+              Switching provider or model changes the consent version, so every user is re-prompted.
+            </small>
           </div>
           <div class="form-group">
-            <label>OpenAI Base URL</label>
-            <input type="text" id="cfgBaseUrl" value="https://api.openai.com/v1">
+            <label>Model Identifier</label>
+            <input type="text" id="cfgModel" value="openai/gpt-oss-120b">
           </div>
           <div class="form-group">
-            <label>API Key (Optional, fallback to local engines if empty)</label>
-            <input type="password" id="cfgApiKey" placeholder="sk-...">
-            <small style="color: var(--muted); display: block; margin-top: 4px;">Stored in-memory & environment; never returned in client responses.</small>
+            <label>API Key</label>
+            <div id="cfgKeyStatus" class="refresh-badge">Checking…</div>
+            <small style="color: var(--muted); display: block; margin-top: 4px;">
+              The key is read from the server environment only. It is never displayed, returned by the API, or stored in this page.
+            </small>
           </div>
           <div class="form-group">
-            <label>Max Audio Duration (Seconds)</label>
-            <input type="text" id="cfgMaxDuration" value="30" disabled>
+            <label>Free-tier limits (provider-reported, configurable)</label>
+            <div id="cfgLimits" class="refresh-badge">—</div>
           </div>
-          <button type="submit" class="btn btn-primary">Save Configuration</button>
+          <div class="form-group">
+            <label>Last 24 hours</label>
+            <div id="cfgUsage" class="refresh-badge">—</div>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button type="submit" class="btn btn-primary">Save Configuration</button>
+            <button type="button" id="cfgTestBtn" class="btn">Run minimal test call</button>
+          </div>
+          <div id="cfgTestResult" style="margin-top: 12px; font-size: 13px;"></div>
         </form>
       </div>
     </div>
@@ -519,6 +536,35 @@
 
       <div class="log-terminal" id="logTerminal">
         <div class="log-line">Connecting to log stream...</div>
+      </div>
+    </div>
+
+    <!-- TAB 7: ADMIN AUDIT LOG -->
+    <div id="pane-audit" class="tab-pane">
+      <header>
+        <div>
+          <h1>Admin Audit Log</h1>
+          <span class="refresh-badge">Recent administrative actions (newest first)</span>
+        </div>
+        <button class="btn btn-primary" id="btnRefreshAudit">Refresh Audit Log</button>
+      </header>
+
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Action</th>
+              <th>Resource</th>
+              <th>Outcome</th>
+              <th>IP Address</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="auditTableBody">
+            <tr><td colspan="6" style="text-align: center; color: var(--muted);">No audit records loaded yet.</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </main>
@@ -643,6 +689,7 @@
       if (name === 'knowledge') loadKnowledge();
       if (name === 'config') loadConfig();
       if (name === 'logs') loadLogs();
+      if (name === 'audit') loadAudit();
     }
 
     function revokeActiveAudio() {
@@ -983,14 +1030,24 @@
       }
     }
 
+    function renderAIConfig(cfg) {
+      byId('cfgProvider').value = cfg.provider;
+      byId('cfgModel').value = cfg.model || '';
+      byId('cfgKeyStatus').textContent = cfg.key_configured
+        ? 'Key configured on the server (value hidden)'
+        : 'No key configured on the server';
+      byId('cfgLimits').textContent =
+        `RPM ${cfg.limits.rpm} · RPD ${cfg.limits.rpd} · TPM ${cfg.limits.tpm} · TPD ${cfg.limits.tpd}`;
+      byId('cfgUsage').textContent =
+        `${cfg.last_24h_calls} calls · ${cfg.last_24h_tokens} tokens · consent ${cfg.consent_version}`;
+    }
+
     async function loadConfig() {
       if (!adminState.token) return;
       try {
-        const res = await apiFetch('/api/admin/config');
+        const res = await apiFetch('/api/admin/ai-config');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const cfg = await res.json();
-        byId('cfgModel').value = cfg.model;
-        byId('cfgBaseUrl').value = cfg.base_url;
+        renderAIConfig(await res.json());
       } catch (err) {
         console.error(err);
       }
@@ -998,23 +1055,38 @@
 
     async function saveConfig(event) {
       event.preventDefault();
+      const provider = byId('cfgProvider').value;
       const model = byId('cfgModel').value.trim();
-      const baseUrl = byId('cfgBaseUrl').value.trim();
-      const apiKey = byId('cfgApiKey').value.trim();
-
       try {
-        const res = await apiFetch('/api/admin/config', {
-          method: 'POST',
-          body: JSON.stringify({ model, base_url: baseUrl, api_key: apiKey || undefined }),
+        const res = await apiFetch('/api/admin/ai-config', {
+          method: 'PUT',
+          body: JSON.stringify({ provider, model }),
         });
-        if (res.ok) {
-          alert('Configuration updated successfully.');
-          byId('cfgApiKey').value = '';
-        } else {
-          alert(`Failed to update configuration (HTTP ${res.status}).`);
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          alert(body.detail || `Failed to update AI configuration (HTTP ${res.status}).`);
+          return;
         }
+        renderAIConfig(body);
+        alert('AI configuration updated. Users will be re-prompted for consent.');
       } catch (err) {
         alert(`Configuration update failed: ${err.message}`);
+      }
+    }
+
+    async function runAITest() {
+      const box = byId('cfgTestResult');
+      box.textContent = 'Running a minimal provider call…';
+      try {
+        const res = await apiFetch('/api/admin/ai-config/test', { method: 'POST' });
+        const body = await res.json();
+        box.style.color = body.ok ? 'var(--forest, #2e6b4f)' : '#a33';
+        box.textContent = body.ok
+          ? `Success · ${body.provider} ${body.model || ''} · ${body.network_call ? `${body.total_tokens} tokens, ${body.latency_ms} ms` : 'no network call'} · ${body.detail}`
+          : `Failed · ${body.error_class || 'error'} · ${body.detail}`;
+      } catch (err) {
+        box.style.color = '#a33';
+        box.textContent = `Test failed: ${err.message}`;
       }
     }
 
@@ -1044,6 +1116,34 @@
       }
     }
 
+    async function loadAudit() {
+      if (!adminState.token) return;
+      const body = byId('auditTableBody');
+      try {
+        const res = await apiFetch('/api/admin/audit-log?limit=100');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const rows = data.rows || [];
+        if (!rows.length) {
+          body.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--muted);">No administrative actions recorded yet.</td></tr>';
+          return;
+        }
+        body.innerHTML = rows.map((r) => `
+          <tr>
+            <td style="white-space: nowrap;">${escapeHtml(r.created_at || '')}</td>
+            <td style="white-space: nowrap;">${escapeHtml(r.action || '')}</td>
+            <td style="white-space: nowrap;">${escapeHtml([r.resource_type, r.resource_id].filter(Boolean).join(':') || '—')}</td>
+            <td>${escapeHtml(r.outcome || 'success')}</td>
+            <td>${escapeHtml(r.ip_address || 'unknown')}</td>
+            <td style="max-width: 320px; word-break: break-word;">${escapeHtml(r.detail || '')}</td>
+          </tr>
+        `).join('');
+      } catch (e) {
+        body.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--danger);">Could not load the audit log. Check the server connection.</td></tr>';
+        console.error('Failed to load audit log:', e);
+      }
+    }
+
     function initAdmin() {
       adminState.token = localStorage.getItem('echo_admin_token') || '';
       byId('adminToken').value = adminState.token;
@@ -1059,9 +1159,11 @@
       byId('btnBackfill').addEventListener('click', triggerBackfill);
       byId('btnKnowledgeFilter').addEventListener('click', loadKnowledge);
       byId('btnRefreshLogs').addEventListener('click', loadLogs);
+      byId('btnRefreshAudit').addEventListener('click', loadAudit);
       byId('btnCloseModal').addEventListener('click', closeModal);
       byId('btnDoneModal').addEventListener('click', closeModal);
       byId('configForm').addEventListener('submit', saveConfig);
+      byId('cfgTestBtn').addEventListener('click', runAITest);
       byId('logLevelFilter').addEventListener('change', loadLogs);
       byId('captureModal').addEventListener('click', (event) => {
         if (event.target.id === 'captureModal') closeModal();

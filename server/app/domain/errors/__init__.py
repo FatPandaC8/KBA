@@ -57,6 +57,10 @@ class QuotaExhaustedError(ProviderError):
 
     error_class = "quota_exhausted"
 
+    def __init__(self, message: str = "The AI provider's daily quota is exhausted.", retry_after: int = 0):
+        super().__init__(message)
+        self.retry_after = max(0, int(retry_after or 0))
+
 
 class ProviderNetworkError(ProviderError):
     """A transient network failure. Retried automatically."""
@@ -64,14 +68,37 @@ class ProviderNetworkError(ProviderError):
     error_class = "network_error"
 
 
-class InvalidInputAudioError(DomainError):
-    """The input itself is unusable (silent/corrupt/non-English)."""
+class ProviderTimeoutError(ProviderNetworkError):
+    """The provider did not answer before the bounded timeout."""
+
+    error_class = "network_error"
+
+
+class ProviderOutageError(ProviderError):
+    """The provider returned a 5xx / outage response. Retried automatically."""
+
+    error_class = "provider_failure"
+
+
+class ProviderMalformedResponseError(ProviderError):
+    """The provider answered with text that is not the requested JSON."""
+
+    error_class = "provider_failure"
+
+
+class ProviderSchemaError(ProviderError):
+    """The provider answered with JSON that violates the required schema."""
+
+    error_class = "schema_invalid"
+
+
+class LLMInvalidInputError(DomainError):
+    """The input is unusable before any provider call is attempted."""
 
     error_class = "invalid_input"
 
 
-class InsufficientEvidenceError(DomainError):
-    """The graph has too little evidence to answer without fabrication."""
+class InvalidInputAudioError(DomainError):
+    """The input itself is unusable (silent/corrupt/non-English)."""
 
-    def __init__(self, message: str = "There is not enough evidence in your graph to answer that."):
-        super().__init__(message)
+    error_class = "invalid_input"

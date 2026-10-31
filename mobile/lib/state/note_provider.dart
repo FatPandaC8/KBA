@@ -9,7 +9,7 @@ import 'package:mobile/data/repositories/note_repository.dart';
 import 'package:mobile/services/backend_service.dart';
 import 'package:mobile/services/settings_service.dart';
 
-/// Single source of truth for captures and Ask AI conversations.
+/// Single source of truth for captures and their processing state.
 ///
 /// Audio uploads are strictly serialized (REC-04): only one upload request is
 /// sent at a time, but the mic is never gated by in-flight uploads or
@@ -36,12 +36,6 @@ class NoteProvider extends ChangeNotifier {
   final Map<String, Completer<void>> _uploadCompleters = {};
   bool _draining = false;
 
-  List<ConversationSummaryModel> _conversations = [];
-  String? _activeConversationId;
-  List<AskMessageModel> _messages = [];
-  bool _isAsking = false;
-  String? _askError;
-
   static const int maxRetryAttempts = 3;
   static const Duration retryBaseDelay = Duration(seconds: 2);
 
@@ -65,12 +59,6 @@ class NoteProvider extends ChangeNotifier {
   BackendService get backendService => _backendService;
   SettingsService? get settingsService => _settingsService;
   bool get isUploadInFlight => _uploadingIds.isNotEmpty;
-
-  List<ConversationSummaryModel> get conversations => _conversations;
-  String? get activeConversationId => _activeConversationId;
-  List<AskMessageModel> get messages => _messages;
-  bool get isAsking => _isAsking;
-  String? get askError => _askError;
 
   Future<void> loadNotes() async {
     _isLoading = true;
@@ -329,10 +317,16 @@ class NoteProvider extends ChangeNotifier {
       note.copyWith(
         audioPath: null,
         audioOnServer: true,
-        title: (knowledge != null && knowledge.title.isNotEmpty)
+        // Local wins (U3): a user-edited title/summary is never overwritten
+        // by server-derived text; unedited fields keep following the server.
+        title: (!note.userEditedTitle &&
+                knowledge != null &&
+                knowledge.title.isNotEmpty)
             ? knowledge.title
             : note.title,
-        summary: knowledge?.coreIdea ?? note.summary,
+        summary: !note.userEditedSummary
+            ? (knowledge?.coreIdea ?? note.summary)
+            : note.summary,
         keyFacts: knowledge?.concepts ?? note.keyFacts,
         tags: knowledge?.tags ?? note.tags,
         openQuestions: knowledge?.openQuestions ?? note.openQuestions,
@@ -523,10 +517,16 @@ class NoteProvider extends ChangeNotifier {
         retryCount: recording.status == 'failed'
             ? local.retryCount
             : local.retryCount,
-        title: (knowledge != null && knowledge.title.isNotEmpty)
+        // Local wins (U3): user-edited fields are preserved as-is across
+        // reconciliation; unedited fields keep syncing from the server.
+        title: (!local.userEditedTitle &&
+                knowledge != null &&
+                knowledge.title.isNotEmpty)
             ? knowledge.title
             : local.title,
-        summary: knowledge?.coreIdea ?? local.summary,
+        summary: !local.userEditedSummary
+            ? (knowledge?.coreIdea ?? local.summary)
+            : local.summary,
         keyFacts: knowledge?.concepts ?? local.keyFacts,
         openQuestions: knowledge?.openQuestions ?? local.openQuestions,
         tags: knowledge?.tags ?? local.tags,
@@ -620,8 +620,24 @@ class NoteProvider extends ChangeNotifier {
   }
 
   /// Updates an existing note in the local repository and refreshes the list.
+  ///
+  /// Local wins (U3): any changed title or summary marks that field as
+  /// user-edited locally; sync afterwards never overwrites it. Edits are not
+  /// written back to the server.
   Future<void> updateNote(Note note) async {
-    final updated = note.copyWith(updatedAt: DateTime.now());
+    final existing = await _repository.getNoteById(note.id);
+    final titleChanged =
+        note.userEditedTitle ||
+        (existing != null && note.title != existing.title);
+    final summaryChanged =
+        note.userEditedSummary ||
+        (existing != null &&
+            (note.summary ?? '') != (existing.summary ?? ''));
+    final updated = note.copyWith(
+      updatedAt: DateTime.now(),
+      userEditedTitle: titleChanged,
+      userEditedSummary: summaryChanged,
+    );
     await _repository.updateNote(updated);
     await loadNotes();
   }
@@ -644,96 +660,11 @@ class NoteProvider extends ChangeNotifier {
     await loadNotes();
   }
 
-  // ------------------------------------------------------------------ Ask AI
-  Future<void> loadConversations() async {
-    try {
-      _conversations = await _backendService.fetchConversations();
-      notifyListeners();
-    } catch (e) {
-      _askError = _friendlyErrorText(e);
-      notifyListeners();
-    }
-  }
-
-  Future<void> openConversation(String conversationId) async {
-    _askError = null;
-    try {
-      final conversation = await _backendService.fetchConversation(
-        conversationId,
-      );
-      _activeConversationId = conversation.id;
-      _messages = conversation.messages;
-    } catch (e) {
-      _askError = _friendlyErrorText(e);
-    }
-    notifyListeners();
-  }
-
-  void startNewConversation() {
-    _activeConversationId = null;
-    _messages = [];
-    _askError = null;
-    notifyListeners();
-  }
-
-  Future<void> askQuestion(String question) async {
-    final trimmed = question.trim();
-    if (trimmed.isEmpty || _isAsking) return;
-
-    _isAsking = true;
-    _askError = null;
-    final optimistic = AskMessageModel(
-      id: 'local-${DateTime.now().microsecondsSinceEpoch}',
-      role: 'user',
-      content: trimmed,
-      status: 'ready',
-      errorClass: '',
-      errorMessage: '',
-      createdAt: DateTime.now().toIso8601String(),
-      citations: const [],
-    );
-    _messages = [..._messages, optimistic];
-    notifyListeners();
-
-    try {
-      final result = await _backendService.ask(
-        trimmed,
-        conversationId: _activeConversationId,
-      );
-      _activeConversationId = result.conversationId;
-      _messages = [..._messages, result.message];
-      await loadConversations();
-    } catch (e) {
-      _askError = _friendlyErrorText(e);
-    } finally {
-      _isAsking = false;
-      notifyListeners();
-    }
-  }
-
-  Future<void> deleteConversation(String conversationId) async {
-    try {
-      await _backendService.deleteConversation(conversationId);
-      if (_activeConversationId == conversationId) {
-        startNewConversation();
-      }
-      await loadConversations();
-    } catch (e) {
-      _askError = _friendlyErrorText(e);
-      notifyListeners();
-    }
-  }
-
   /// Clears every locally cached note (and its audio) so nothing user-specific
   /// survives in echo_notes.db after logout.
   Future<void> clearLocalNotes() async {
     await _repository.clearAllNotes();
     await loadNotes();
-  }
-
-  void clearAskError() {
-    _askError = null;
-    notifyListeners();
   }
 
   Future<void> search(String query) async {

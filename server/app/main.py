@@ -20,6 +20,7 @@ from .domain.errors import (
     ProviderError,
     ProviderNetworkError,
     ProviderNotConfiguredError,
+    ProviderSchemaError,
     QuotaExhaustedError,
     RateLimitedError,
     ValidationError,
@@ -122,12 +123,20 @@ async def _invalid_audio(_request: Request, exc: InvalidInputAudioError):
 
 @app.exception_handler(QuotaExhaustedError)
 async def _quota(_request: Request, exc: QuotaExhaustedError):
-    return JSONResponse(status_code=429, content={"detail": str(exc)})
+    headers = {}
+    if getattr(exc, "retry_after", 0):
+        headers["Retry-After"] = str(exc.retry_after)
+    return JSONResponse(status_code=429, content={"detail": str(exc)}, headers=headers)
 
 
 @app.exception_handler(ProviderNetworkError)
 async def _network(_request: Request, exc: ProviderNetworkError):
     return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(ProviderSchemaError)
+async def _schema(_request: Request, exc: ProviderSchemaError):
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 
 @app.exception_handler(ProviderError)

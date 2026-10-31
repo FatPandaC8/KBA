@@ -2,7 +2,7 @@ import os
 import json
 import uuid
 import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -78,6 +78,7 @@ class GraphEdge(BaseModel):
     status: str
     certainty: str = "confirmed"
     confidence: float = 0.6
+    evidence: str = ""
 
 
 class GraphCluster(BaseModel):
@@ -143,55 +144,6 @@ class GraphSearchResponse(BaseModel):
     relationships: List[KnowledgeRelationship] = []
 
 
-class CitationResponse(BaseModel):
-    id: str
-    kind: str
-    target_id: str
-    name: str
-    deleted: bool = False
-
-
-class MessageResponse(BaseModel):
-    id: str
-    role: str
-    content: str
-    status: str
-    error_class: str = ""
-    error_message: str = ""
-    created_at: str
-    citations: List[CitationResponse] = []
-
-
-class ConversationResponse(BaseModel):
-    id: str
-    title: str
-    created_at: str
-    updated_at: str
-    messages: List[MessageResponse] = []
-
-
-class ConversationSummary(BaseModel):
-    id: str
-    title: str
-    created_at: str
-    updated_at: str
-
-
-class AskRequest(BaseModel):
-    question: str
-    conversation_id: Optional[str] = None
-
-
-class AskResponse(BaseModel):
-    conversation_id: str
-    message: MessageResponse
-    facts: List[str] = []
-    inferences: List[str] = []
-    contradictions: List[str] = []
-    refused: bool = False
-    refusal_reason: str = ""
-
-
 class ProviderInfoResponse(BaseModel):
     id: str
     name: str
@@ -200,6 +152,10 @@ class ProviderInfoResponse(BaseModel):
     trains_on_data: bool
     available: bool
     detail: str = ""
+    model: str = ""
+    retention: str = ""
+    privacy_url: str = ""
+    terms_url: str = ""
 
 
 class DuplicateFlagResponse(BaseModel):
@@ -379,6 +335,37 @@ class ServerConfigResponse(BaseModel):
     consent_version: str
     google_sign_in_configured: bool
     email_delivery: str
+
+
+class AIConfigRequest(BaseModel):
+    provider: str
+    model: str = ""
+
+
+class AIConfigResponse(BaseModel):
+    provider: str
+    model: str
+    provider_available: bool
+    key_configured: bool
+    local_only: bool
+    limits: Dict[str, int]
+    consent_version: str
+    last_24h_calls: int
+    last_24h_tokens: int
+    recent_calls: List[Dict[str, Any]] = []
+    providers: List[Dict[str, Any]] = []
+
+
+class AITestResponse(BaseModel):
+    ok: bool
+    provider: str
+    model: str
+    network_call: bool = False
+    detail: str = ""
+    error_class: str = ""
+    retry_after: int = 0
+    total_tokens: int = 0
+    latency_ms: int = 0
 
 
 class DetailedCaptureResponse(BaseModel):

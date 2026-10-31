@@ -9,12 +9,11 @@ import 'package:mobile/state/note_provider.dart';
 import 'screens/detail/note_detail_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/library/library_screen.dart';
-import 'screens/recall/recall_screen.dart';
 import 'screens/recordings/recordings_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'widgets/echo_bottom_nav.dart';
 
-/// Three tabs (PRD v2 navigation): Record (0), Graph (1), Ask AI (2).
+/// Two tabs (PRD v2 navigation, Ask AI removed): Record (0), Graph (1).
 class AppShell extends StatefulWidget {
   final NoteProvider noteProvider;
   final AudioService audioService;
@@ -217,10 +216,6 @@ class _AppShellState extends State<AppShell> {
             },
           ),
           LibraryScreen(noteProvider: widget.noteProvider),
-          RecallScreen(
-            noteProvider: widget.noteProvider,
-            onOpenDetail: _openDetail,
-          ),
         ],
       ),
       bottomNavigationBar: EchoBottomNav(

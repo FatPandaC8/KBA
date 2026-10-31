@@ -216,12 +216,12 @@ class ConsentService:
         current = bool(
             latest
             and latest.granted
-            and latest.version == self.settings.consent_version
+            and latest.version == self.settings.effective_consent_version
             and latest.providers_hash == current_hash
         )
         return {
             "required": True,
-            "version": self.settings.consent_version,
+            "version": self.settings.effective_consent_version,
             "providers": self.providers(),
             "granted": current,
             "granted_at": latest.created_at if latest else None,
@@ -232,7 +232,7 @@ class ConsentService:
         consent = ConsentEntity(
             id=uuid.uuid4().hex,
             user_id=user_id,
-            version=self.settings.consent_version,
+            version=self.settings.effective_consent_version,
             providers_hash=self.providers_hash(),
             providers=self.providers(),
             granted=granted,

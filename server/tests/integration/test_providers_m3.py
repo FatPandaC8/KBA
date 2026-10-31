@@ -12,11 +12,12 @@ def test_providers_endpoint_lists_only_free_local_components(user_factory):
     response = client.get("/api/providers", headers=user.headers)
     assert response.status_code == 200
     providers = response.json()
+    # Ask AI (LLM question answering) was removed from Echo entirely (U2);
+    # no question_answering provider exists any more.
     assert {p["kind"] for p in providers} == {
         "speech_to_text",
         "embeddings",
         "extraction",
-        "question_answering",
     }
     serialized = str(providers).lower()
     for paid in ("openai", "anthropic", "deepgram", "assemblyai", "google_speech", "azure"):

@@ -121,16 +121,10 @@ class EchoBottomNav extends StatelessWidget {
                       ),
                     ),
 
-                    // Right Action: Ask AI
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: _buildNavItem(
-                        2,
-                        'Ask AI',
-                        Icons.chat_bubble_outline,
-                        Icons.chat_bubble,
-                      ),
-                    ),
+                    // Right Action: none — Ask AI was removed from Echo
+                    // (U2). A clear placeholder keeps the capture FAB
+                    // optically centered in the two-tab layout.
+                    const SizedBox(width: 60),
                   ],
                 ),
               ),

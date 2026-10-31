@@ -74,6 +74,7 @@ class GraphEdgeDTO:
     status: str
     certainty: str = "confirmed"
     confidence: float = 0.6
+    evidence: str = ""
 
 
 @dataclass
@@ -166,85 +167,13 @@ class DetailedCaptureViewDTO:
 
 
 @dataclass
-class CitationDTO:
-    id: str
-    kind: str
-    target_id: str
-    name: str
-    deleted: bool = False
-
-
-@dataclass
-class MessageDTO:
-    id: str
-    role: str
-    content: str
-    status: str
-    error_class: str
-    error_message: str
-    created_at: str
-    citations: List[CitationDTO] = field(default_factory=list)
-
-
-@dataclass
-class ConversationDTO:
-    id: str
-    title: str
-    created_at: str
-    updated_at: str
-    messages: List[MessageDTO] = field(default_factory=list)
-
-
-@dataclass
-class AnswerDTO:
-    conversation_id: str
-    message: MessageDTO
-    facts: List[str] = field(default_factory=list)
-    inferences: List[str] = field(default_factory=list)
-    contradictions: List[str] = field(default_factory=list)
-    refused: bool = False
-    refusal_reason: str = ""
-
-
-@dataclass
 class ExtractionResult:
     """Everything one transcription produces, with provenance (KG-01)."""
 
     knowledge_item: KnowledgeItemEntity
     entities: List[ExtractedEntity] = field(default_factory=list)
     relationships: List[RelationshipEntity] = field(default_factory=list)
-
-
-@dataclass
-class EvidenceItem:
-    """One retrieval hit passed to the answer provider.
-
-    ``text`` is a summary/description derived from extracted knowledge, never
-    the raw transcript.
-    """
-
-    kind: str
-    target_id: str
-    name: str
-    entity_type: str = ""
-    description: str = ""
-    certainty: str = "confirmed"
-    confidence: float = 0.0
-    score: float = 0.0
-    relation_type: str = ""
-    related_name: str = ""
-    source_capture_id: str = ""
-
-
-@dataclass
-class AnswerDraft:
-    text: str
-    facts: List[str] = field(default_factory=list)
-    inferences: List[str] = field(default_factory=list)
-    contradictions: List[str] = field(default_factory=list)
-    citations: List["CitationDTO"] = field(default_factory=list)
-    refused: bool = False
-    refusal_reason: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -256,3 +185,28 @@ class ProviderInfoDTO:
     trains_on_data: bool
     available: bool
     detail: str = ""
+    model: str = ""
+    retention: str = ""
+    privacy_url: str = ""
+    terms_url: str = ""
+
+
+@dataclass
+class LLMResponse:
+    """One validated JSON response from a provider.
+
+    ``content`` is already parsed JSON. ``usage`` carries the provider's token
+    accounting so the pipeline can budget against TPM/TPD without trusting an
+    estimate.
+    """
+
+    content: Dict[str, Any]
+    raw_text: str
+    provider: str
+    model: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    attempts: int = 1
+    latency_ms: int = 0
+    finish_reason: str = ""

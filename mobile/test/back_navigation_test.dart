@@ -8,7 +8,6 @@ import 'package:mobile/ui/app_shell.dart';
 import 'package:mobile/ui/screens/detail/note_detail_screen.dart';
 import 'package:mobile/ui/screens/home/home_screen.dart';
 import 'package:mobile/ui/screens/library/library_screen.dart';
-import 'package:mobile/ui/screens/recall/recall_screen.dart';
 import 'package:mobile/ui/screens/recordings/recordings_screen.dart';
 import 'package:mobile/ui/screens/settings/settings_screen.dart';
 import 'package:mobile/ui/widgets/echo_bottom_nav.dart';
@@ -169,21 +168,22 @@ void main() {
       await tester.pumpWidget(createTestWidget());
       await tester.pumpAndSettle();
 
-      // Sequence: Record(0) -> Ask AI(2) -> Graph(1)
-      await tester.tap(navItem('Ask AI'));
-      await tester.pumpAndSettle();
-      expect(find.byType(RecallScreen), findsOneWidget);
-
+      // Sequence: Record(0) -> Graph(1) -> Record(0) -> Graph(1)
       await tester.tap(navItem('Graph'));
       await tester.pumpAndSettle();
       expect(find.byType(LibraryScreen), findsOneWidget);
 
+      await tester.tap(navItem('Record'));
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeScreen), findsOneWidget);
+
+      // Back through the tab history: Graph, Record, then exit is allowed.
       final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
 
-      // First Back -> should go back to Ask AI
+      // First Back -> should go back to Graph
       await widgetsAppState.didPopRoute();
       await tester.pumpAndSettle();
-      expect(find.byType(RecallScreen), findsOneWidget);
+      expect(find.byType(LibraryScreen), findsOneWidget);
 
       // Second Back -> should go back to Record
       await widgetsAppState.didPopRoute();

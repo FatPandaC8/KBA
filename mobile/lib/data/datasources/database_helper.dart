@@ -36,7 +36,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -55,6 +55,15 @@ class DatabaseHelper {
         'ALTER TABLE notes ADD COLUMN audioOnServer INTEGER NOT NULL DEFAULT 0',
       );
       await db.execute('ALTER TABLE notes ADD COLUMN knowledgeItemId TEXT');
+    }
+    if (oldVersion < 5) {
+      // U3 local-wins flags: local-only, never synced to the server.
+      await db.execute(
+        'ALTER TABLE notes ADD COLUMN userEditedTitle INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE notes ADD COLUMN userEditedSummary INTEGER NOT NULL DEFAULT 0',
+      );
     }
   }
 
@@ -78,6 +87,8 @@ class DatabaseHelper {
         retryCount INTEGER NOT NULL DEFAULT 0,
         audioOnServer INTEGER NOT NULL DEFAULT 0,
         knowledgeItemId TEXT,
+        userEditedTitle INTEGER NOT NULL DEFAULT 0,
+        userEditedSummary INTEGER NOT NULL DEFAULT 0,
         createdAt TEXT NOT NULL,
         updatedAt TEXT NOT NULL
       )

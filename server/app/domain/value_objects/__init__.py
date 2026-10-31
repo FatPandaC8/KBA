@@ -119,6 +119,7 @@ class ErrorClass:
     QUOTA_EXHAUSTED: str = "quota_exhausted"
     NETWORK: str = "network_error"
     PROVIDER: str = "provider_failure"
+    SCHEMA_INVALID: str = "schema_invalid"
     INVALID_INPUT: str = "invalid_input"
     UNKNOWN: str = "unknown"
 

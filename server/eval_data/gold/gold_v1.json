@@ -1,0 +1,102 @@
+[
+  {
+    "id": "gold-001",
+    "transcript": "The Echo project depends on FastAPI. Alice supports the Echo project.",
+    "entities": [
+      {"name": "Echo project", "type": "project"},
+      {"name": "FastAPI", "type": "tool"},
+      {"name": "Alice", "type": "person"}
+    ],
+    "relationships": [
+      {"source": "Echo project", "target": "FastAPI", "type": "Depends on"},
+      {"source": "Alice", "target": "Echo project", "type": "Supports"}
+    ]
+  },
+  {
+    "id": "gold-002",
+    "transcript": "The KBA app depends on SQLite. FastAPI serves the KBA app.",
+    "entities": [
+      {"name": "KBA app", "type": "project"},
+      {"name": "SQLite", "type": "tool"},
+      {"name": "FastAPI", "type": "tool"}
+    ],
+    "relationships": [
+      {"source": "KBA app", "target": "SQLite", "type": "Depends on"},
+      {"source": "FastAPI", "target": "KBA app", "type": "Related to"}
+    ]
+  },
+  {
+    "id": "gold-003",
+    "transcript": "Maria manages the Atlas project. The Atlas project is constrained by the budget.",
+    "entities": [
+      {"name": "Maria", "type": "person"},
+      {"name": "Atlas project", "type": "project"},
+      {"name": "budget", "type": "concept"}
+    ],
+    "relationships": [
+      {"source": "Atlas project", "target": "budget", "type": "Constrained by"}
+    ]
+  },
+  {
+    "id": "gold-004",
+    "transcript": "We met with Bob in Berlin. The Berlin team supports the Atlas project.",
+    "entities": [
+      {"name": "Bob", "type": "person"},
+      {"name": "Berlin", "type": "place"},
+      {"name": "Atlas project", "type": "project"}
+    ],
+    "relationships": [
+      {"source": "Berlin", "target": "Atlas project", "type": "Supports"}
+    ]
+  },
+  {
+    "id": "gold-005",
+    "transcript": "The Orion project depends on Redis. The Orion project does not depend on Redis; it depends on Postgres.",
+    "entities": [
+      {"name": "Orion project", "type": "project"},
+      {"name": "Redis", "type": "tool"},
+      {"name": "Postgres", "type": "tool"}
+    ],
+    "relationships": [
+      {"source": "Orion project", "target": "Redis", "type": "Depends on"},
+      {"source": "Orion project", "target": "Postgres", "type": "Depends on"}
+    ]
+  },
+  {
+    "id": "gold-006",
+    "transcript": "The mobile client uses Flutter and Dart. Flutter depends on the Dart SDK.",
+    "entities": [
+      {"name": "mobile client", "type": "concept"},
+      {"name": "Flutter", "type": "tool"},
+      {"name": "Dart", "type": "tool"}
+    ],
+    "relationships": [
+      {"source": "Flutter", "target": "Dart", "type": "Depends on"}
+    ]
+  },
+  {
+    "id": "gold-007",
+    "transcript": "Priya owns the search feature. The search feature is an example of semantic retrieval.",
+    "entities": [
+      {"name": "Priya", "type": "person"},
+      {"name": "search feature", "type": "concept"},
+      {"name": "semantic retrieval", "type": "concept"}
+    ],
+    "relationships": [
+      {"source": "search feature", "target": "semantic retrieval", "type": "Example of"}
+    ]
+  },
+  {
+    "id": "gold-008",
+    "transcript": "The deployment pipeline depends on Docker. Docker is constrained by the Linux kernel.",
+    "entities": [
+      {"name": "deployment pipeline", "type": "concept"},
+      {"name": "Docker", "type": "tool"},
+      {"name": "Linux", "type": "tool"}
+    ],
+    "relationships": [
+      {"source": "deployment pipeline", "target": "Docker", "type": "Depends on"},
+      {"source": "Docker", "target": "Linux", "type": "Constrained by"}
+    ]
+  }
+]

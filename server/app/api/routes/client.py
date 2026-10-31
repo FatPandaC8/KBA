@@ -9,11 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Respon
 from fastapi.responses import FileResponse
 
 from server.app.adapters.inbound.http.schemas import (
-    AskRequest,
-    AskResponse,
     CaptureUploadResponse,
-    ConversationResponse,
-    ConversationSummary,
     EntityDetailResponse,
     EntityResponse,
     EntityUpdateRequest,
@@ -380,6 +376,7 @@ def get_graph(
                 status=e.status,
                 certainty=e.certainty,
                 confidence=e.confidence,
+                evidence=e.evidence,
             )
             for e in graph_dto.edges
         ],
@@ -505,63 +502,13 @@ def list_providers(
             trains_on_data=p.trains_on_data,
             available=p.available,
             detail=p.detail,
+            model=p.model,
+            retention=p.retention,
+            privacy_url=p.privacy_url,
+            terms_url=p.terms_url,
         )
         for p in container.provider_registry.list_providers()
     ]
-
-
-# ------------------------------------------------------------------ Ask AI
-@protected_router.get("/conversations", response_model=List[ConversationSummary])
-def list_conversations(
-    user: UserEntity = Depends(require_current_consent),
-    container: Container = Depends(get_container),
-):
-    return [
-        ConversationSummary(
-            id=c.id, title=c.title, created_at=c.created_at, updated_at=c.updated_at
-        )
-        for c in container.ask_uc.list_conversations(user.id)
-    ]
-
-
-@protected_router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
-def get_conversation(
-    conversation_id: str,
-    user: UserEntity = Depends(require_current_consent),
-    container: Container = Depends(get_container),
-):
-    try:
-        return container.ask_uc.get_conversation(user.id, conversation_id)
-    except EntityNotFoundError:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-
-@protected_router.delete("/conversations/{conversation_id}")
-def delete_conversation(
-    conversation_id: str,
-    user: UserEntity = Depends(require_current_consent),
-    container: Container = Depends(get_container),
-):
-    try:
-        container.ask_uc.delete_conversation(user.id, conversation_id)
-    except EntityNotFoundError:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return {"deleted": True, "id": conversation_id}
-
-
-@protected_router.post("/ask", response_model=AskResponse)
-def ask_ai(
-    payload: AskRequest,
-    user: UserEntity = Depends(require_current_consent),
-    container: Container = Depends(get_container),
-):
-    try:
-        answer = container.ask_uc.ask(user.id, payload.question, payload.conversation_id)
-    except EntityNotFoundError:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return answer
 
 
 @protected_router.patch("/relationships/{rel_id}")

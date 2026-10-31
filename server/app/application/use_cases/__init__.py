@@ -7,6 +7,7 @@ from server.app.domain.entities import (
     RelationshipEntity,
     CaptureEntity,
     EvalRecordEntity,
+    canonical_relation_name,
 )
 from server.app.domain.value_objects import CaptureStatus
 from server.app.domain.errors import EntityNotFoundError
@@ -14,6 +15,7 @@ from ..ports import (
     KnowledgeRepositoryPort,
     EntityRepositoryPort,
     RelationshipRepositoryPort,
+    RelationshipTypeRegistryPort,
     DuplicateCandidateRepositoryPort,
     EmbeddingRepositoryPort,
     CaptureRepositoryPort,
@@ -27,9 +29,7 @@ from ..ports import (
     ConsentRepositoryPort,
     TombstoneRepositoryPort,
     RecordSupportRepositoryPort,
-    ConversationRepositoryPort,
-    MessageRepositoryPort,
-    CitationRepositoryPort,
+    AdminAuditLogPort,
 )
 from ..dto import (
     KnowledgeItemDTO,
@@ -197,8 +197,13 @@ class ManageKnowledgeUseCase:
 
 
 class ManageRelationshipsUseCase:
-    def __init__(self, rel_repo: RelationshipRepositoryPort):
+    def __init__(
+        self,
+        rel_repo: RelationshipRepositoryPort,
+        relationship_type_repo: Optional[RelationshipTypeRegistryPort] = None,
+    ):
         self.rel_repo = rel_repo
+        self.relationship_type_repo = relationship_type_repo
 
     def get_graph(self, user_id: Optional[str]) -> GraphDataDTO:
         return self.rel_repo.get_graph(user_id=user_id)
@@ -212,7 +217,20 @@ class ManageRelationshipsUseCase:
     ) -> bool:
         if not self.rel_repo.get_by_id(rel_id, user_id=user_id):
             return False
-        self.rel_repo.update_status(rel_id, status=status, relation_type=relation_type, user_id=user_id)
+        normalized_type = relation_type
+        if normalized_type is not None and self.relationship_type_repo is not None:
+            # A user-typed relation label also goes through the registry (U1)
+            # so corrections reuse canonical meanings instead of forking keys.
+            proposal = canonical_relation_name(normalized_type)
+            if proposal:
+                entry = self.relationship_type_repo.ensure(
+                    user_id,
+                    canonical_name=proposal,
+                    provenance="user-edit",
+                    user_edited=True,
+                )
+                normalized_type = entry.canonical_name
+        self.rel_repo.update_status(rel_id, status=status, relation_type=normalized_type, user_id=user_id)
         return True
 
     def delete_relationship(self, rel_id: str, user_id: Optional[str]) -> bool:
@@ -269,8 +287,6 @@ class DeleteCaptureUseCase:
         job_repo: JobStatusRepositoryPort,
         eval_repo: EvalRecordRepositoryPort,
         support_repo: RecordSupportRepositoryPort,
-        citation_repo: CitationRepositoryPort,
-        message_repo: MessageRepositoryPort,
         upload_dir: str,
     ):
         self.capture_repo = capture_repo
@@ -282,8 +298,6 @@ class DeleteCaptureUseCase:
         self.job_repo = job_repo
         self.eval_repo = eval_repo
         self.support_repo = support_repo
-        self.citation_repo = citation_repo
-        self.message_repo = message_repo
         self.upload_dir = upload_dir
 
     def execute(self, capture_id: str, user_id: str) -> Dict[str, Any]:
@@ -318,7 +332,6 @@ class DeleteCaptureUseCase:
 
         entities_removed = 0
         relationships_removed = 0
-        messages_removed = 0
 
         for entity_id in entity_ids:
             if self.support_repo.list_for_target(user_id, "entity", entity_id):
@@ -326,7 +339,6 @@ class DeleteCaptureUseCase:
             relationships_removed += self.rel_repo.delete_for_entity(entity_id, user_id=user_id)
             self.duplicate_repo.delete_for_entity(entity_id, user_id=user_id)
             self.embedding_repo.delete(entity_id, user_id=user_id)
-            messages_removed += self._delete_dependent_answers(user_id, "entity", entity_id)
             self.entity_repo.delete(entity_id, user_id=user_id)
             entities_removed += 1
 
@@ -336,7 +348,6 @@ class DeleteCaptureUseCase:
                 continue
             if self.support_repo.list_for_target(user_id, "relationship", rel_id):
                 continue
-            messages_removed += self._delete_dependent_answers(user_id, "relationship", rel_id)
             self.embedding_repo.delete(rel_id, user_id=user_id)
             self.rel_repo.delete(rel_id, user_id=user_id)
             relationships_removed += 1
@@ -353,19 +364,10 @@ class DeleteCaptureUseCase:
             "audio_removed": audio_removed,
             "entities_removed": entities_removed,
             "relationships_removed": relationships_removed,
-            "messages_removed": messages_removed,
             "jobs_deleted": jobs_deleted,
             "eval_records_deleted": eval_deleted,
             "supports_removed": supports_removed,
         }
-
-    def _delete_dependent_answers(self, user_id: str, kind: str, target_id: str) -> int:
-        removed = 0
-        for citation in self.citation_repo.list_for_target(user_id, kind, target_id):
-            self.message_repo.delete(citation.message_id, user_id=user_id)
-            self.citation_repo.delete_for_message(citation.message_id, user_id=user_id)
-            removed += 1
-        return removed
 
 
 class PurgeRetainedAudioUseCase:
@@ -410,10 +412,8 @@ class AccountDeletionUseCase:
         eval_repo: EvalRecordRepositoryPort,
         tombstone_repo: TombstoneRepositoryPort,
         support_repo: RecordSupportRepositoryPort,
-        conversation_repo: ConversationRepositoryPort,
-        message_repo: MessageRepositoryPort,
-        citation_repo: CitationRepositoryPort,
         upload_dir: str,
+        audit_repo: Optional[AdminAuditLogPort] = None,
     ):
         self.user_repo = user_repo
         self.session_repo = session_repo
@@ -429,10 +429,8 @@ class AccountDeletionUseCase:
         self.eval_repo = eval_repo
         self.tombstone_repo = tombstone_repo
         self.support_repo = support_repo
-        self.conversation_repo = conversation_repo
-        self.message_repo = message_repo
-        self.citation_repo = citation_repo
         self.upload_dir = upload_dir
+        self.audit_repo = audit_repo
 
     def execute(self, user_id: str) -> Dict[str, Any]:
         upload_root = os.path.realpath(self.upload_dir)
@@ -452,12 +450,6 @@ class AccountDeletionUseCase:
         items = self.knowledge_repo.get_all(user_id=user_id)
         for item in items:
             self.knowledge_repo.delete(item.id, user_id=user_id)
-        for conversation in self.conversation_repo.list_for_user(user_id):
-            self.message_repo.delete_for_conversation(conversation.id, user_id=user_id)
-            self.conversation_repo.delete(conversation.id, user_id=user_id)
-        self.citation_repo.delete_for_user(user_id)
-        self.message_repo.delete_for_user(user_id)
-        self.conversation_repo.delete_for_user(user_id)
         for entity in self.entity_repo.get_all(user_id=user_id):
             self.entity_repo.delete(entity.id, user_id=user_id)
         for rel in self.rel_repo.get_all(user_id=user_id):
@@ -476,6 +468,9 @@ class AccountDeletionUseCase:
         self.consent_repo.delete_for_user(user_id)
         self.email_token_repo.delete_for_user(user_id)
         self.session_repo.delete_for_user(user_id)
+        if self.audit_repo is not None:
+            # Audit rows naming this user's data are personal data too (U4).
+            self.audit_repo.delete_for_user(user_id)
         self.user_repo.delete(user_id)
 
         user_upload_dir = os.path.join(upload_root, user_id)
@@ -607,4 +602,3 @@ class AdminSystemStatusUseCase:
 # M3 use cases live in focused modules; re-exported for container wiring.
 from .jobs import ProcessCaptureUseCase, name_similarity  # noqa: E402,F401
 from .graph import GraphQueryUseCase  # noqa: E402,F401
-from .ask import AskQuestionUseCase  # noqa: E402,F401

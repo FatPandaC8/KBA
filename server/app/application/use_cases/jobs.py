@@ -7,11 +7,13 @@ the client triggering anything.
 
 import json
 import os
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from server.app.application.dto import ExtractionResult, ProcessingJobDTO
 from server.app.application.ports import (
@@ -26,6 +28,7 @@ from server.app.application.ports import (
     KnowledgeRepositoryPort,
     RecordSupportRepositoryPort,
     RelationshipRepositoryPort,
+    RelationshipTypeRegistryPort,
     TombstoneRepositoryPort,
 )
 from server.app.domain.entities import (
@@ -33,6 +36,7 @@ from server.app.domain.entities import (
     ExtractedEntity,
     KnowledgeItemEntity,
     RelationshipEntity,
+    canonical_relation_name,
     current_utc_iso,
     normalize_key,
 )
@@ -82,6 +86,70 @@ def _decode_stage_outputs(job: ProcessingJobDTO) -> Dict[str, Any]:
         return {}
 
 
+class LeaseHeartbeat:
+    """Keep a job lease alive while a slow provider call is in flight.
+
+    Provider latency can exceed the lease window. Renewing from a small
+    background thread means a slow but healthy LLM call cannot make the job
+    look abandoned (and be claimed twice). Renewal never steals a lease from
+    another worker: ``renew_lease`` only matches this owner.
+    """
+
+    def __init__(
+        self,
+        job_repo: JobStatusRepositoryPort,
+        capture_id: str,
+        lease_owner: str,
+        lease_seconds: int,
+        user_id: str,
+    ):
+        self.job_repo = job_repo
+        self.capture_id = capture_id
+        self.lease_owner = lease_owner
+        self.lease_seconds = max(1, int(lease_seconds))
+        self.user_id = user_id
+        self.interval = max(1.0, self.lease_seconds / 3.0)
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._loop, name=f"echo-lease-{self.capture_id[:8]}", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.interval):
+            try:
+                if not self.job_repo.renew_lease(
+                    self.capture_id,
+                    self.lease_owner,
+                    self.lease_seconds,
+                    user_id=self.user_id,
+                ):
+                    # The lease is gone (completed, failed or re-claimed).
+                    return
+            except Exception:
+                # A renewal failure must not kill the pipeline; the next tick
+                # retries while the actual work continues.
+                continue
+
+    def __enter__(self) -> "LeaseHeartbeat":
+        self.start()
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        self.stop()
+
+
 class ProcessCaptureUseCase:
     def __init__(
         self,
@@ -102,6 +170,7 @@ class ProcessCaptureUseCase:
         flag_threshold: float = 0.75,
         retry_limit: int = 3,
         lease_seconds: int = 300,
+        relationship_type_repo: Optional[RelationshipTypeRegistryPort] = None,
     ):
         self.capture_repo = capture_repo
         self.knowledge_repo = knowledge_repo
@@ -120,6 +189,7 @@ class ProcessCaptureUseCase:
         self.flag_threshold = flag_threshold
         self.retry_limit = retry_limit
         self.lease_seconds = lease_seconds
+        self.relationship_type_repo = relationship_type_repo
 
     # ----------------------------------------------------------------- queuing
     def create_job(self, capture: CaptureEntity) -> ProcessingJobDTO:
@@ -150,14 +220,20 @@ class ProcessCaptureUseCase:
     # ---------------------------------------------------------------- worker
     def process_next(self, worker_id: str = "worker-1") -> Optional[ProcessingJobDTO]:
         now = current_utc_iso()
-        for job in self.job_repo.list_resumable(now):
+        for job in self.job_repo.list_resumable(now, retry_limit=self.retry_limit):
             result = self.process(job.capture_id, job.user_id, worker_id)
             if result is not None:
                 return result
         return None
 
     def process(self, capture_id: str, user_id: str, worker_id: str = "worker-1") -> Optional[ProcessingJobDTO]:
-        job = self.job_repo.claim(capture_id, worker_id, self.lease_seconds, user_id=user_id)
+        job = self.job_repo.claim(
+            capture_id,
+            worker_id,
+            self.lease_seconds,
+            user_id=user_id,
+            retry_limit=self.retry_limit,
+        )
         if job is None:
             return None
         capture = self.capture_repo.get_by_id(capture_id, user_id=user_id)
@@ -165,11 +241,18 @@ class ProcessCaptureUseCase:
             self.job_repo.record_attempt(
                 capture_id, self.retry_limit, ErrorClass.INVALID_INPUT,
                 "Recording no longer exists.", user_id=user_id,
+                retry_limit=self.retry_limit,
             )
             return self.job_repo.get_by_capture_id(capture_id, user_id=user_id)
 
         try:
-            self._run(capture, job)
+            with LeaseHeartbeat(
+                self.job_repo, capture_id, worker_id, self.lease_seconds, user_id
+            ):
+                self._run(capture, job)
+            self.job_repo.complete(capture_id, user_id=user_id)
+            capture.status = CaptureStatus.READY
+            self.capture_repo.save(capture)
             return self.job_repo.get_by_capture_id(capture_id, user_id=user_id)
         except Exception as exc:  # the worker must never die on one bad job
             return self._record_failure(job, capture, exc)
@@ -204,7 +287,12 @@ class ProcessCaptureUseCase:
         if not extraction:
             capture.status = CaptureStatus.EXTRACTING
             self.capture_repo.save(capture)
-            result = self.extractor.extract_graph(transcript, capture_id, user_id=user_id)
+            result = self.extractor.extract_graph(
+                transcript,
+                capture_id,
+                user_id=user_id,
+                registry_snapshot=self._registry_snapshot(user_id),
+            )
             extraction = self._serialise_extraction(result)
             self.job_repo.save_stage_output(
                 capture_id, JobStage.SAVE, {"extraction": extraction}, user_id=user_id
@@ -219,14 +307,54 @@ class ProcessCaptureUseCase:
                 capture_id, JobStage.COMPLETED, {"saved": True}, user_id=user_id
             )
 
-        capture.status = CaptureStatus.READY
-        self.capture_repo.save(capture)
+    def _registry_snapshot(
+        self, user_id: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        if self.relationship_type_repo is None:
+            return None
+        try:
+            entries = self.relationship_type_repo.list_for_user(user_id)
+        except Exception:
+            return None
+        return [
+            {
+                "canonical_name": entry.canonical_name,
+                "semantic_description": entry.semantic_description,
+                "aliases": entry.aliases,
+            }
+            for entry in entries
+        ]
+
+    def _normalize_relationship_types(
+        self, user_id: str, relationships: List[RelationshipEntity]
+    ) -> None:
+        """Map every proposed relation type through the registry (U1).
+
+        Runs in ``_save_extraction`` so both fresh and cached (pre-U1) payloads
+        are normalised before persistence; ``ensure`` is idempotent.
+        Semantically equivalent proposals (same normalized canonical name or
+        alias) are reused; genuinely new meanings gain a registry entry.
+        """
+        if self.relationship_type_repo is None:
+            return
+        repo = self.relationship_type_repo
+        for rel in relationships:
+            proposal = canonical_relation_name(rel.relation_type)
+            if not proposal:
+                proposal = canonical_relation_name("Related to")
+            entry = repo.ensure(
+                user_id,
+                canonical_name=proposal,
+                provenance="extraction-proposal",
+            )
+            rel.relation_type = entry.canonical_name
 
     def _serialise_extraction(self, result: ExtractionResult) -> Dict[str, Any]:
         return {
             "knowledge_item": asdict(result.knowledge_item),
             "entities": [asdict(entity) for entity in result.entities],
             "relationships": [asdict(rel) for rel in result.relationships],
+            "metadata": dict(result.metadata or {}),
         }
 
     def _deserialise_extraction(self, payload: Dict[str, Any]) -> ExtractionResult:
@@ -238,15 +366,40 @@ class ProcessCaptureUseCase:
             knowledge_item=make(KnowledgeItemEntity, payload["knowledge_item"]),
             entities=[make(ExtractedEntity, item) for item in payload.get("entities", [])],
             relationships=[make(RelationshipEntity, item) for item in payload.get("relationships", [])],
+            metadata=dict(payload.get("metadata") or {}),
         )
 
     # -------------------------------------------------------------- persistence
+    def _embed_knowledge_item(self, user_id: str, item: KnowledgeItemEntity) -> None:
+        """Index the item itself for /api/knowledge/semantic-search (KG-04).
+
+        The pipeline already indexes entities and relationships; without this
+        an item is invisible to hybrid retrieval until an admin runs the
+        embeddings backfill endpoint, which breaks the capture → search loop.
+        """
+        try:
+            vector = self.embedder.embed_item(item)
+            self.embedding_repo.save(
+                item.id,
+                vector,
+                user_id=user_id,
+                model_name=getattr(self.embedder, "model_name", ""),
+                dimension=getattr(self.embedder, "dimension", 0),
+            )
+        except Exception as exc:
+            # Retrieval falls back to lexical ranking; the job must still succeed.
+            print(f"[Embedding Error] {exc}")
+
     def _save_extraction(self, user_id: str, capture_id: str, payload: Dict[str, Any]) -> None:
         result = self._deserialise_extraction(payload)
+        # Relationship types flow through the open-ended registry before any
+        # write; fresh and cached (pre-U1) payloads are normalised alike.
+        self._normalize_relationship_types(user_id, result.relationships)
         existing = self.entity_repo.get_all(user_id=user_id)
         id_map, saved_entities = self._resolve_entities(user_id, capture_id, result.entities, existing)
 
         self.knowledge_repo.save(result.knowledge_item)
+        self._embed_knowledge_item(user_id, result.knowledge_item)
         for entity in saved_entities:
             self.entity_repo.save(entity)
             self._embed(user_id, entity.id, self._entity_text(entity))
@@ -378,7 +531,12 @@ class ProcessCaptureUseCase:
             or isinstance(exc, InvalidInputAudioError)
         )
         self.job_repo.record_attempt(
-            capture.id, attempt, error_class, str(exc), user_id=user_id
+            capture.id,
+            attempt,
+            error_class,
+            str(exc),
+            user_id=user_id,
+            retry_limit=self.retry_limit,
         )
         capture.status = CaptureStatus.FAILED if terminal else CaptureStatus.RECEIVED
         self.capture_repo.save(capture)

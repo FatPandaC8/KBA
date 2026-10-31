@@ -13,9 +13,6 @@ _USER_SCOPED_TABLES = (
     "knowledge_embeddings",
     "processing_jobs",
     "model_eval_records",
-    "conversations",
-    "messages",
-    "answer_citations",
     "duplicate_candidates",
 )
 
@@ -168,6 +165,7 @@ class DatabaseManager:
                 source_capture_id TEXT NOT NULL DEFAULT '',
                 provenance TEXT NOT NULL DEFAULT 'voice-capture',
                 user_edited INTEGER NOT NULL DEFAULT 0,
+                evidence_utterance TEXT NOT NULL DEFAULT '',
                 created_at TEXT,
                 UNIQUE(user_id, from_id, to_id, relation_type)
             );
@@ -221,36 +219,50 @@ class DatabaseManager:
                 UNIQUE(user_id, entity_id, candidate_id)
             );
 
-            CREATE TABLE IF NOT EXISTS conversations (
+            CREATE TABLE IF NOT EXISTS relationship_types (
                 id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                title TEXT NOT NULL DEFAULT 'New conversation',
+                user_id TEXT NOT NULL DEFAULT '',
+                canonical_name TEXT NOT NULL,
+                normalized_key TEXT NOT NULL,
+                semantic_description TEXT NOT NULL DEFAULT '',
+                aliases_json TEXT NOT NULL DEFAULT '[]',
+                provenance TEXT NOT NULL DEFAULT 'registry',
+                user_edited INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(user_id, normalized_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id TEXT PRIMARY KEY,
+                actor TEXT NOT NULL DEFAULT 'admin',
+                action TEXT NOT NULL,
+                resource_type TEXT NOT NULL DEFAULT '',
+                resource_id TEXT NOT NULL DEFAULT '',
+                user_id TEXT NOT NULL DEFAULT '',
+                ip_address TEXT NOT NULL DEFAULT 'unknown',
+                outcome TEXT NOT NULL DEFAULT 'success',
+                detail TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS llm_usage (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT '',
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'success',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
                 updated_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                conversation_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'ready',
-                error_class TEXT NOT NULL DEFAULT '',
-                error_message TEXT NOT NULL DEFAULT '',
-                created_at TEXT,
-                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS answer_citations (
-                id TEXT PRIMARY KEY,
-                message_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                target_id TEXT NOT NULL,
-                name_snapshot TEXT NOT NULL DEFAULT '',
-                created_at TEXT,
-                FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
             );
             """
         )
@@ -279,12 +291,13 @@ class DatabaseManager:
         c.execute("CREATE INDEX IF NOT EXISTS idx_entities_capture ON entities(capture_id);")
         c.execute("CREATE INDEX IF NOT EXISTS idx_entities_user_type ON entities(user_id, entity_type);")
         c.execute("CREATE INDEX IF NOT EXISTS idx_relationships_capture ON relationships(source_capture_id);")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at DESC);")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id);")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_answer_citations_message ON answer_citations(message_id);")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_answer_citations_user ON answer_citations(user_id);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_relationships_type ON relationships(relation_type);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_relationship_types_user ON relationship_types(user_id, normalized_key);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_admin_audit_user ON admin_audit_log(user_id, created_at DESC);")
         c.execute("CREATE INDEX IF NOT EXISTS idx_duplicate_candidates_user ON duplicate_candidates(user_id, decision);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage(created_at);")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_user_created ON llm_usage(user_id, created_at);")
 
         conn.commit()
         conn.close()
@@ -341,6 +354,7 @@ class DatabaseManager:
                 "certainty": "TEXT NOT NULL DEFAULT 'confirmed'",
                 "source_capture_id": "TEXT NOT NULL DEFAULT ''",
                 "provenance": "TEXT NOT NULL DEFAULT 'voice-capture'",
+                "evidence_utterance": "TEXT NOT NULL DEFAULT ''",
             },
             "knowledge_embeddings": {
                 "user_id": "TEXT NOT NULL DEFAULT ''",
@@ -364,3 +378,9 @@ class DatabaseManager:
             for column, ddl in columns.items():
                 if not self._column_exists(c, table, column):
                     c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+        # Ask AI (LLM Q&A) was removed from Echo. These tables were written
+        # only by the Ask AI feature (verified: no other reader or writer),
+        # so they are dropped. All other user data is untouched.
+        for table in ("answer_citations", "messages", "conversations"):
+            c.execute(f"DROP TABLE IF EXISTS {table}")

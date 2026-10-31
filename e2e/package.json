@@ -1,0 +1,13 @@
+{
+  "name": "echo-e2e",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Playwright E2E suite for the Echo backend user journeys (API-level; STT is scripted).",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.0"
+  }
+}

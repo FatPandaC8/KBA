@@ -8,6 +8,7 @@ from server.app.application.ports import (
     KnowledgeRepositoryPort,
     EntityRepositoryPort,
     RelationshipRepositoryPort,
+    RelationshipTypeRegistryPort,
     DuplicateCandidateRepositoryPort,
     EmbeddingRepositoryPort,
     CaptureRepositoryPort,
@@ -19,9 +20,9 @@ from server.app.application.ports import (
     ConsentRepositoryPort,
     TombstoneRepositoryPort,
     RecordSupportRepositoryPort,
-    ConversationRepositoryPort,
-    MessageRepositoryPort,
-    CitationRepositoryPort,
+    LLMUsageRepositoryPort,
+    AppSettingsRepositoryPort,
+    AdminAuditLogPort,
 )
 from server.app.application.dto import (
     GraphDataDTO,
@@ -34,14 +35,14 @@ from server.app.domain.entities import (
     KnowledgeItemEntity,
     ExtractedEntity,
     RelationshipEntity,
+    RelationshipTypeRegistryEntry,
+    DEFAULT_RELATIONSHIP_TYPES,
     CaptureEntity,
     EvalRecordEntity,
     UserEntity,
     ConsentEntity,
-    ConversationEntity,
-    MessageEntity,
-    CitationEntity,
     current_utc_iso,
+    normalize_key,
 )
 from server.app.domain.value_objects import ErrorClass
 from server.app.infrastructure.database import DatabaseManager
@@ -175,14 +176,16 @@ def _layout_graph(entity_rows, rel_rows) -> Tuple[List[GraphNodeDTO], List[Graph
 
     edges: List[GraphEdgeDTO] = []
     for rel in valid_edges:
+        rel_keys = rel.keys()
         edges.append(GraphEdgeDTO(
             id=rel["id"],
             from_node=rel["from_id"],
             to_node=rel["to_id"],
             type=rel["relation_type"],
             status=rel["status"],
-            certainty=rel["certainty"] if "certainty" in rel.keys() and rel["certainty"] else "confirmed",
-            confidence=float(rel["confidence"]) if "confidence" in rel.keys() and rel["confidence"] is not None else 0.6,
+            certainty=rel["certainty"] if "certainty" in rel_keys and rel["certainty"] else "confirmed",
+            confidence=float(rel["confidence"]) if "confidence" in rel_keys and rel["confidence"] is not None else 0.6,
+            evidence=(rel["evidence_utterance"] or "") if "evidence_utterance" in rel_keys else "",
         ))
     return nodes, edges, clusters
 
@@ -550,6 +553,7 @@ class SqliteKnowledgeRepository(KnowledgeRepositoryPort):
                 model_version = excluded.model_version,
                 updated_at = excluded.updated_at
             WHERE knowledge_items.user_id = excluded.user_id
+              AND knowledge_items.user_edited = 0
             """,
             (
                 item.id,
@@ -672,8 +676,9 @@ class SqliteRelationshipRepository(RelationshipRepositoryPort):
             """
             INSERT INTO relationships
             (id, user_id, from_id, to_id, relation_type, status, confidence,
-             certainty, source_capture_id, provenance, user_edited, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             certainty, source_capture_id, provenance, user_edited,
+             evidence_utterance, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id, from_id, to_id, relation_type) DO UPDATE SET
                 confidence = MAX(relationships.confidence, excluded.confidence),
                 certainty = CASE
@@ -684,6 +689,10 @@ class SqliteRelationshipRepository(RelationshipRepositoryPort):
                     WHEN relationships.source_capture_id = ''
                     THEN excluded.source_capture_id
                     ELSE relationships.source_capture_id END,
+                evidence_utterance = CASE
+                    WHEN relationships.evidence_utterance = ''
+                    THEN excluded.evidence_utterance
+                    ELSE relationships.evidence_utterance END,
                 status = CASE
                     WHEN relationships.user_edited = 1 THEN relationships.status
                     ELSE excluded.status END
@@ -700,6 +709,7 @@ class SqliteRelationshipRepository(RelationshipRepositoryPort):
                 rel.source_capture_id,
                 rel.provenance,
                 1 if rel.user_edited else 0,
+                (rel.evidence_utterance or "")[:280],
                 rel.created_at,
             ),
         )
@@ -825,6 +835,7 @@ class SqliteRelationshipRepository(RelationshipRepositoryPort):
             source_capture_id=r["source_capture_id"] if "source_capture_id" in keys and r["source_capture_id"] else "",
             provenance=r["provenance"] if "provenance" in keys and r["provenance"] else "voice-capture",
             user_edited=bool(r["user_edited"]) if "user_edited" in keys else False,
+            evidence_utterance=(r["evidence_utterance"] or "") if "evidence_utterance" in keys else "",
             created_at=r["created_at"],
         )
 
@@ -1004,193 +1015,6 @@ class SqliteDuplicateCandidateRepository(DuplicateCandidateRepositoryPort):
         cur = conn.execute("DELETE FROM duplicate_candidates WHERE user_id = ?", (user_id,))
         conn.commit()
         return cur.rowcount or 0
-
-
-class SqliteConversationRepository(ConversationRepositoryPort):
-    def __init__(self, db_manager: DatabaseManager):
-        self.db = db_manager
-
-    def save(self, conversation: ConversationEntity) -> None:
-        conn = self.db.get_connection()
-        conn.execute(
-            """
-            INSERT INTO conversations (id, user_id, title, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                title = excluded.title,
-                updated_at = excluded.updated_at
-            WHERE conversations.user_id = excluded.user_id
-            """,
-            (conversation.id, conversation.user_id, conversation.title,
-             conversation.created_at, conversation.updated_at),
-        )
-        conn.commit()
-
-    def get_by_id(self, conversation_id: str, user_id: str) -> Optional[ConversationEntity]:
-        row = self.db.get_connection().execute(
-            "SELECT * FROM conversations WHERE id = ? AND user_id = ?", (conversation_id, user_id)
-        ).fetchone()
-        if not row:
-            return None
-        return ConversationEntity(
-            id=row["id"], user_id=row["user_id"], title=row["title"],
-            created_at=row["created_at"], updated_at=row["updated_at"],
-        )
-
-    def list_for_user(self, user_id: str) -> List[ConversationEntity]:
-        rows = self.db.get_connection().execute(
-            "SELECT * FROM conversations WHERE user_id = ? ORDER BY updated_at DESC", (user_id,)
-        ).fetchall()
-        return [ConversationEntity(
-            id=r["id"], user_id=r["user_id"], title=r["title"],
-            created_at=r["created_at"], updated_at=r["updated_at"],
-        ) for r in rows]
-
-    def touch(self, conversation_id: str, user_id: str, title: Optional[str] = None) -> None:
-        conn = self.db.get_connection()
-        if title is None:
-            conn.execute(
-                "UPDATE conversations SET updated_at = ? WHERE id = ? AND user_id = ?",
-                (current_utc_iso(), conversation_id, user_id),
-            )
-        else:
-            conn.execute(
-                "UPDATE conversations SET updated_at = ?, title = ? WHERE id = ? AND user_id = ?",
-                (current_utc_iso(), title, conversation_id, user_id),
-            )
-        conn.commit()
-
-    def delete(self, conversation_id: str, user_id: str) -> None:
-        conn = self.db.get_connection()
-        conn.execute("DELETE FROM conversations WHERE id = ? AND user_id = ?", (conversation_id, user_id))
-        conn.commit()
-
-    def delete_for_user(self, user_id: str) -> int:
-        conn = self.db.get_connection()
-        cur = conn.execute("DELETE FROM conversations WHERE user_id = ?", (user_id,))
-        conn.commit()
-        return cur.rowcount or 0
-
-
-class SqliteMessageRepository(MessageRepositoryPort):
-    def __init__(self, db_manager: DatabaseManager):
-        self.db = db_manager
-
-    def save(self, message: MessageEntity) -> None:
-        conn = self.db.get_connection()
-        conn.execute(
-            """
-            INSERT INTO messages
-            (id, conversation_id, user_id, role, content, status, error_class,
-             error_message, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                content = excluded.content,
-                status = excluded.status,
-                error_class = excluded.error_class,
-                error_message = excluded.error_message
-            WHERE messages.user_id = excluded.user_id
-            """,
-            (message.id, message.conversation_id, message.user_id, message.role,
-             message.content, message.status, message.error_class,
-             message.error_message, message.created_at),
-        )
-        conn.commit()
-
-    def list_for_conversation(self, conversation_id: str, user_id: str) -> List[MessageEntity]:
-        rows = self.db.get_connection().execute(
-            "SELECT * FROM messages WHERE conversation_id = ? AND user_id = ? ORDER BY created_at, id",
-            (conversation_id, user_id),
-        ).fetchall()
-        return [self._row_to_entity(r) for r in rows]
-
-    def get_by_id(self, message_id: str, user_id: str) -> Optional[MessageEntity]:
-        row = self.db.get_connection().execute(
-            "SELECT * FROM messages WHERE id = ? AND user_id = ?", (message_id, user_id)
-        ).fetchone()
-        return self._row_to_entity(row) if row else None
-
-    def delete(self, message_id: str, user_id: str) -> None:
-        conn = self.db.get_connection()
-        conn.execute("DELETE FROM messages WHERE id = ? AND user_id = ?", (message_id, user_id))
-        conn.commit()
-
-    def delete_for_conversation(self, conversation_id: str, user_id: str) -> int:
-        conn = self.db.get_connection()
-        cur = conn.execute(
-            "DELETE FROM messages WHERE conversation_id = ? AND user_id = ?",
-            (conversation_id, user_id),
-        )
-        conn.commit()
-        return cur.rowcount or 0
-
-    def delete_for_user(self, user_id: str) -> int:
-        conn = self.db.get_connection()
-        cur = conn.execute("DELETE FROM messages WHERE user_id = ?", (user_id,))
-        conn.commit()
-        return cur.rowcount or 0
-
-    def _row_to_entity(self, r: sqlite3.Row) -> MessageEntity:
-        return MessageEntity(
-            id=r["id"], conversation_id=r["conversation_id"], user_id=r["user_id"],
-            role=r["role"], content=r["content"], status=r["status"],
-            error_class=r["error_class"] or "", error_message=r["error_message"] or "",
-            created_at=r["created_at"],
-        )
-
-
-class SqliteCitationRepository(CitationRepositoryPort):
-    def __init__(self, db_manager: DatabaseManager):
-        self.db = db_manager
-
-    def save(self, citation: CitationEntity) -> None:
-        conn = self.db.get_connection()
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO answer_citations
-            (id, message_id, user_id, kind, target_id, name_snapshot, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (citation.id, citation.message_id, citation.user_id, citation.kind,
-             citation.target_id, citation.name_snapshot, citation.created_at),
-        )
-        conn.commit()
-
-    def list_for_message(self, message_id: str, user_id: str) -> List[CitationEntity]:
-        rows = self.db.get_connection().execute(
-            "SELECT * FROM answer_citations WHERE message_id = ? AND user_id = ? ORDER BY created_at, id",
-            (message_id, user_id),
-        ).fetchall()
-        return [self._row_to_entity(r) for r in rows]
-
-    def list_for_target(self, user_id: str, kind: str, target_id: str) -> List[CitationEntity]:
-        rows = self.db.get_connection().execute(
-            "SELECT * FROM answer_citations WHERE user_id = ? AND kind = ? AND target_id = ?",
-            (user_id, kind, target_id),
-        ).fetchall()
-        return [self._row_to_entity(r) for r in rows]
-
-    def delete_for_message(self, message_id: str, user_id: str) -> int:
-        conn = self.db.get_connection()
-        cur = conn.execute(
-            "DELETE FROM answer_citations WHERE message_id = ? AND user_id = ?",
-            (message_id, user_id),
-        )
-        conn.commit()
-        return cur.rowcount or 0
-
-    def delete_for_user(self, user_id: str) -> int:
-        conn = self.db.get_connection()
-        cur = conn.execute("DELETE FROM answer_citations WHERE user_id = ?", (user_id,))
-        conn.commit()
-        return cur.rowcount or 0
-
-    def _row_to_entity(self, r: sqlite3.Row) -> CitationEntity:
-        return CitationEntity(
-            id=r["id"], message_id=r["message_id"], user_id=r["user_id"],
-            kind=r["kind"], target_id=r["target_id"],
-            name_snapshot=r["name_snapshot"] or "", created_at=r["created_at"],
-        )
 
 
 class SqliteEmbeddingRepository(EmbeddingRepositoryPort):
@@ -1491,12 +1315,12 @@ class SqliteJobStatusRepository(JobStatusRepositoryPort):
         conn.commit()
         return deleted
 
-    def claim(self, capture_id: str, lease_owner: str, lease_seconds: int, user_id: Optional[str] = None) -> Optional[ProcessingJobDTO]:
+    def claim(self, capture_id: str, lease_owner: str, lease_seconds: int, user_id: Optional[str] = None, retry_limit: int = 3) -> Optional[ProcessingJobDTO]:
         """Atomically take the lease for one job.
 
-        A job is claimable when it is queued, or when a running worker's lease
-        has expired. Expired leases are how a restarted backend resumes work
-        without the client triggering anything (PRC-03).
+        A job is claimable when it is queued, or when a running/processing
+        worker's lease has expired. Expired leases are how a restarted backend
+        resumes work without the client triggering anything (PRC-03).
         """
         conn = self.db.get_connection()
         now = current_utc_iso()
@@ -1507,18 +1331,49 @@ class SqliteJobStatusRepository(JobStatusRepositoryPort):
             UPDATE processing_jobs
             SET lease_owner = ?, lease_expires_at = ?, status = 'running', updated_at = ?
             WHERE capture_id = ?
-              AND attempt < 3
+              AND attempt < ?
               AND (
                     status = 'queued'
-                 OR (status = 'running' AND (lease_owner = '' OR lease_expires_at < ?))
+                 OR (status IN ('running', 'processing')
+                     AND (lease_owner = '' OR lease_expires_at < ?))
               ){clause}
             """,
-            (lease_owner, expires, now, capture_id, now, *params),
+            (lease_owner, expires, now, capture_id, int(retry_limit), now, *params),
         )
         conn.commit()
         if not cur.rowcount:
             return None
         return self.get_by_capture_id(capture_id, user_id=user_id)
+
+    def renew_lease(self, capture_id: str, lease_owner: str, lease_seconds: int, user_id: Optional[str] = None) -> bool:
+        """Extend a lease held by this worker; never steal another worker's job."""
+        conn = self.db.get_connection()
+        expires = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat()
+        clause, params = _scoped("user_id", user_id)
+        cur = conn.execute(
+            f"""
+            UPDATE processing_jobs
+            SET lease_expires_at = ?, updated_at = ?
+            WHERE capture_id = ? AND lease_owner = ?{clause}
+            """,
+            (expires, current_utc_iso(), capture_id, lease_owner, *params),
+        )
+        conn.commit()
+        return bool(cur.rowcount)
+
+    def complete(self, capture_id: str, user_id: Optional[str] = None) -> None:
+        conn = self.db.get_connection()
+        clause, params = _scoped("user_id", user_id)
+        conn.execute(
+            f"""
+            UPDATE processing_jobs
+            SET stage = 'completed', status = 'ready', error_class = '', error_message = NULL,
+                lease_owner = '', lease_expires_at = '', updated_at = ?
+            WHERE capture_id = ?{clause}
+            """,
+            (current_utc_iso(), capture_id, *params),
+        )
+        conn.commit()
 
     def release(self, capture_id: str, lease_owner: str, user_id: Optional[str] = None) -> None:
         conn = self.db.get_connection()
@@ -1552,22 +1407,26 @@ class SqliteJobStatusRepository(JobStatusRepositoryPort):
         except (TypeError, ValueError):
             existing = {}
         existing.update(outputs or {})
+        # Keep the lease: the worker is still alive and may be in a long
+        # provider call. The heartbeat renews it; only failure/completion
+        # releases it. Status "processing" is still resumable when its lease
+        # expires, so a crash cannot strand a job forever.
         status = "ready" if stage == "completed" else "processing"
         conn.execute(
             f"""
             UPDATE processing_jobs
             SET stage = ?, status = ?, stage_outputs = ?, error_message = NULL,
-                error_class = '', lease_owner = '', lease_expires_at = '', updated_at = ?
+                error_class = '', updated_at = ?
             WHERE capture_id = ?{clause}
             """,
             (stage, status, json.dumps(existing), current_utc_iso(), capture_id, *params),
         )
         conn.commit()
 
-    def record_attempt(self, capture_id: str, attempt: int, error_class: str, error_message: str, user_id: Optional[str] = None) -> None:
+    def record_attempt(self, capture_id: str, attempt: int, error_class: str, error_message: str, user_id: Optional[str] = None, retry_limit: int = 3) -> None:
         conn = self.db.get_connection()
         clause, params = _scoped("user_id", user_id)
-        status = "failed" if attempt >= 3 or not ErrorClass.is_recoverable(error_class) else "queued"
+        status = "failed" if attempt >= retry_limit or not ErrorClass.is_recoverable(error_class) else "queued"
         conn.execute(
             f"""
             UPDATE processing_jobs
@@ -1594,19 +1453,20 @@ class SqliteJobStatusRepository(JobStatusRepositoryPort):
         conn.commit()
         return bool(cur.rowcount)
 
-    def list_resumable(self, now_iso: str, limit: int = 20) -> List[ProcessingJobDTO]:
+    def list_resumable(self, now_iso: str, limit: int = 20, retry_limit: int = 3) -> List[ProcessingJobDTO]:
         rows = self.db.get_connection().execute(
             """
             SELECT * FROM processing_jobs
-            WHERE attempt < 3
+            WHERE attempt < ?
               AND (
                     status = 'queued'
-                 OR (status = 'running' AND (lease_owner = '' OR lease_expires_at < ?))
+                 OR (status IN ('running', 'processing')
+                     AND (lease_owner = '' OR lease_expires_at < ?))
               )
             ORDER BY created_at
             LIMIT ?
             """,
-            (now_iso, limit),
+            (int(retry_limit), now_iso, limit),
         ).fetchall()
         return [self._row_to_dto(r) for r in rows]
 
@@ -1627,3 +1487,330 @@ class SqliteJobStatusRepository(JobStatusRepositoryPort):
             lease_expires_at=r["lease_expires_at"] or "",
             stage_outputs=r["stage_outputs"] or "{}",
         )
+
+
+class SqliteLLMUsageRepository(LLMUsageRepositoryPort):
+    """Token accounting for provider calls (TPM/TPD budgets and admin views)."""
+
+    def __init__(self, db_manager: DatabaseManager):
+        self.db = db_manager
+
+    def record(
+        self,
+        *,
+        user_id: str,
+        provider: str,
+        model: str,
+        operation: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        status: str = "success",
+    ) -> None:
+        conn = self.db.get_connection()
+        conn.execute(
+            """
+            INSERT INTO llm_usage
+            (id, user_id, provider, model, operation, prompt_tokens,
+             completion_tokens, total_tokens, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid.uuid4().hex,
+                user_id or "",
+                provider,
+                model,
+                operation,
+                int(prompt_tokens or 0),
+                int(completion_tokens or 0),
+                int(total_tokens or 0),
+                status,
+                current_utc_iso(),
+            ),
+        )
+        conn.commit()
+
+    def usage_since(self, since_iso: str, user_id: Optional[str] = None) -> Dict[str, int]:
+        sql = (
+            "SELECT count(*) AS calls, COALESCE(sum(total_tokens), 0) AS total_tokens "
+            "FROM llm_usage WHERE created_at >= ?"
+        )
+        params: List[Any] = [since_iso]
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            params.append(user_id)
+        row = self.db.get_connection().execute(sql, tuple(params)).fetchone()
+        return {
+            "calls": int(row["calls"] if row else 0),
+            "total_tokens": int(row["total_tokens"] if row else 0),
+        }
+
+    def last_calls(self, limit: int = 20) -> List[Dict[str, Any]]:
+        rows = self.db.get_connection().execute(
+            "SELECT provider, model, operation, prompt_tokens, completion_tokens, "
+            "total_tokens, status, created_at FROM llm_usage ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+class SqliteAppSettingsRepository(AppSettingsRepositoryPort):
+    """Small runtime key/value store for admin-selectable provider/model."""
+
+    def __init__(self, db_manager: DatabaseManager):
+        self.db = db_manager
+
+    def get(self, key: str) -> Optional[str]:
+        row = self.db.get_connection().execute(
+            "SELECT value FROM app_settings WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row else None
+
+    def set(self, key: str, value: str) -> None:
+        conn = self.db.get_connection()
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (key, value, current_utc_iso()),
+        )
+        conn.commit()
+
+    def all(self) -> Dict[str, str]:
+        rows = self.db.get_connection().execute("SELECT key, value FROM app_settings").fetchall()
+        return {row["key"]: row["value"] for row in rows}
+
+
+class SqliteRelationshipTypeRegistryRepository(RelationshipTypeRegistryPort):
+    """Persisted rows of the open-ended relationship registry (U1).
+
+    Seed meanings live in code (``DEFAULT_RELATIONSHIP_TYPES``); this table
+    holds proposals made after extraction user edits. Matching is
+    deterministic: normalized canonical names and aliases.
+    """
+
+    def __init__(self, db_manager: DatabaseManager):
+        self.db = db_manager
+
+    # ------------------------------------------------------------------ helpers
+    @staticmethod
+    def _seeds() -> List[RelationshipTypeRegistryEntry]:
+        return list(DEFAULT_RELATIONSHIP_TYPES)
+
+    def _user_entries(self, user_id: Optional[str]) -> List[RelationshipTypeRegistryEntry]:
+        if not user_id:
+            return []
+        rows = self.db.get_connection().execute(
+            "SELECT * FROM relationship_types WHERE user_id = ? OR user_id = '' ORDER BY created_at",
+            (user_id,),
+        ).fetchall()
+        entries = []
+        for r in rows:
+            try:
+                aliases = json.loads(r["aliases_json"] or "[]")
+            except (TypeError, ValueError):
+                aliases = []
+            entries.append(
+                RelationshipTypeRegistryEntry(
+                    id=r["id"],
+                    user_id=r["user_id"],
+                    canonical_name=r["canonical_name"],
+                    semantic_description=r["semantic_description"] or "",
+                    aliases=aliases if isinstance(aliases, list) else [],
+                    provenance=r["provenance"] or "registry",
+                    user_edited=bool(r["user_edited"]),
+                    created_at=r["created_at"] or "",
+                    updated_at=r["updated_at"] or "",
+                )
+            )
+        return entries
+
+    # -------------------------------------------------------------------- port
+    def list_for_user(self, user_id: Optional[str] = None) -> List[RelationshipTypeRegistryEntry]:
+        """Seeds first, then user entries overriding with the same key."""
+        entries: Dict[str, RelationshipTypeRegistryEntry] = {}
+        for entry in self._seeds():
+            entries[entry.normalized_key] = entry
+        for entry in self._user_entries(user_id):
+            entries[entry.normalized_key] = entry
+        return sorted(entries.values(), key=lambda e: e.normalized_key)
+
+    def find_equivalent(
+        self, user_id: Optional[str], names: List[str]
+    ) -> Optional[RelationshipTypeRegistryEntry]:
+        lookup: Dict[str, RelationshipTypeRegistryEntry] = {}
+        for entry in self.list_for_user(user_id):
+            keys = [entry.normalized_key, *entry.normalized_aliases]
+            for key in keys:
+                lookup.setdefault(key, entry)
+        for name in names:
+            key = self._match_key(name)
+            if not key:
+                continue
+            hit = lookup.get(key)
+            if hit is not None:
+                return hit
+        return None
+
+    @staticmethod
+    def _match_key(name: str) -> str:
+        # Underscores and casing are not meaning-bearing in registry keys, so
+        # "works_at", "works at" and "Works at" all match one entry.
+        return normalize_key(str(name or "").replace("_", " "))
+
+    def ensure(
+        self,
+        user_id: Optional[str],
+        canonical_name: str,
+        semantic_description: str = "",
+        aliases: Optional[List[str]] = None,
+        provenance: str = "extraction",
+        user_edited: bool = False,
+    ) -> RelationshipTypeRegistryEntry:
+        existing = self.find_equivalent(
+            user_id, [canonical_name, *(aliases or [])]
+        )
+        if existing is not None:
+            return existing
+        entry = RelationshipTypeRegistryEntry.create(
+            canonical_name=canonical_name,
+            user_id=user_id or "",
+            semantic_description=semantic_description,
+            aliases=aliases,
+            provenance=provenance,
+            user_edited=user_edited,
+        )
+        conn = self.db.get_connection()
+        conn.execute(
+            """
+            INSERT INTO relationship_types
+            (id, user_id, canonical_name, normalized_key, semantic_description,
+             aliases_json, provenance, user_edited, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, normalized_key) DO UPDATE SET
+                semantic_description = CASE
+                    WHEN relationship_types.semantic_description = ''
+                    THEN excluded.semantic_description
+                    ELSE relationship_types.semantic_description END,
+                aliases_json = CASE
+                    WHEN relationship_types.aliases_json = '[]'
+                    THEN excluded.aliases_json
+                    ELSE relationship_types.aliases_json END,
+                updated_at = excluded.updated_at
+            """,
+            (
+                entry.id,
+                entry.user_id,
+                entry.canonical_name,
+                entry.normalized_key,
+                entry.semantic_description,
+                json.dumps(entry.aliases),
+                entry.provenance,
+                1 if entry.user_edited else 0,
+                entry.created_at,
+                entry.updated_at,
+            ),
+        )
+        conn.commit()
+        return entry
+
+    def update(
+        self,
+        entry_id: str,
+        *,
+        semantic_description: Optional[str] = None,
+        aliases: Optional[List[str]] = None,
+    ) -> bool:
+        conn = self.db.get_connection()
+        row = conn.execute(
+            "SELECT id FROM relationship_types WHERE id = ?", (entry_id,)
+        ).fetchone()
+        if not row:
+            return False
+        if semantic_description is not None:
+            conn.execute(
+                "UPDATE relationship_types SET semantic_description = ?, updated_at = ? WHERE id = ?",
+                (" ".join(semantic_description.split()), current_utc_iso(), entry_id),
+            )
+        if aliases is not None:
+            cleaned = json.dumps(
+                RelationshipTypeRegistryEntry.create(
+                    canonical_name="placeholder", aliases=aliases
+                ).aliases
+            )
+            conn.execute(
+                "UPDATE relationship_types SET aliases_json = ?, updated_at = ? WHERE id = ?",
+                (cleaned, current_utc_iso(), entry_id),
+            )
+        conn.commit()
+        return True
+
+
+class SqliteAdminAuditLogRepository(AdminAuditLogPort):
+    """Append-only audit log for administrative operations (U4).
+
+    One shared admin token is the actor identity; there is no fingerprinting
+    and no per-admin attribution beyond the request IP when it is available.
+    No secret material is ever written to a row.
+    """
+
+    def __init__(self, db_manager: DatabaseManager):
+        self.db = db_manager
+
+    def record(
+        self,
+        action: str,
+        resource_type: str = "",
+        resource_id: str = "",
+        user_id: str = "",
+        ip_address: str = "unknown",
+        outcome: str = "success",
+        detail: str = "",
+        actor: str = "admin",
+    ) -> None:
+        conn = self.db.get_connection()
+        conn.execute(
+            """
+            INSERT INTO admin_audit_log
+            (id, actor, action, resource_type, resource_id, user_id,
+             ip_address, outcome, detail, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                actor,
+                action,
+                resource_type,
+                resource_id,
+                user_id,
+                ip_address or "unknown",
+                outcome,
+                " ".join((detail or "").split()),
+                current_utc_iso(),
+            ),
+        )
+        conn.commit()
+
+    def list_recent(self, limit: int = 100) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit), 500))
+        rows = self.db.get_connection().execute(
+            """
+            SELECT id, actor, action, resource_type, resource_id, user_id,
+                   ip_address, outcome, detail, created_at
+            FROM admin_audit_log
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_for_user(self, user_id: str) -> int:
+        conn = self.db.get_connection()
+        cur = conn.execute(
+            "DELETE FROM admin_audit_log WHERE user_id = ? AND user_id != ''",
+            (user_id,),
+        )
+        conn.commit()
+        return cur.rowcount or 0

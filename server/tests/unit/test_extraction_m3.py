@@ -60,6 +60,31 @@ def test_negation_marks_relationship_conflicting():
     assert all(r.status == "conflicting" for r in result.relationships)
 
 
+def test_negated_dependency_is_never_extracted_as_contradiction():
+    # U1: negation must not fabricate a Contradicts fact from "not X depends
+    # on Y"; and without an explicit typed cue nothing is extracted.
+    result = _extract("Echo no longer depends on FastAPI.")
+    assert result.relationships == []
+
+
+def test_co_occurrence_alone_never_creates_an_edge():
+    # U1: two entities mentioned together without a typed cue stay unlinked.
+    result = _extract("I met Alice about the Echo project.")
+    assert result.relationships == []
+
+
+def test_cued_relationship_keeps_evidence_and_direction():
+    result = _extract("Echo depends on FastAPI.")
+    rels = result.relationships
+    assert len(rels) == 1
+    rel = rels[0]
+    assert rel.relation_type == RelationType.DEPENDS_ON
+    assert "depends on" in rel.evidence_utterance.lower()
+    names = {e.id: e.name for e in result.entities}
+    assert names[rel.from_id] == "Echo"
+    assert names[rel.to_id] == "FastAPI"
+
+
 def test_empty_transcript_is_rejected():
     with pytest.raises(ValidationError):
         _extract("   ")

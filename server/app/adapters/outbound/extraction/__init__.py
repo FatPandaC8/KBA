@@ -72,17 +72,19 @@ _HEDGES = (
     "unsure", "possibly", "seems", "kind of", "sort of",
 )
 
-_NEGATIONS = (
-    "not ", "n't", "no longer", "never", "contradicts", "conflicts with",
-    "disagree", "wrong about", "isn't", "aren't", "wasn't", "weren't",
-)
-
 _RELATION_CUES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     (RelationType.DEPENDS_ON, ("depends on", "relies on", "requires", "needs")),
     (RelationType.SUPPORT, ("supports", "helps", "enables", "improves", "backs")),
     (RelationType.EXAMPLE_OF, ("example of", "such as", "for instance")),
     (RelationType.CONSTRAINED_BY, ("constrained by", "limited by", "blocked by", "stuck on")),
-    (RelationType.CONTRADICTS, ("contradicts", "conflicts with", "disagree", "opposes", "but not")),
+    (RelationType.CONTRADICTS, ("contradicts", "conflicts with", "disagree", "opposes")),
+)
+
+# Open-ended speech cues (U1): proposals that are NOT covered by the seeded
+# registry. The pipeline normalisation must then create a new registry entry
+# for them rather than collapsing the meaning onto an existing canonical type.
+_OPEN_RELATION_CUES: Tuple[str, ...] = (
+    "works at", "employed by", "member of", "belongs to a team with",
 )
 
 
@@ -113,7 +115,16 @@ class SemanticKnowledgeExtractor(KnowledgeExtractionPort):
     def extract(self, transcript: str, capture_id: str, user_id: str = "") -> KnowledgeItemEntity:
         return self.extract_graph(transcript, capture_id, user_id=user_id).knowledge_item
 
-    def extract_graph(self, transcript: str, capture_id: str, user_id: str = "") -> ExtractionResult:
+    def extract_graph(
+        self,
+        transcript: str,
+        capture_id: str,
+        user_id: str = "",
+        registry_snapshot: Optional[List[Dict[str, any]]] = None,
+    ) -> ExtractionResult:
+        # The rule-based extractor currently ignores the registry snapshot: it
+        # only proposes cued, already-canonical relation types (U1). The
+        # pipeline normalises everything through the registry afterwards.
         clean_text = " ".join((transcript or "").split())
         if not clean_text:
             raise ValidationError("Cannot extract knowledge from empty transcript")
@@ -201,6 +212,13 @@ class SemanticKnowledgeExtractor(KnowledgeExtractionPort):
         capture_id: str,
         user_id: str,
     ) -> List[RelationshipEntity]:
+        """Only explicitly cued relationships are extracted (U1).
+
+        A relationship needs a typed cue in the sentence, so co-occurrence
+        alone never creates an edge. The supporting sentence is preserved as
+        evidence, direction comes from sentence order, and the normalisation
+        step on the pipeline maps the type into the relationship registry.
+        """
         by_sentence_name = {entity.normalized_name: entity for entity in entities}
         deduped: Dict[Tuple[str, str, str], RelationshipEntity] = {}
 
@@ -211,8 +229,10 @@ class SemanticKnowledgeExtractor(KnowledgeExtractionPort):
             ]
             if len(mentioned) < 2:
                 continue
-            mentioned.sort(key=lambda e: lowered.find(e.normalized_name))
             relation_type, confidence = self._classify_sentence(lowered)
+            if relation_type is None:
+                continue
+            mentioned.sort(key=lambda e: lowered.find(e.normalized_name))
             hedged = any(hedge in lowered for hedge in _HEDGES)
             contradicting = relation_type == RelationType.CONTRADICTS
 
@@ -239,20 +259,42 @@ class SemanticKnowledgeExtractor(KnowledgeExtractionPort):
                         confidence=confidence,
                         source_capture_id=capture_id,
                         provenance="voice-capture",
+                        evidence_utterance=sentence,
                     )
 
         return sorted(deduped.values(), key=lambda r: (r.from_id, r.to_id, r.relation_type))
 
-    def _classify_sentence(self, lowered: str) -> Tuple[str, float]:
+    def _classify_sentence(self, lowered: str) -> Tuple[Optional[str], float]:
+        """Return the cued relation type, or None when none is stated.
+
+        Negation and default pair edges are deliberately not translated into
+        relationships (U1): "not X depends on Y" is not a contradicting fact,
+        and two entities appearing together is not an explicit relationship.
+        A negated sentence is skipped entirely — the regex-based extractor
+        cannot determine what the sentence does assert, so proposing
+        anything would be fabrication.
+        """
+        if any(
+            negation in lowered
+            for negation in (
+                "no longer", "not ", "n't", "never ", "does not",
+                "doesn't", "did not", "didn't", "will not", "won't",
+            )
+        ):
+            return None, 0.0
         for relation_type, cues in _RELATION_CUES:
             for cue in cues:
                 if cue in lowered:
                     if relation_type == RelationType.CONTRADICTS:
                         return relation_type, 0.82
                     return relation_type, 0.84
-        if any(negation in lowered for negation in _NEGATIONS):
-            return RelationType.CONTRADICTS, 0.76
-        return RelationType.RELATED_TO, 0.6
+        # Open-ended speech (U1): the spoken phrase itself becomes the
+        # canonical proposal for meanings outside the seeded registry. The
+        # pipeline normalisation decides whether an equivalent entry exists.
+        for cue in _OPEN_RELATION_CUES:
+            if cue in lowered:
+                return cue.capitalize(), 0.78
+        return None, 0.0
 
     # ------------------------------------------------------------------ record
     def _build_item(
