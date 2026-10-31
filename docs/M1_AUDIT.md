@@ -1,5 +1,8 @@
 # M1 Audit — Requirements-to-Implementation Matrix (PRD v2)
 
+> [!NOTE]
+> **Historical Audit Report.** This document audits the pre-M2 codebase state (commit `909a584`, 2026-10-29) against PRD v2. It reflects the requirements as they existed before the product direction was updated. Many gaps identified here were addressed in M2 and M3. Ask AI was identified as a gap here; it has since been removed from scope entirely. See `docs/PRODUCT_DIRECTION.md` for the current product scope.
+
 **Date:** 2026-10-29
 **Branch:** `mvp_v2_prd` (from `mvp_01`), baseline commit `909a584`
 **Working tree at audit start:** clean

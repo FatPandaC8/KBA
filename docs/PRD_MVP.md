@@ -1,12 +1,17 @@
-# Echo MVP — PRD v2 (English)
+# Echo MVP — PRD (Voice-First Knowledge Management)
 
-*English rewrite of the Vietnamese PRD v2, reflecting all decisions confirmed with the product owner. Items tagged **\[Default\]** are the author’s proposals and have not yet been confirmed.*
+*Reflects the current product direction as of 2026-10-30. See `docs/PRODUCT_DIRECTION.md` for the authoritative scope definition. Earlier decisions tagged **\[Default\]** are the author's proposals confirmed during implementation.*
+
+> [!NOTE]
+> This document has been updated to align with the voice-first personal knowledge management direction. Conversational AI ("Ask AI") is removed from scope. Transcripts are internal processing artifacts accessible to admins only; end users interact with recordings and extracted knowledge (entities and relationships), not raw transcripts.
 
 ## 1. Overview
 
-Echo is an Android-first Flutter app (with a viable path to iOS) that turns a user’s spoken thoughts into a knowledge graph of entities and relationships. Users explore the graph, search it semantically, and ask AI questions that require reasoning across saved knowledge. Echo is a public multi-user product: each user has a private knowledge space, and only the application owner is an administrator.
+Echo is an Android-first Flutter app (with a viable path to iOS) that turns a user's spoken recordings into a persistent knowledge graph of entities and relationships. Users explore the graph, search it by entity name, type, and keyword, verify extracted knowledge, correct it when needed, and navigate connections across recordings.
 
-**Navigation: three tabs — Record, Graph, Ask AI.** Search lives inside the Graph tab.
+**Navigation: three tabs — Record, Graph, My Recordings.** Search lives inside the Graph tab and operates over entities and relationships.
+
+Echo is a personal knowledge management tool. It is not a conversational AI assistant. The knowledge layer — storage, graph traversal, search, and retrieval — operates independently of any LLM reasoning engine.
 
 ## 2. Confirmed decisions
 
@@ -16,7 +21,7 @@ Echo is an Android-first Flutter app (with a viable path to iOS) that turns a us
 | D2 | Free providers that may train on data | Allowed, but only with clear notice and explicit user consent. |
 | D3 | Mic denied / offline | Block the whole app, except logout, account deletion and policy pages. |
 | D4 | Admin authentication | Email allowlist in environment variables plus a separate admin login. No 2FA in the MVP. |
-| D5 | Voice records | Users can play back their own audio but can **never** see transcripts. |
+| D5 | Voice records | Users can play back their own audio. Transcripts are internal processing artifacts; access is restricted to admins. |
 | D6 | Recording | Press-and-hold only; release to send. No tap-to-toggle mode. |
 | D7 | Auth | Email verification and password reset via a free email-sending service. |
 | D8 | Scale | 100–1,000 users, up to 2,000 nodes per user. |
@@ -24,13 +29,13 @@ Echo is an Android-first Flutter app (with a viable path to iOS) that turns a us
 | D10 | Benchmarks | Concrete release thresholds (section 7). |
 | D11 | Quota | No per-user usage limits. AI failures are reported clearly to users. |
 | D12 | Search | Inside the Graph tab. Tapping a result focuses the node/edge on the canvas and opens its detail panel. |
-| D13 | Ask AI | Separate tab, ChatGPT-style chat. Source chips are display-only and **not tappable**. |
+| D13 | Ingestion | Voice recordings are the only source of new knowledge in the MVP. Entity name/description editing and entity/relationship deletion are knowledge management operations, not new ingestion channels. |
 
 ## 3. Invariant constraints
 
 - **C1.** No paid APIs and no paid fallback. On quota exhaustion, report the error and allow retry.
 - **C2.** Authorization is enforced on the backend. Every user resource gets an ownership check.
-- **C3.** Ordinary users never see transcripts. Ask AI never uses transcripts or audio as a knowledge source.
+- **C3.** Transcripts are admin-only. Transcript text is an internal processing artifact. It must not be served to end users in any API response — not to the recording owner, not to other users, not to unauthenticated callers. Transcript access is restricted to authenticated admin endpoints only.
 - **C4.** No AI training pipeline in the MVP (section 10).
 - **C5.** Never claim a feature, test, build or deployment succeeded without actual verification.
 - **C6.** No default admin account or hardcoded admin token. Secrets stay out of source code and out of the client.
@@ -85,53 +90,50 @@ Priority: **P0** required for release, **P1** should have, **P2** post-MVP. AC =
 | PRC-07 | P0 | On success, return to Record with a success notification. Do not force a result screen. | — |
 | PRC-08 | P0 | English audio only. Unreliable audio yields a clear error and no fabricated knowledge. | Non-English audio creates no entities. |
 
-### 4.5 Extraction and graph (KG)
+### 4.5 Extraction and knowledge graph (KG)
+
+> [!NOTE]
+> Entity extraction and graph construction are distinct operations. The extraction model identifies candidate entities and relationships from transcripts. Deterministic application logic performs entity resolution, deduplication, conflict detection, and knowledge graph updates. Graph traversal and relationship lookups are retrieval operations, not AI inference.
 
 | ID | Pri | Requirement | AC |
 | --- | --- | --- | --- |
-| KG-01 | P0 | Extract entities and relationships from the transcript and save automatically with confidence and provenance (source record). | Every entity/relationship traces back to a record. |
-| KG-02 | P0 | Duplicate matching: similarity ≥ 0.90 links automatically; 0.75–0.90 stays separate and is flagged as a possible duplicate (no UI to resolve in the MVP). **\[Default\]** | Thresholds are configurable; no automatic merge in the uncertain band. |
+| KG-01 | P0 | Extract entities and relationships from the transcript and save automatically with confidence and provenance (source record and transcript segment). | Every entity/relationship traces back to a specific recording. |
+| KG-02 | P0 | Entity resolution: similarity ≥ 0.90 links automatically; 0.75–0.90 stays separate and is flagged as a possible duplicate (no UI to resolve in the MVP). **\[Default\]** | Thresholds are configurable; no automatic merge in the uncertain band. |
 | KG-03 | P0 | Contradictory relationships: keep both, record the conflict and sources, never auto-resolve. | Opposing claims coexist and are flagged. |
 | KG-04 | P0 | Single canvas with zoom/pan and clustered layout, using graph community detection (no topic-generation pipeline). **\[Default\]** | 2,000 nodes render smoothly with no data truncation. |
 | KG-05 | P0 | Level-of-detail cluster collapsing when zoomed out; layout computed off the UI thread; loading never blocks the UI. | Pan and zoom stay smooth on a mid-range Android device. |
 | KG-06 | P0 | Uncertain and conflicting relationships are distinguished by line style, not color alone; no numeric confidence on edges. | Verified in grayscale. |
-| KG-07 | P0 | Entity detail: name, description, type, certainty status, related relationships; edit name/description; delete with confirmation. No transcripts or debug data. | Deleting an entity handles related relationships consistently. |
-| KG-08 | P0 | Relationship detail: source, type, target, status; delete with confirmation without deleting either entity. | — |
+| KG-07 | P0 | Entity detail: name, description, type, certainty status, related relationships, provenance (source recording); edit name/description; delete with confirmation. | Deleting an entity handles related relationships consistently. Provenance links to the source recording. |
+| KG-08 | P0 | Relationship detail: source entity, type, target entity, certainty status, source recording; delete with confirmation without deleting either entity. | — |
 
-### 4.6 Search inside Graph (SRCH)
+### 4.6 Knowledge search and retrieval (SRCH)
+
+> [!NOTE]
+> Knowledge retrieval operates over explicitly stored entities and relationships. Embedding similarity is a retrieval mechanism, not AI reasoning. Transcripts are internal artifacts and are not exposed through user-facing search endpoints.
 
 | ID | Pri | Requirement | AC |
 | --- | --- | --- | --- |
-| SRCH-01 | P0 | Semantic search bar in the Graph tab over entities and relationships, ranked by relevance. Never returns transcript text. | A synonym query still finds the right result. |
+| SRCH-01 | P0 | Hybrid search over entities and relationships in the Graph tab, ranked by embedding similarity and lexical score. | A near-synonym query still finds the right entity. |
 | SRCH-02 | P0 | Results show name, type and context. Tapping focuses the node/edge on the canvas and opens its detail panel. | — |
-| SRCH-03 | P0 | Handle empty queries, no results, and retrieval errors. | — |
-| SRCH-04 | P0 | Embeddings and indexes are per-user and removed with deleted data. | User A never gets user B’s results; deleted content never returns. |
+| SRCH-03 | P0 | Handle empty queries, no results, and retrieval errors explicitly. | — |
+| SRCH-04 | P0 | Embeddings and indexes are per-user and removed when their source data is deleted. | User A never gets user B's results; deleted content never returns. |
 | SRCH-05 | P0 | Changing the embedding model triggers a full re-index; never mix vectors of different dimensions. **\[Default\]** | — |
 
-### 4.7 Ask AI (QA)
+### 4.7 My Recordings (VR)
 
 | ID | Pri | Requirement | AC |
 | --- | --- | --- | --- |
-| QA-01 | P0 | Chat UI: conversation list, input at the bottom, reopen and continue conversations, delete a whole conversation. No manual naming. | History is isolated per user. |
-| QA-02 | P0 | GraphRAG: retrieve relevant entities/relationships and follow graph connections. Knowledge sources are limited to entities, relationships, descriptions and provenance metadata. | Multi-hop questions are answered correctly. |
-| QA-03 | P0 | Separate stored facts from AI inference; state missing evidence; surface contradictions; never fabricate. | Insufficient-evidence test set is refused correctly. |
-| QA-04 | P0 | Each answer carries source chips (entity/relationship names). **Chips are display-only, not tappable.** Deleted sources show as “deleted”; the conversation is kept. **\[Default\]** | IDs and name snapshots are stored at answer time. |
-| QA-05 | P0 | Handle empty questions, retrieval failure, LLM quota exhaustion, provider outage, network errors and malformed provider responses. | Each failure shows its specific cause. |
-
-### 4.7b My Recordings (VR)
-
-| ID | Pri | Requirement | AC |
-| --- | --- | --- | --- |
-| VR-01 | P0 | A recordings list: date/time, duration, status, audio playback, delete with confirmation. Reached from the Record tab. No transcript. **\[Default location\]** | — |
-| VR-02 | P0 | Audio playback endpoint is owner-only; no public URLs. | Anyone else gets 403/404. |
-| VR-03 | P0 | Failed recordings are listed with a manual retry button. | — |
+| VR-01 | P0 | A recordings list: date/time, duration, status, audio playback, delete with confirmation. Reached from the Record tab. **\[Default location\]** | — |
+| VR-02 | P0 | Recording detail: list of entities and relationships extracted from this recording with provenance; audio playback; processing status and error detail. Users can edit entity names/descriptions and delete entities/relationships from this view. | Extracted knowledge is navigable from the recording that produced it. |
+| VR-03 | P0 | Audio playback endpoint is owner-only; no public URLs. The transcript endpoint is admin-only and must never appear in client API calls. | A user calling the transcript endpoint gets 403. Anyone else calling the audio endpoint gets 403/404. |
+| VR-04 | P0 | Failed recordings are listed with a manual retry button. | — |
 
 ### 4.8 Data deletion (DEL)
 
 | ID | Pri | Requirement | AC |
 | --- | --- | --- | --- |
-| DEL-01 | P0 | Deleting a record deletes its audio and transcript; deletes only entities/relationships with no remaining supporting record; keeps shared knowledge; removes embeddings and index entries; deletes Q&A that depended on the removed knowledge via explicit dependency tracking; keeps unrelated Q&A. | With an entity shared by two records, deleting one record keeps the entity. |
-| DEL-02 | P0 | Self-service account deletion takes effect immediately, revokes access, and hard-deletes all data (audio, transcripts, graph, embeddings, jobs, Q&A, sessions) via a reliable workflow. | After deletion every query returns 401 or no data. |
+| DEL-01 | P0 | Deleting a recording deletes its audio and transcript; deletes only entities/relationships with no remaining supporting recording; keeps shared knowledge; removes embeddings and index entries. | With an entity shared by two recordings, deleting one recording keeps the entity. |
+| DEL-02 | P0 | Self-service account deletion takes effect immediately, revokes access, and hard-deletes all data (audio, transcripts, graph, embeddings, jobs, sessions) via a reliable workflow. | After deletion every query returns 401 or no data. |
 | DEL-03 | P0 | Be accurate about backups and third-party copies; never claim permanent deletion that has not been verified. | Retention is documented. |
 | DEL-04 | P0 | Google Play minimum: privacy policy, Data Safety declaration, web URL for account deletion. | — |
 
@@ -147,10 +149,10 @@ Priority: **P0** required for release, **P1** should have, **P2** post-MVP. AC =
 | ADM-01 | P0 | **Authentication:** email in the environment allowlist, separate admin login (isolated from the app), short sessions, rate limiting. No 2FA in the MVP; 2FA is P1 post-MVP. |
 | ADM-02 | P0 | **Access audit:** before returning audio, transcripts or detailed knowledge, the admin must enter a reason; the backend logs admin, resource, timestamp and reason *before* returning data. Audio playback is logged too. The privacy policy discloses that admins may listen to audio for debugging. |
 | ADM-03 | P0 | **A. Monitoring:** user count and activity, API errors, backend health, job status, failed jobs, **quota-error counts per provider**. |
-| ADM-04 | P0 | **B. Pipeline debugging:** original audio, transcript, extracted entities/relationships, outcome, per-stage duration, errors (no secrets). |
+| ADM-04 | P0 | **B. Pipeline debugging:** original audio, transcript, extracted entities/relationships, outcome, per-stage duration, errors (no secrets). Transcripts are accessible only through this admin view, not through any end-user endpoint. Admins may correct transcript text for evaluation and debugging purposes; corrections are persisted with `user_edited = 1` to protect them from reprocessing. |
 | ADM-05 | P0 | **C. Accounts:** search users, view status, lock/unlock, track account-deletion progress (deletion is self-service; no admin approval). |
 | ADM-06 | P0 | **D. Knowledge inspection:** view graphs to investigate wrong entities/relationships and inconsistencies; read-only by default. |
-| ADM-07 | P0 | **E. AI configuration:** choose provider and model for STT, extraction, retrieval and Q\&A; verify the configuration works. API keys live only in server environment variables, never in the frontend. No paid fallback. |
+| ADM-07 | P0 | **E. AI configuration:** choose provider and model for STT, entity extraction, relationship extraction, and embeddings; verify the configuration works. API keys live only in server environment variables, never in the frontend. No paid fallback. |
 | ADM-08 | P0 | XSS protection and sanitization of user-generated content; no general bypass of tenant isolation. |
 
 ## 5. Non-functional requirements
@@ -163,9 +165,9 @@ Priority: **P0** required for release, **P1** should have, **P2** post-MVP. AC =
 
 ## 6. AI providers and privacy
 
-- Separate provider code from business logic with interfaces for STT, entity extraction, relationship extraction, embeddings, retrieval and Q&A. No abstraction without practical benefit.
+- Separate provider code from business logic with interfaces for STT, entity extraction, relationship extraction, and embeddings. No abstraction without practical benefit.
 - Before integrating any provider, check its current privacy policy, retention, training-data usage and free-tier limits, and record the results.
-- Send only minimal data; never other users’ data or unnecessary metadata.
+- Send only minimal data; never other users' data or unnecessary metadata.
 - If free APIs are inadequate, evaluate local/self-hosted models per component (quality, latency, CPU/RAM, license).
 - **Accepted risk (D11):** one heavy user can exhaust the shared free quota. Mitigation: specific error messages and quota-error counts on the admin dashboard.
 
@@ -176,30 +178,48 @@ The evaluation set is synthetic or public, in English, and **never uses real use
 | Component | Metric | Release threshold (initial target) |
 | --- | --- | --- |
 | STT | WER | ≤ 15% |
-| Entities | F1 | ≥ 0.70 |
-| Relationships | F1 (correct label and correct source–target pair) | ≥ 0.50 |
-| Q&A | Correctness | ≥ 80% |
-| Q&A | Unsupported claims | ≤ 10% |
-| Q&A | Correct refusal on insufficient evidence | ≥ 80% |
+| Entity extraction | Precision, Recall, F1 | F1 ≥ 0.70 |
+| Relationship extraction | F1 (correct label and correct source–target pair) | F1 ≥ 0.50 |
+| Entity resolution | Pairwise Precision, Recall, F1 | To be calibrated after baseline |
+| Graph construction | Node/edge correctness, no duplicate updates | To be calibrated after baseline |
+| Provenance | Evidence coverage and correctness | To be calibrated after baseline |
+| Processing | Latency, failure rate, retry rate | To be calibrated after baseline |
 
-These numbers are not yet calibrated against a real baseline. If a free model misses a threshold, lowering it must be a recorded product decision, never a silent edit. Minimum sample size **\[Default\]**: 50 audio clips, 100 Q&A questions.
+These numbers are not yet calibrated against a real baseline. If a free model misses a threshold, lowering it must be a recorded product decision, never a silent edit. Minimum sample size **\[Default\]**: 50 audio clips.
 
 ## 8. Known limitations and accepted risks
 
 1. **Hold-only recording (D6):** users who cannot hold, or who use TalkBack, will struggle. Deliberate; revisit after the MVP.
-2. **No admin 2FA (D4):** admins can hear all users’ audio. Mitigated by short sessions, rate limiting and a mandatory audit log.
+2. **No admin 2FA (D4):** admins can hear all users' audio. Mitigated by short sessions, rate limiting and a mandatory audit log.
 3. **Shared quota (D11):** see section 6.
 4. **Consent is effectively mandatory (D2):** users who decline cannot use the app.
-5. **Source chips are not tappable (D13):** users cannot jump from an answer to its source.
-6. **Possible-duplicate flags** have no resolution UI.
-7. **Backups and third-party copies** may retain data after deletion; documented.
+5. **Possible-duplicate flags** have no resolution UI in the MVP.
+6. **Backups and third-party copies** may retain data after deletion; documented.
 
 ## 9. Open questions
 
-- What is the app UI language: English only
-- Which free email-sending service, and does its quota cover 1,000 users: fake email sending for MVP 
-- KG-02 and benchmark thresholds need calibration after the baseline is measured.
+- Which free email-sending service, and does its quota cover 1,000 users: fake email sending for MVP.
+- KG-02 duplicate-matching thresholds and evaluation benchmarks need calibration after the baseline is measured.
+- SRCH-05 full re-index on embedding model change is not yet automated.
 
 ## 10. Backlog: Build Echo AI Training Pipeline
 
-**Status:** Backlog, explicitly excluded from the MVP. Scope: dataset collection and governance, labeling and QA, dataset versioning, train/validation/test splits, training or fine-tuning, model evaluation and comparison, model versioning and deployment. **Prerequisites:** a stable MVP, a controlled benchmark, results that expose concrete weaknesses, and defined data-authorization and governance rules. Create this as an issue in the repository’s tracker, or as a documented backlog file if none exists.
+**Status:** Backlog, explicitly excluded from the MVP. Scope: dataset collection and governance, labeling and QA, dataset versioning, train/validation/test splits, training or fine-tuning, model evaluation and comparison, model versioning and deployment. **Prerequisites:** a stable MVP, a controlled benchmark, results that expose concrete weaknesses, and defined data-authorization and governance rules.
+
+## 11. Explicitly Excluded Features
+
+The following are out of scope for the MVP. See `docs/PRODUCT_DIRECTION.md` §5 for the full list with rationale.
+
+| Feature | Status |
+| --- | --- |
+| AI chatbot / conversational assistant | Excluded |
+| LLM question answering over the knowledge graph | Excluded |
+| Multi-hop AI reasoning | Excluded |
+| Knowledge inference (generating new facts) | Excluded |
+| Proactive AI insights or recommendations | Excluded |
+| Document / image / PDF ingestion | Excluded |
+| External knowledge imports | Excluded |
+| Offline sync (CRDTs, vector clocks) | Excluded |
+| Multi-user collaboration | Excluded |
+| Semantic vector database as primary store | Excluded |
+| User-visible transcript access (viewing, searching, or editing raw transcripts) | Excluded — admin-only |

@@ -37,6 +37,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _statusMessage;
   bool _statusOk = false;
   bool _consentGranted = false;
+  List<Map<String, dynamic>> _consentProviders = const [];
+  String _consentVersion = '';
+  String? _recordedConsentVersion;
 
   @override
   void initState() {
@@ -65,6 +68,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       setState(() {
         _consentGranted = (consent['granted'] as bool? ?? false);
+        _consentVersion = (consent['version'] as String?) ?? '';
+        _recordedConsentVersion = consent['recorded_version'] as String?;
+        _consentProviders = ((consent['providers'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((entry) => entry.cast<String, dynamic>())
+            .toList();
       });
     } catch (_) {
       // Consent endpoint may 403 before consent; treat as not granted.
@@ -79,6 +88,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _statusMessage = message;
       _statusOk = ok;
     });
+  }
+
+  bool get _usesHostedProvider => _consentProviders.any(
+        (provider) => provider['id'].toString().contains('groq'),
+      );
+
+  bool get _needsReconsent =>
+      _recordedConsentVersion != null &&
+      _consentVersion.isNotEmpty &&
+      _recordedConsentVersion != _consentVersion;
+
+  String get _hostedProviderName {
+    for (final provider in _consentProviders) {
+      if (provider['id'].toString().contains('groq')) {
+        return provider['name'].toString();
+      }
+    }
+    return 'Groq (hosted)';
   }
 
   Future<void> _signIn() async {
@@ -180,8 +207,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _setConsent(bool value) async {
-    final previous = _consentGranted;
+  Future<void> _setConsent(bool value) async {    final previous = _consentGranted;
     setState(() => _consentGranted = value);
     try {
       await widget.backendService.updateConsent(value);
@@ -487,6 +513,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
         const SizedBox(height: 10),
+        if (_needsReconsent && !_consentGranted)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: EchoColors.sageSoft,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: EchoColors.border),
+            ),
+            child: const Text(
+              'The AI provider or model changed since your last consent. '
+              'Review the updated processing details below and grant consent '
+              'again before your next recording or question.',
+              style: TextStyle(
+                fontSize: 11,
+                height: 1.45,
+                color: EchoColors.ink,
+              ),
+            ),
+          ),
         Material(
           color: Colors.white,
           shape: RoundedRectangleBorder(
@@ -494,22 +541,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
             side: const BorderSide(color: EchoColors.border),
           ),
           clipBehavior: Clip.antiAlias,
-          child: SwitchListTile(
-            activeThumbColor: EchoColors.forest,
-            title: const Text(
-              'Allow AI processing of recordings',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-            ),
-            subtitle: const Text(
-              'Recordings are sent to your configured server for transcription '
-              'and knowledge extraction. Declining or withdrawing blocks '
-              'recording until consent is re-granted.',
-              style: TextStyle(fontSize: 11, color: EchoColors.muted),
-            ),
-            value: _consentGranted,
-            onChanged: widget.settingsService.isAuthenticated
-                ? _setConsent
-                : null,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SwitchListTile(
+                activeThumbColor: EchoColors.forest,
+                title: const Text(
+                  'Allow AI processing of recordings',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                subtitle: Text(
+                  _usesHostedProvider
+                      ? 'Audio is transcribed on your server and never leaves '
+                          'it. Transcript text, and the notes retrieved for a '
+                          'question, are sent to $_hostedProviderName for '
+                          'extraction and answers.'
+                      : 'Recordings are transcribed and processed entirely on '
+                          'your configured server. Declining or withdrawing '
+                          'blocks recording until consent is re-granted.',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: EchoColors.muted,
+                    height: 1.45,
+                  ),
+                ),
+                value: _consentGranted,
+                onChanged:
+                    widget.settingsService.isAuthenticated ? _setConsent : null,
+              ),
+              if (_usesHostedProvider)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Groq does not use your data to train models. It does '
+                        'not retain inference data by default, and may keep it '
+                        'for up to 30 days only for reliability or abuse '
+                        'investigation. Zero Data Retention is available. Data '
+                        'is processed in the United States (GCP).',
+                        style: TextStyle(
+                          fontSize: 11,
+                          height: 1.45,
+                          color: EchoColors.muted,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const SelectableText(
+                        'Privacy: https://console.groq.com/docs/your-data',
+                        style: TextStyle(fontSize: 10, color: EchoColors.forest),
+                      ),
+                      const SizedBox(height: 2),
+                      const SelectableText(
+                        'Terms: https://groq.com/terms-of-use',
+                        style: TextStyle(fontSize: 10, color: EchoColors.forest),
+                      ),
+                      if (_consentVersion.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'Consent version: $_consentVersion',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: EchoColors.muted,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+            ],
           ),
         ),
 

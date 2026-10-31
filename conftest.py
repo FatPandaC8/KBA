@@ -13,3 +13,7 @@ os.environ["ECHO_DB_PATH"] = os.path.join(_TEST_DIR, "echo.db")
 os.environ["ECHO_UPLOAD_DIR"] = os.path.join(_TEST_DIR, "uploads")
 os.environ["ECHO_ADMIN_TOKEN"] = "test-admin-token"
 os.environ["ECHO_CLIENT_TOKEN"] = "test-client-token"
+# Automated tests never call a real provider. Tests that need an LLM use the
+# deterministic fake port explicitly.
+os.environ["ECHO_LLM_PROVIDER"] = "rule_based"
+os.environ["ECHO_ALLOW_REAL_LLM"] = "0"

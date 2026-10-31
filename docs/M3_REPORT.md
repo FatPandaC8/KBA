@@ -1,5 +1,8 @@
 # Echo MVP — M3 report (capture → pipeline → graph → Ask AI)
 
+> [!NOTE]
+> **Historical Milestone Report.** This document records what was implemented and verified during M3 (2026-10-29, branch `mvp_v2_prd`). The product direction was updated after M3: Ask AI (conversational AI, GraphRAG Q&A) has been **removed from the MVP scope** and has since been removed from the codebase entirely. See `docs/PRODUCT_DIRECTION.md` for the current scope.
+
 *Status: implemented and verified locally, awaiting owner approval. Date: 2026-10-29. Branch: `mvp_v2_prd`.*
 
 This report covers milestone M3 of `docs/PRD_MVP.md` (v2): the recording/upload

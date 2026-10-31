@@ -1,56 +1,90 @@
-# Project Roadmap & Gap Analysis
+# Project Roadmap
 
-This document provides an evidence-based audit of Echo's MVP, evaluates gaps against approved product decisions, and establishes prioritized milestones.
+This document provides the feature implementation status, remaining milestones, and explicit scope boundaries for Echo.
 
----
-
-## 1. Feature Status Matrix
-
-| Subsystem / Capability | Classification | Evidence & Source Files |
-| :--- | :--- | :--- |
-| **Short Voice Capture ($\le 30\text{s}$)** | **Implemented and verified** | Enforced by timer in `HomeScreen` (`home_screen.dart:48-63`) and `AudioService` (`audio_service.dart:45-53`). Verified live on Android with 30s auto-cutoff. |
-| **Backend Audio Decoding & STT** | **Implemented but not verified end-to-end** | FFmpeg decoding and `faster-whisper` (tiny int8 CPU) in `server/app/pipeline.py`. Backend `/api/health` returns version `v1.2-echo-real`. Verified via local test audio and curl; no automated CI end-to-end integration test. |
-| **Structured Knowledge Extraction** | **Implemented and verified** | In `server/app/pipeline.py`. Correctly extracts title, core idea, details, concepts, tags, and open questions into SQLite `knowledge_items`. |
-| **Knowledge Graph Deterministic Layout** | **Implemented and verified** | In `graph_layout_engine.dart`. `test/graph_layout_test.dart` passes with zero node bounding-box collisions. Pan, zoom, Bézier curves, and neighbor focus verified on device. |
-| **List & Graph View Consistency** | **Implemented and verified** | `NoteProvider` is the Single Source of Truth (`note_provider.dart:249-264`). Changes (create, edit, delete) immediately synchronize across List and Graph views without restart. |
-| **Embedding-Based Semantic Recall** | **Not implemented (Critical Gap)** | Required by approved product decision. Actual search in `NoteRepository.searchNotes()` (`note_repository.dart:61-81`) is pure SQLite substring `LIKE '%query%'`. No vector embeddings, models, or vector stores exist in codebase. |
-| **Evaluation Opt-In & Retention Policy** | **Partially implemented (Gap)** | Backend endpoints `/api/eval/record` and `/api/eval/export` enforce `consent_given=1`. However, `SettingsScreen` lacks an evaluation opt-in toggle, and `server/uploads/` permanently stores uploaded audio without consent-gated purging. |
-| **Capture-First Centered FAB Navigation** | **Not implemented (Target Design)** | Approved product decision requires a centered Floating Action Bar with capture in the center and secondary tabs on either side. Current UI uses standard 3-tab bottom bar (`echo_bottom_nav.dart`). |
-| **Offline Synchronization** | **Removed from scope** | Background retry queue (`retryQueuedNotes()`) was removed. Local SQLite persistence remains intact; online processing fails fast with clean user notification if unreachable. |
+*Updated 2026-10-30 to reflect M3 implementation state and voice-first knowledge management direction. See `docs/PRODUCT_DIRECTION.md` for the authoritative product scope.*
 
 ---
 
-## 2. Prioritized Implementation Milestones
+## 1. Feature Status Matrix (as of M3, 2026-10-30)
 
-### Milestone 1: Embedding-Based Semantic Recall (Highest Priority)
-- **Problem:** Currently, natural language search in the Recall screen falls back to substring `LIKE` matching, failing on semantic paraphrases, conceptual synonyms, and exploratory queries.
-- **Scope of Work:**
-  1. Add an embedding generation step (either local lightweight ONNX/TFLite model or remote OpenAI `text-embedding-3-small`).
-  2. Add vector storage (e.g. SQLite vector extension, sqlite-vec, or serialized float array with in-memory cosine similarity ranking).
-  3. Update `NoteRepository.searchNotes()` to rank results by vector similarity distance.
-  4. Display match confidence/similarity scores in `RecallScreen`.
+| Subsystem / Capability | Status |
+| :--- | :--- |
+| **Voice recording & upload** | Implemented and verified — press-and-hold; up to 2 minutes; idempotent upload; serialized queue. |
+| **STT pipeline** | Implemented and verified — faster-whisper (tiny int8 CPU), ffmpeg decode, English-only enforcement. |
+| **Entity & relationship extraction** | Implemented and verified — rule-based (local) and Groq (hosted); schema-constrained output; one repair attempt; idempotent (stable UUIDs). |
+| **Entity resolution** | Implemented and verified — similarity ≥ 0.90 auto-links; 0.75–0.90 flagged; tombstones; `user_edited` protection. |
+| **Knowledge graph persistence** | Implemented and verified — entities, relationships, confidence, certainty, provenance, contradictions flagged. |
+| **Knowledge search (hybrid)** | Implemented and verified — fastembed BAAI/bge-small-en-v1.5 + lexical ranking; 350 ms debounced; per-user scoped. |
+| **My Recordings list** | Implemented and verified — date, duration, status, playback, delete, manual retry. |
+| **Authentication & multi-user** | Implemented and verified — email/password, Google Sign-In, email verification, password reset, revocable sessions, rate limiting, per-user isolation. |
+| **Evaluation opt-in & consent** | Implemented and verified — provider consent screen; evaluation opt-in (default off); withdrawal purges retained audio. |
+| **Processing reliability** | Implemented and verified — async job worker; lease-based fault recovery; up to 3 retries; permanent errors fail cleanly. |
+| **Capture-first centered FAB navigation** | Implemented (M3) — three-tab layout: Record (centre mic FAB), Graph, Recordings. |
+| **Admin transcript inspection & correction** | **Gap — not yet implemented.** Admin pipeline debug view does not yet expose transcript text or allow correction. Transcripts are admin-only; this feature is not a user-facing capability. |
+| **Admin dashboard (full)** | **Gap — partially implemented.** AI config and basic monitoring available; pipeline debug and accounts views incomplete. |
+| **Evaluation measurement** | **Gap — extraction benchmark only.** WER, entity resolution F1, graph correctness, and provenance coverage not yet measured. |
 
-### Milestone 2: Evaluation Opt-in & Server Audio Purging
-- **Problem:** User evaluation consent cannot currently be toggled from the mobile app, and the server retains all raw audio files indefinitely in `server/uploads/`.
-- **Scope of Work:**
-  1. Add `Evaluation & Model Quality` switch in `SettingsScreen` (defaulting to **OFF**).
-  2. Persist consent in `SettingsService` via `SharedPreferences`.
-  3. Send `consent_given` flag in multipart upload payload to `POST /api/captures/upload`.
-  4. Implement an automatic deletion hook in `server/app/main.py` that purges `server/uploads/{capture_id}.m4a` immediately after transcription if `consent_given` is false.
+---
 
-### Milestone 3: Capture-First Centered Floating Action Bar
-- **Problem:** The current bottom navigation is a standard 3-tab row (`Home`, `Recall`, `Library`) where voice capture is confined to an in-body card on the Home screen.
-- **Scope of Work:**
-  1. Re-architect `AppShell` and `EchoBottomNav` to feature a centered, elevated microphone FAB.
-  2. Position `Recall` and `Library` tabs on either side of the center action.
-  3. Ensure tapping the center action initiates short voice capture from any tab in the application.
+## 2. Remaining Milestones
+
+### M4: Admin Transcript Inspection & Correction
+
+- **What it is:** An internal quality-control and evaluation capability accessible only to admins. End users do not interact with transcripts.
+- **Problem:** The admin pipeline debug view does not yet expose transcript text or allow admins to correct ASR errors. Transcript correction is needed to maintain accurate evaluation datasets and to fix incorrect entity extraction caused by STT errors.
+- **Scope of work:**
+  1. Add transcript view to the admin pipeline debug view for each recording.
+  2. Allow admins to edit transcript text inline; persist corrections with `user_edited = 1`.
+  3. Corrected transcripts must be used by subsequent extraction re-runs (instead of re-calling the ASR model).
+  4. Enforce admin-only authorization on `/api/admin/captures/{id}/transcript` at the backend; return 403 for any non-admin caller.
+  5. All admin transcript access must be logged with an audit trail (ADM-02).
+- **Not in scope:** Mobile transcript UI, user-facing transcript display, transcript search for end users.
+
+### M5: Admin Dashboard Completion
+
+- **Problem:** The admin dashboard is partially implemented. Pipeline debugging and accounts management views are incomplete.
+- **Scope of work:**
+  1. Pipeline debug view: audio playback, transcript (admin-only), extraction output, per-stage timing, error details.
+  2. Accounts view: search, lock/unlock, track deletion progress.
+  3. Knowledge inspection: read-only graph view per user for debugging incorrect entities/relationships.
+  4. Verify all admin actions are logged with audit trail (ADM-02).
+
+### M6: Evaluation & Quality Measurement
+
+- **Problem:** No evaluation pipeline exists beyond the extraction benchmark. Release thresholds (PRD §7) cannot be confirmed without measurement.
+- **Scope of work:**
+  1. Build a gold set for WER measurement on the STT pipeline.
+  2. Extend `server/eval.score` to measure entity resolution F1.
+  3. Add graph construction correctness measurement (duplicate update rate, provenance coverage).
+  4. Record and publish baseline results against PRD §7 thresholds.
+  5. Do not claim any threshold is met until actual measurements are recorded.
+
+### M7: Production Deployment
+
+- **Scope of work:**
+  1. Privacy policy, Data Safety declaration, account-deletion URL (DEL-04).
+  2. Production environment configuration (separate from dev).
+  3. Google Play submission (internal track → production).
+  4. Verify production deployment end-to-end: recording → STT → extraction → knowledge graph → search.
 
 ---
 
 ## 3. Explicit Scope Boundaries & Non-Goals
 
-| Feature | Scope Decision | Rationale |
+| Feature | Decision | Rationale |
 | :--- | :--- | :--- |
-| **Offline Sync Queues & Auto-Retries** | **Explicitly Out of Scope (Removed)** | Avoids complex distributed reconciliation logic (CRDTs, vector clocks) in an MVP. Mobile app ensures local persistence, while AI processing requires online server connection. |
-| **Long-Form Transcription** | **Explicitly Out of Scope** | Echo is strictly designed for quick, transient thought capture ($\le 30\text{s}$). Meetings and lecture transcription are intentionally unsupported. |
-| **Multi-User Collaboration & Sync** | **Out of Scope** | Single-user personal knowledge capture and recall. |
+| **AI chatbot / conversational assistant** | **Removed from scope** | Echo is a knowledge management system, not an AI assistant. The knowledge layer must be independently useful without LLM reasoning. |
+| **LLM question answering (GraphRAG)** | **Removed from scope** | Knowledge retrieval is deterministic search over explicitly stored entities and relationships. No LLM Q&A engine is required or planned for MVP. |
+| **Multi-hop AI reasoning** | **Removed from scope** | Graph traversal is a deterministic lookup, not AI inference. |
+| **Knowledge inference (new fact generation)** | **Removed from scope** | Echo stores extracted facts. It does not generate new facts from existing ones. |
+| **Proactive insights / AI recommendations** | **Removed from scope** | Users explicitly search and browse. No unsolicited AI suggestions. |
+| **User-visible transcript access** | **Out of scope** | Transcripts are admin-only internal artifacts. End users interact with recordings and extracted knowledge only. |
+| **User transcript editing** | **Out of scope** | Transcript correction is an admin quality-control operation. It is not available to end users. |
+| **Transcript full-text search (user-facing)** | **Out of scope** | User search operates over entities and relationships only. |
+| **Document / PDF / image ingestion** | **Out of scope** | Voice is the only ingestion channel in the MVP. |
+| **External knowledge imports** | **Out of scope** | No web extraction, database imports, or external API knowledge sources. |
+| **Offline sync (CRDTs, vector clocks)** | **Out of scope** | Online backend required for processing. Local persistence retains recordings pending upload. |
+| **Multi-user collaboration** | **Out of scope** | Single-user personal knowledge management. |
+| **Semantic vector database as primary store** | **Out of scope** | SQLite with WAL is sufficient. Embeddings stored as serialized arrays. |
+| **Autonomous agents** | **Out of scope** | No autonomous background agents in the MVP. |

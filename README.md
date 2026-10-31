@@ -1,58 +1,65 @@
-# Echo — Personal Knowledge Capture & Recall (MVP)
+# Echo — Voice-First Personal Knowledge Management System
 
-Echo is an AI-powered, voice-first knowledge capture and recall mobile application for Android. It enables users to record short spoken thoughts ($\le 30$ seconds), transcribes them, extracts structured knowledge (core ideas, concepts, tags, and open research questions), infers relationships with existing thoughts, and maps them onto an interactive Knowledge Graph.
+Echo is a voice-first personal knowledge management system that transforms natural speech into structured, connected, and searchable knowledge. It automatically transcribes recordings, extracts entities and relationships, resolves references across recordings, and maintains a persistent knowledge graph with traceable evidence. Users can explore, search, verify, and manage their knowledge without relying on an AI reasoning or conversational assistant.
 
 ---
 
-## 1. Product Purpose & Capture-First Workflow
+## 1. Product Purpose & Voice-First Workflow
 
-Echo is **not** a long-form audio transcription tool, meeting assistant, or generic note-taking application. Its explicit focus is low-friction capture of fleeting, high-value ideas before they are forgotten:
+Echo is **not** a long-form audio transcription tool, meeting assistant, generic note-taking application, or AI conversational assistant. Its core value is transforming unstructured voice recordings into structured, connected, and retrievable personal knowledge:
 
 ```
-[ Short Voice Thought (<=30s) ]
+[ Voice Recording ]
              │
              ▼
-   [ Audio Normalization & Local Storage ]
+   [ Audio Storage & Lifecycle Management ]
              │
              ▼
    [ Speech-to-Text (faster-whisper) ]
              │
              ▼
-   [ Structured Knowledge Extraction (Concepts, Tags, Ideas) ]
+   [ Knowledge Extraction (Entities & Relationships) ]
              │
              ▼
-   [ Semantic Connection Inference (Relationships to Prior Notes) ]
+   [ Entity Resolution & Knowledge Graph Update ]
              │
              ▼
-   [ Persisted Knowledge Graph & Recall ]
+   [ Knowledge Retrieval (Search, Browse, Explore) ]
 ```
 
 ### Approved Product Decisions
 
-1. **Short Voice Capture:** Hard cap of 30 seconds for quick, low-friction recording.
-2. **Raw Input Preservation:** The original audio file and transcript are preserved verbatim on the local device; AI-extracted structures (title, summary, concepts, open questions) remain editable.
-3. **Capture-First Home UI:** Navigation is intended to feature a centered Floating Action Bar (FAB) prioritizing instant voice recording, flanked by secondary tabs.
-4. **Mandatory Semantic Recall:** Natural language query matching via dense vector embeddings is a mandatory MVP requirement. Plain keyword matching (`LIKE`) is an interim fallback.
+1. **Voice Capture:** Voice recordings are the primary and only ingestion channel for new knowledge in the MVP. Up to 2 minutes per recording (configurable via `ECHO_MAX_VOICE_SECONDS`).
+2. **Raw Input Preservation:** The original audio file and transcript are preserved verbatim as internal artifacts; extracted entities, relationships, and user corrections to knowledge are editable but protected from AI overwrite.
+3. **Capture-First Home UI:** Navigation features a centered Floating Action Bar (FAB) prioritizing instant voice recording, with secondary tabs for Graph and My Recordings.
+4. **Knowledge Retrieval:** Entity and relationship search uses hybrid embedding similarity and lexical ranking. Knowledge retrieval does not require an LLM reasoning engine.
 5. **Privacy & Consent-Gated Retention:** Audio retention on the server is gated strictly behind explicit, opt-in evaluation consent.
-6. **No Offline Sync:** Offline synchronization is explicitly removed from product scope. The app operates with local SQLite persistence and online backend processing.
+6. **No Offline Sync:** Offline synchronization is explicitly removed from product scope. The app operates with local persistence and online backend processing.
+7. **Transcript Access:** Transcripts are internal processing artifacts. Access is restricted to admin-only endpoints (with mandatory audit logging). Transcript text is never served through any user-facing API response. Users interact with recordings (audio playback) and extracted knowledge (entities, relationships), not raw transcripts.
 
 ---
 
 ## 2. Implementation Status & Gap Analysis
 
-Based on repository audit and verification testing:
+Based on M3 implementation (2026-10-29, branch `mvp_v2_prd`). See `docs/M3_REPORT.md` for detailed evidence.
 
-| Capability | Status | Verified Evidence & Observed Behavior |
+| Capability | Status | Notes |
 | :--- | :--- | :--- |
-| **Short Voice Recording ($\le 30\text{s}$)** | **Implemented and verified** | Enforced by timer in `HomeScreen` (`home_screen.dart:48-63`) and `AudioService` (`audio_service.dart:45-53`). Verified with 30s auto-cutoff. |
-| **STT Pipeline** | **Implemented and verified on device** | `server/app/pipeline.py` implements local `faster-whisper` (tiny int8 CPU) via FFmpeg audio decoding (16kHz mono PCM). OpenAI Whisper remains an optional server-side fallback. Verified end-to-end on a physical Android device: recorded audio uploaded with `POST /api/captures/upload` → `200`, transcript and knowledge item created with local provenance. The pipeline still has no automated server test because it requires model weights. |
-| **Structured Knowledge Extraction** | **Implemented and verified** | Extracts `title`, `core_idea`, `details`, `concepts`, `tags`, and `open_questions`. Verified on device and in SQLite schemas. |
-| **Deterministic Knowledge Graph** | **Implemented and verified** | Zero-overlap bounding box layout algorithm in `graph_layout_engine.dart`. `DeterministicGraphLayout` unit test passes (`flutter test test/graph_layout_test.dart`). |
-| **List & Graph View Consistency** | **Implemented and verified** | Shared `NoteProvider` state (`note_provider.dart:249-264`) ensures create, edit, delete, and detail navigation immediately synchronize without app restart. |
-| **Embedding-Based Semantic Recall** | **Implemented; keyword fallback when offline** | Server exposes `/api/knowledge/semantic-search` backed by stored embeddings and a backfill use case. `NoteProvider.search()` calls it first and falls back to local SQLite `LIKE` search when the backend is unreachable or returns no semantic hits. Verified on device against a live backend. |
-| **Evaluation Opt-in & Audio Retention** | **Implemented and verified** | Settings exposes an opt-in evaluation toggle that defaults to off. Uploads are deleted immediately unless consent is given, and withdrawing consent purges every retained capture audio file plus all evaluation records server-side. Verified on device and covered by server regression tests. |
-| **Capture-First Centered FAB Navigation** | **Not implemented (Target Design)** | Current navigation (`AppShell`, `echo_bottom_nav.dart`) uses a standard 3-tab bottom bar (`Home`, `Recall`, `Library`) with an in-body capture hero card. Centered FAB is documented for subsequent implementation. |
-| **Retry & Restart Recovery** | **Implemented and verified** | Failed processing is retried automatically a bounded number of times (3 attempts), surfaces an explicit failure reason, and resumes pending work after an app restart. Verified on device, including the capped-attempt behaviour. Client tokens persist across reinstalls. This is bounded retry, not offline sync: the backend must be reachable for processing. |
+| **Voice Recording & Upload** | **Implemented and verified** | Press-and-hold; up to 2 minutes; idempotent upload; serialized queue; local audio preserved until server confirms durable storage. |
+| **STT Pipeline** | **Implemented and verified** | `faster-whisper` (tiny int8 CPU) via FFmpeg (16 kHz mono PCM). English-only; non-English fails with a typed error. |
+| **Entity & Relationship Extraction** | **Implemented and verified** | Deterministic local rule-based extractor with Groq-hosted LLM option. Schema-constrained output, validation, one repair attempt. Idempotent (stable UUIDs). |
+| **Entity Resolution** | **Implemented and verified** | Similarity ≥ 0.90 auto-links; 0.75–0.90 flagged as candidate duplicate; tombstones for deleted entities; `user_edited` protects corrections. |
+| **Knowledge Graph** | **Implemented and verified** | Persistent entities and relationships with confidence, certainty, provenance. Contradictions kept and flagged. Server-side community detection layout. |
+| **Knowledge Search** | **Implemented and verified** | Hybrid fastembed + lexical ranking over entities and relationships. 350 ms debounced; scoped to authenticated owner. |
+| **My Recordings** | **Implemented and verified** | Date, duration, status, playback, delete, manual retry. Processing status polled from real backend job state. |
+| **Authentication & Multi-user** | **Implemented and verified** | Email/password, Google Sign-In, email verification, password reset, revocable sessions, rate limiting, per-user data isolation. |
+| **Consent & Privacy** | **Implemented and verified** | Provider consent screen; evaluation opt-in (default off); withdrawal purges retained audio. |
+| **Processing Reliability** | **Implemented and verified** | Async job worker; lease-based fault recovery; up to 3 retries for recoverable errors; permanent errors fail cleanly with typed error class. |
+| **Capture-First Centered FAB Navigation** | **Implemented (M3)** | Three-tab layout: Record (centre mic FAB), Graph, Recordings. Note: the M3 implementation included an "Ask AI" tab which is no longer part of the product scope; see `docs/M3_REPORT.md` for historical details. |
+
+> [!NOTE]
+> The Ask AI tab was implemented in M3 and is present in the codebase. It is **excluded from the current product scope**. See `docs/PRODUCT_DIRECTION.md` §5 and `docs/M3_REPORT.md` for details.
+
 
 ---
 
@@ -60,22 +67,25 @@ Based on repository audit and verification testing:
 
 ```
 .
-├── README.md                          # Repository root entrypoint & audit overview
+├── README.md                          # Repository root entrypoint & status overview
 ├── docs/
+│   ├── PRODUCT_DIRECTION.md           # Authoritative product scope & architectural principles
 │   ├── ARCHITECTURE.md                # System components, data flows, schemas, contracts
-│   ├── AI_PIPELINE.md                 # Audio constraints, STT, extraction, evaluation logic
-│   ├── ROADMAP.md                     # Evidence matrix, gap analysis, and milestones
-│   └── PRD_MVP.md                     # Historical product requirements (superseded)
+│   ├── AI_PIPELINE.md                 # Audio constraints, STT, extraction, entity resolution
+│   ├── ROADMAP.md                     # Feature status matrix and implementation milestones
+│   ├── PRD_MVP.md                     # Product requirements (updated for current direction)
+│   ├── M3_REPORT.md                   # M3 milestone report (historical; includes Ask AI implementation)
+│   └── M1_AUDIT.md                    # M1 pre-auth audit report (historical)
 ├── mobile/                            # Flutter Android application
 │   ├── lib/
 │   │   ├── core/theme/                # Colors and typography
 │   │   ├── data/                      # SQLite DatabaseHelper, Note model, NoteRepository
-│   │   ├── services/                  # AudioService, AIService, BackendService, SettingsService
+│   │   ├── services/                  # AudioService, BackendService, SettingsService
 │   │   ├── state/                     # NoteProvider (SSOT ChangeNotifier)
-│   │   └── ui/                        # AppShell, screens (Home, Detail, Library, Recall, Settings)
+│   │   └── ui/                        # AppShell, screens (Record, Graph, Recordings, Settings)
 │   ├── test/                          # Unit, widget, migration, and security regression tests
 │   └── pubspec.yaml                   # Flutter dependencies
-└── server/                            # Python FastAPI backend & AI pipeline
+└── server/                            # Python FastAPI backend & processing pipeline
     ├── app/
     │   ├── main.py                    # FastAPI app wiring
     │   ├── api/                       # Routes (client, admin), auth dependencies
@@ -83,7 +93,7 @@ Based on repository audit and verification testing:
     │   ├── adapters/                  # SQLite repositories, HTTP schemas
     │   ├── domain/                    # Entities and domain errors
     │   ├── infrastructure/            # Configuration
-    │   ├── pipeline.py                # faster-whisper STT + extraction + relation inference
+    │   ├── pipeline.py                # faster-whisper STT + entity/relationship extraction
     │   └── static/                    # Admin dashboard
     └── uploads/                       # Consent-gated audio retention (purged on withdrawal)
 ```
@@ -185,8 +195,12 @@ flutter build apk --debug
 
 ---
 
-## 7. Documentation Index 
+## 7. Documentation Index
 
-- [Architecture Reference](docs/ARCHITECTURE.md): Component diagrams, data contracts, SQLite schemas, and layout mechanics.
-- [AI Pipeline & Evaluation](docs/AI_PIPELINE.md): Audio decoding, STT models, extraction prompts, and evaluation dataset specifications.
-- [Project Roadmap & Gap Analysis](docs/ROADMAP.md): Evidence matrix, required implementation milestones, and non-goals.
+- [Product Direction](docs/PRODUCT_DIRECTION.md): Canonical product definition, MVP scope, excluded features, architectural principles, and evaluation strategy. **Start here.**
+- [Architecture Reference](docs/ARCHITECTURE.md): Component diagrams, data flows, knowledge pipeline stages, SQLite schemas, and API contracts.
+- [AI Pipeline Reference](docs/AI_PIPELINE.md): Audio decoding, STT models, entity/relationship extraction, entity resolution, knowledge search, and extraction benchmark.
+- [Product Requirements (PRD)](docs/PRD_MVP.md): Functional requirements, acceptance criteria, and confirmed product decisions.
+- [Project Roadmap](docs/ROADMAP.md): Feature status matrix, remaining milestones, and explicit scope boundaries.
+- [M3 Milestone Report](docs/M3_REPORT.md): Historical report of the M3 implementation (recording pipeline, knowledge graph, search, Ask AI). Preserved as a record; Ask AI section reflects implementation state, not current MVP scope.
+- [M1 Audit Report](docs/M1_AUDIT.md): Historical audit of the pre-M2 codebase. Preserved for reference.
