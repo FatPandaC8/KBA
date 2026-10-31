@@ -28,11 +28,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final settings = SettingsService();
     final repo = FakeNoteRepository();
-    final provider = NoteProvider(
-      repo,
-      FakeBackendService(settings),
-      settings,
-    );
+    final provider = NoteProvider(repo, FakeBackendService(settings), settings);
 
     await tester.pumpWidget(
       MaterialApp(

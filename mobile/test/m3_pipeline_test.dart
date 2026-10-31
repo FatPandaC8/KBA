@@ -90,68 +90,77 @@ void main() {
     expect(provider.isUploadInFlight, isFalse);
   });
 
-  test('local audio is deleted once the server confirms upload (REC-06)',
-      () async {
-    final path = writeAudio('ready.m4a');
-    // A real poll cadence and several processing stages between upload and
-    // terminal, so the deletion clearly happens long before the capture
-    // reaches `ready`.
-    NoteProvider.statusPollInterval = const Duration(milliseconds: 25);
-    backend.stages = const ['transcribe', 'extract', 'save'];
-    backend.knowledgeByCapture.clear();
+  test(
+    'local audio is deleted once the server confirms upload (REC-06)',
+    () async {
+      final path = writeAudio('ready.m4a');
+      // A real poll cadence and several processing stages between upload and
+      // terminal, so the deletion clearly happens long before the capture
+      // reaches `ready`.
+      NoteProvider.statusPollInterval = const Duration(milliseconds: 25);
+      backend.stages = const ['transcribe', 'extract', 'save'];
+      backend.knowledgeByCapture.clear();
 
-    final note = await provider.createAudioNote(
-      audioPath: path,
-      durationMs: 2000,
-    );
+      final note = await provider.createAudioNote(
+        audioPath: path,
+        durationMs: 2000,
+      );
 
-    await waitFor(
-      () => noteFor(note.id).audioPath == null,
-      reason: 'the server answer (202 after file+DB commit) confirms '
-          'receipt, so the local copy must be dropped right away',
-    );
-    final inFlight = noteFor(note.id);
-    expect(inFlight.status, isNot(ProcessingStatus.ready));
-    expect(inFlight.audioOnServer, isTrue);
-    expect(inFlight.canPlayAudio, isTrue);
-    expect(File(path).existsSync(), isFalse, reason: 'audio is redundant now');
+      await waitFor(
+        () => noteFor(note.id).audioPath == null,
+        reason:
+            'the server answer (202 after file+DB commit) confirms '
+            'receipt, so the local copy must be dropped right away',
+      );
+      final inFlight = noteFor(note.id);
+      expect(inFlight.status, isNot(ProcessingStatus.ready));
+      expect(inFlight.audioOnServer, isTrue);
+      expect(inFlight.canPlayAudio, isTrue);
+      expect(
+        File(path).existsSync(),
+        isFalse,
+        reason: 'audio is redundant now',
+      );
 
-    await waitFor(
-      () => noteFor(note.id).status == ProcessingStatus.ready,
-      reason: 'the capture should still become ready',
-    );
+      await waitFor(
+        () => noteFor(note.id).status == ProcessingStatus.ready,
+        reason: 'the capture should still become ready',
+      );
 
-    final ready = noteFor(note.id);
-    expect(ready.stage, 'completed');
-    expect(ready.knowledgeItemId, isNotNull);
-    expect(ready.errorClass, '');
-    expect(ready.failureReason, isNull);
-  });
+      final ready = noteFor(note.id);
+      expect(ready.stage, 'completed');
+      expect(ready.knowledgeItemId, isNotNull);
+      expect(ready.errorClass, '');
+      expect(ready.failureReason, isNull);
+    },
+  );
 
-  test('local audio is retained when the server never receives it (REC-05)',
-      () async {
-    final path = writeAudio('upload-failed.m4a');
-    backend.failUpload = true;
+  test(
+    'local audio is retained when the server never receives it (REC-05)',
+    () async {
+      final path = writeAudio('upload-failed.m4a');
+      backend.failUpload = true;
 
-    final note = await provider.createAudioNote(
-      audioPath: path,
-      durationMs: 2000,
-    );
+      final note = await provider.createAudioNote(
+        audioPath: path,
+        durationMs: 2000,
+      );
 
-    await waitFor(
-      () => noteFor(note.id).status == ProcessingStatus.failed,
-      reason: 'the upload should fail',
-    );
+      await waitFor(
+        () => noteFor(note.id).status == ProcessingStatus.failed,
+        reason: 'the upload should fail',
+      );
 
-    final failed = noteFor(note.id);
-    // The server never confirmed receipt, so the local bytes are the only
-    // copy and must be kept.
-    expect(File(path).existsSync(), isTrue, reason: 'retry needs the bytes');
-    expect(failed.audioPath, path);
-    expect(failed.errorClass, 'provider_failure');
-    expect(failed.failureReason, contains('kept'));
-    expect(failed.failureReason, contains('retry'));
-  });
+      final failed = noteFor(note.id);
+      // The server never confirmed receipt, so the local bytes are the only
+      // copy and must be kept.
+      expect(File(path).existsSync(), isTrue, reason: 'retry needs the bytes');
+      expect(failed.audioPath, path);
+      expect(failed.errorClass, 'provider_failure');
+      expect(failed.failureReason, contains('kept'));
+      expect(failed.failureReason, contains('retry'));
+    },
+  );
 
   test('a post-upload failure keeps server audio retryable without local '
       'bytes (REC-05, REC-06)', () async {
@@ -213,10 +222,7 @@ void main() {
     expect(seen.containsKey(ProcessingStatus.structuring), isTrue);
     expect(seen[ProcessingStatus.ready], 'completed');
     // Every intermediate stage came from the server, not a local guess.
-    expect(
-      seen[ProcessingStatus.structuring],
-      anyOf('extract', 'save'),
-    );
+    expect(seen[ProcessingStatus.structuring], anyOf('extract', 'save'));
   });
 
   test('server error classes get actionable, honest messages', () async {
@@ -238,113 +244,117 @@ void main() {
     expect(failed.failureReason, isNot(contains('provider')));
   });
 
-  test('reconciliation picks up server recordings on app open (NET-02)',
-      () async {
-    backend.recordings.add(
-      RecordingModel(
-        captureId: 'server-ready',
-        createdAt: '2026-02-01T10:00:00Z',
-        durationMs: 4200,
-        status: 'ready',
-        stage: 'completed',
-        hasAudio: true,
+  test(
+    'reconciliation picks up server recordings on app open (NET-02)',
+    () async {
+      backend.recordings.add(
+        RecordingModel(
+          captureId: 'server-ready',
+          createdAt: '2026-02-01T10:00:00Z',
+          durationMs: 4200,
+          status: 'ready',
+          stage: 'completed',
+          hasAudio: true,
+          knowledgeItemId: 'k-server-ready',
+          errorMessage: null,
+          errorClass: '',
+          retryable: false,
+        ),
+      );
+      backend.recordings.add(
+        RecordingModel(
+          captureId: 'server-failed',
+          createdAt: '2026-02-01T11:00:00Z',
+          durationMs: 1800,
+          status: 'failed',
+          stage: 'transcribe',
+          hasAudio: true,
+          knowledgeItemId: null,
+          errorMessage: 'speech provider returned 500',
+          errorClass: 'provider_failure',
+          retryable: true,
+        ),
+      );
+      backend.knowledgeByCapture['server-ready'] = KnowledgeSnapshot(
         knowledgeItemId: 'k-server-ready',
-        errorMessage: null,
-        errorClass: '',
-        retryable: false,
-      ),
-    );
-    backend.recordings.add(
-      RecordingModel(
-        captureId: 'server-failed',
-        createdAt: '2026-02-01T11:00:00Z',
-        durationMs: 1800,
-        status: 'failed',
-        stage: 'transcribe',
-        hasAudio: true,
-        knowledgeItemId: null,
-        errorMessage: 'speech provider returned 500',
-        errorClass: 'provider_failure',
-        retryable: true,
-      ),
-    );
-    backend.knowledgeByCapture['server-ready'] = KnowledgeSnapshot(
-      knowledgeItemId: 'k-server-ready',
-      title: 'Quarterly plan',
-      coreIdea: 'Ship the Android MVP',
-      concepts: const ['MVP'],
-      tags: const ['work'],
-      openQuestions: const [],
-    );
+        title: 'Quarterly plan',
+        coreIdea: 'Ship the Android MVP',
+        concepts: const ['MVP'],
+        tags: const ['work'],
+        openQuestions: const [],
+      );
 
-    await provider.reconcileWithBackend();
+      await provider.reconcileWithBackend();
 
-    final ready = noteFor('server-ready');
-    expect(ready.status, ProcessingStatus.ready);
-    expect(ready.title, 'Quarterly plan');
-    expect(ready.summary, 'Ship the Android MVP');
-    expect(ready.audioOnServer, isTrue);
-    expect(ready.knowledgeItemId, 'k-server-ready');
-    expect(ready.hasLocalAudio, isFalse);
-    expect(ready.createdAt.toUtc().year, 2026);
+      final ready = noteFor('server-ready');
+      expect(ready.status, ProcessingStatus.ready);
+      expect(ready.title, 'Quarterly plan');
+      expect(ready.summary, 'Ship the Android MVP');
+      expect(ready.audioOnServer, isTrue);
+      expect(ready.knowledgeItemId, 'k-server-ready');
+      expect(ready.hasLocalAudio, isFalse);
+      expect(ready.createdAt.toUtc().year, 2026);
 
-    final failed = noteFor('server-failed');
-    expect(failed.status, ProcessingStatus.failed);
-    expect(failed.errorClass, 'provider_failure');
-    expect(failed.stage, 'transcribe');
-    expect(failed.failureReason, contains('kept'));
+      final failed = noteFor('server-failed');
+      expect(failed.status, ProcessingStatus.failed);
+      expect(failed.errorClass, 'provider_failure');
+      expect(failed.stage, 'transcribe');
+      expect(failed.failureReason, contains('kept'));
 
-    // Reopening the app never creates work; it only reads.
-    expect(backend.uploadCalls, 0);
-  });
+      // Reopening the app never creates work; it only reads.
+      expect(backend.uploadCalls, 0);
+    },
+  );
 
-  test('reconciliation removes local audio the server already has (REC-06)',
-      () async {
-    final path = writeAudio('reconciled.m4a');
-    await repo.insertNote(
-      Note(
-        id: 'local-capture',
-        audioPath: path,
-        audioDurationMs: 1000,
-        originalContent: '[Voice recording]',
-        title: 'Voice Thought',
-        status: ProcessingStatus.transcribing,
-        stage: 'transcribe',
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      ),
-    );
-    await provider.loadNotes();
+  test(
+    'reconciliation removes local audio the server already has (REC-06)',
+    () async {
+      final path = writeAudio('reconciled.m4a');
+      await repo.insertNote(
+        Note(
+          id: 'local-capture',
+          audioPath: path,
+          audioDurationMs: 1000,
+          originalContent: '[Voice recording]',
+          title: 'Voice Thought',
+          status: ProcessingStatus.transcribing,
+          stage: 'transcribe',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+      await provider.loadNotes();
 
-    backend.recordings.add(
-      RecordingModel(
-        captureId: 'local-capture',
-        createdAt: DateTime.now().toIso8601String(),
-        durationMs: 1000,
-        status: 'ready',
-        stage: 'completed',
-        hasAudio: true,
+      backend.recordings.add(
+        RecordingModel(
+          captureId: 'local-capture',
+          createdAt: DateTime.now().toIso8601String(),
+          durationMs: 1000,
+          status: 'ready',
+          stage: 'completed',
+          hasAudio: true,
+          knowledgeItemId: 'k-local',
+          errorMessage: null,
+          errorClass: '',
+          retryable: false,
+        ),
+      );
+      backend.knowledgeByCapture['local-capture'] = KnowledgeSnapshot(
         knowledgeItemId: 'k-local',
-        errorMessage: null,
-        errorClass: '',
-        retryable: false,
-      ),
-    );
-    backend.knowledgeByCapture['local-capture'] = KnowledgeSnapshot(
-      knowledgeItemId: 'k-local',
-      title: 'Local capture',
-      coreIdea: 'Recovered knowledge',
-      concepts: const [],
-      tags: const [],
-      openQuestions: const [],
-    );
+        title: 'Local capture',
+        coreIdea: 'Recovered knowledge',
+        concepts: const [],
+        tags: const [],
+        openQuestions: const [],
+      );
 
-    await provider.reconcileWithBackend();
+      await provider.reconcileWithBackend();
 
-    final note = noteFor('local-capture');
-    expect(File(path).existsSync(), isFalse);
-    expect(note.audioPath, isNull);
-    expect(note.status, ProcessingStatus.ready);
-    expect(note.title, 'Local capture');
-  });
+      final note = noteFor('local-capture');
+      expect(File(path).existsSync(), isFalse);
+      expect(note.audioPath, isNull);
+      expect(note.status, ProcessingStatus.ready);
+      expect(note.title, 'Local capture');
+    },
+  );
 }

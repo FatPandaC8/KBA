@@ -39,9 +39,7 @@ class _EntityDetailSheetState extends State<EntityDetailSheet> {
     _entity = widget.detail.entity;
     _relationships = widget.detail.relationships;
     _nameController = TextEditingController(text: _entity.name);
-    _descriptionController = TextEditingController(
-      text: _entity.description,
-    );
+    _descriptionController = TextEditingController(text: _entity.description);
   }
 
   @override
@@ -334,8 +332,7 @@ class _EntityDetailSheetState extends State<EntityDetailSheet> {
                 size: 18,
                 color: EchoColors.muted,
               ),
-              onTap: () =>
-                  setState(() => _activeRelationship = relationship),
+              onTap: () => setState(() => _activeRelationship = relationship),
             ),
           ),
         const SizedBox(height: 8),

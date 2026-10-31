@@ -172,7 +172,10 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
                         ),
                         const Text(
                           'Original audio',
-                          style: TextStyle(fontSize: 9, color: EchoColors.muted),
+                          style: TextStyle(
+                            fontSize: 9,
+                            color: EchoColors.muted,
+                          ),
                         ),
                       ],
                     ),

@@ -50,7 +50,9 @@ class DatabaseHelper {
     }
     if (oldVersion < 4) {
       await db.execute('ALTER TABLE notes ADD COLUMN errorClass TEXT');
-      await db.execute("ALTER TABLE notes ADD COLUMN stage TEXT NOT NULL DEFAULT ''");
+      await db.execute(
+        "ALTER TABLE notes ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
+      );
       await db.execute(
         'ALTER TABLE notes ADD COLUMN audioOnServer INTEGER NOT NULL DEFAULT 0',
       );

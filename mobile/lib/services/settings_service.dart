@@ -36,7 +36,8 @@ class SettingsService extends ChangeNotifier {
 
   Future<void> _loadSessionToken() async {
     try {
-      _sessionToken = await _secureStorage.read(key: _secureSessionTokenKey) ?? '';
+      _sessionToken =
+          await _secureStorage.read(key: _secureSessionTokenKey) ?? '';
     } catch (_) {
       // A locked/unavailable keystore (or headless test VM) must not prevent
       // the app from starting.
@@ -63,10 +64,7 @@ class SettingsService extends ChangeNotifier {
       if (token.isEmpty) {
         await _secureStorage.delete(key: _secureSessionTokenKey);
       } else {
-        await _secureStorage.write(
-          key: _secureSessionTokenKey,
-          value: token,
-        );
+        await _secureStorage.write(key: _secureSessionTokenKey, value: token);
       }
     } catch (_) {
       // In-memory token is still valid for this session.

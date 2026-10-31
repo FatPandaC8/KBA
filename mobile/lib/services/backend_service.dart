@@ -500,10 +500,7 @@ class BackendService {
 
   Future<void> logout() async {
     await _client
-        .post(
-          Uri.parse('$baseUrl/api/auth/logout'),
-          headers: _authHeaders,
-        )
+        .post(Uri.parse('$baseUrl/api/auth/logout'), headers: _authHeaders)
         .timeout(_readTimeout);
   }
 
@@ -560,15 +557,13 @@ class BackendService {
       if (auth.statusCode == 401) {
         return const BackendConnectionResult(
           ok: false,
-          message:
-              'Server reachable, but you are not signed in. Sign in on the Settings screen.',
+          message: 'Server reachable, but you are not signed in. Sign in on the Settings screen.',
         );
       }
       if (auth.statusCode == 403) {
         return const BackendConnectionResult(
           ok: false,
-          message:
-              'Server reachable, but AI-provider consent is required. Grant consent on the Settings screen.',
+          message: 'Server reachable, but AI-provider consent is required. Grant consent on the Settings screen.',
         );
       }
       if (auth.statusCode != 200) {
@@ -813,7 +808,9 @@ class BackendService {
         );
       }).toList(),
       relationships: ((data['relationships'] as List?) ?? const [])
-          .map((e) => EntityRelationshipModel.fromJson(e as Map<String, dynamic>))
+          .map(
+            (e) => EntityRelationshipModel.fromJson(e as Map<String, dynamic>),
+          )
           .toList(),
     );
   }
@@ -826,14 +823,14 @@ class BackendService {
         )
         .timeout(_readTimeout);
     if (res.statusCode == 200) {
-      final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final data =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       return EntityDetailModel(
         entity: EntityModel.fromJson(data['entity'] as Map<String, dynamic>),
         relationships: ((data['relationships'] as List?) ?? const [])
             .map(
-              (e) => EntityRelationshipModel.fromJson(
-                e as Map<String, dynamic>,
-              ),
+              (e) =>
+                  EntityRelationshipModel.fromJson(e as Map<String, dynamic>),
             )
             .toList(),
       );
@@ -853,10 +850,7 @@ class BackendService {
         .patch(
           Uri.parse('$baseUrl/api/graph/entities/$entityId'),
           headers: _jsonHeaders,
-          body: jsonEncode({
-            'name': ?name,
-            'description': ?description,
-          }),
+          body: jsonEncode({'name': ?name, 'description': ?description}),
         )
         .timeout(_readTimeout);
     if (res.statusCode == 200) {

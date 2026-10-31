@@ -319,7 +319,8 @@ class NoteProvider extends ChangeNotifier {
         audioOnServer: true,
         // Local wins (U3): a user-edited title/summary is never overwritten
         // by server-derived text; unedited fields keep following the server.
-        title: (!note.userEditedTitle &&
+        title:
+            (!note.userEditedTitle &&
                 knowledge != null &&
                 knowledge.title.isNotEmpty)
             ? knowledge.title
@@ -450,7 +451,9 @@ class NoteProvider extends ChangeNotifier {
       return;
     }
 
-    final existing = {for (final note in await _repository.getAllNotes()) note.id: note};
+    final existing = {
+      for (final note in await _repository.getAllNotes()) note.id: note,
+    };
 
     for (final recording in recordings) {
       final local = existing[recording.captureId];
@@ -519,7 +522,8 @@ class NoteProvider extends ChangeNotifier {
             : local.retryCount,
         // Local wins (U3): user-edited fields are preserved as-is across
         // reconciliation; unedited fields keep syncing from the server.
-        title: (!local.userEditedTitle &&
+        title:
+            (!local.userEditedTitle &&
                 knowledge != null &&
                 knowledge.title.isNotEmpty)
             ? knowledge.title
@@ -631,8 +635,7 @@ class NoteProvider extends ChangeNotifier {
         (existing != null && note.title != existing.title);
     final summaryChanged =
         note.userEditedSummary ||
-        (existing != null &&
-            (note.summary ?? '') != (existing.summary ?? ''));
+        (existing != null && (note.summary ?? '') != (existing.summary ?? ''));
     final updated = note.copyWith(
       updatedAt: DateTime.now(),
       userEditedTitle: titleChanged,
