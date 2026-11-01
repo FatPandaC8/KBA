@@ -154,6 +154,14 @@ class Database:
                     f"-c idle_in_transaction_session_timeout="
                     f"{self._settings.database_idle_in_tx_timeout_ms}"
                 )
+                # Local-dev durability/latency knob: Docker volumes on btrfs
+                # (+ZSTD compression) can stall COMMITs in WALSync; local dev
+                # may set ECHO_DB_SYNCHRONOUS_COMMIT=off. Default stays "on".
+                sync_commit = getattr(
+                    self._settings, "database_synchronous_commit", "on"
+                )
+                if sync_commit and sync_commit != "on":
+                    options += f" -c synchronous_commit={sync_commit}"
                 self._pool = ConnectionPool(
                     conninfo=url,
                     min_size=self._settings.database_pool_min,

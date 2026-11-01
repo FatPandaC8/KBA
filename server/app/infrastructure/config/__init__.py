@@ -156,6 +156,11 @@ class ServerSettings:
     database_idle_in_tx_timeout_ms: int = int(
         os.getenv("ECHO_DB_IDLE_IN_TX_TIMEOUT_MS", "30000")
     )
+    # Local-dev knob: "off" trades crash-window durability for commit latency
+    # when the Docker volume's WAL sync stalls (see ADR D3 note). Default on.
+    database_synchronous_commit: str = os.getenv(
+        "ECHO_DB_SYNCHRONOUS_COMMIT", "on"
+    ).strip() or "on"
 
     # Duplicate matching bands (KG-02)
     duplicate_auto_link_threshold: float = float(os.getenv("ECHO_DUPLICATE_AUTO_LINK", "0.90"))

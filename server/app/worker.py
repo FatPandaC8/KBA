@@ -12,9 +12,20 @@ Run as:  python -m app.worker     (from the ``server/`` directory)
 import logging
 import os
 import signal
+import sys
 import threading
 import time
 import uuid
+
+# `python -m app.worker` runs with the server/ directory as the package root;
+# ``server.app.*`` is the import path used everywhere else, so add the parent
+# when the command is launched from a checkout root instead.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PARENT = os.path.dirname(_HERE)  # server/
+_GRANDPARENT = os.path.dirname(_PARENT)
+for _p in (_GRANDPARENT,):
+    if os.path.isdir(os.path.join(_p, "server", "app")) and _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from server.app.api.dependencies import Container
 from server.app.infrastructure.config import get_settings
