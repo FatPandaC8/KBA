@@ -485,25 +485,30 @@ class ProcessCaptureUseCase:
             plan_links,
             plan_normalize_first_person,
             plan_resolve_entities,
+            plan_rewrite_self_endpoints,
+            collect_self_placeholders,
             conflicts_to_flag,
         )
 
         # -- stage 1: normalize first person references to the self entity --
         collapsed, dropped_self_ids = plan_normalize_first_person(result.entities)
         self_entity = self.entity_repo.get_or_create_self(user_id)
+        # Every self-placeholder endpoint (kept OR dropped) maps to the
+        # canonical self id before resolve/link runs (Bug #2): plan_links is
+        # fed an id_map built from the SUBSTITUTED list, so a placeholder id
+        # that survived here would silently drop the relationship.
+        result.relationships = plan_rewrite_self_endpoints(
+            result.relationships,
+            collect_self_placeholders(result.entities),
+            self_entity.id,
+        )
         if dropped_self_ids or any(e.is_self for e in collapsed):
-            canonical_id = self_entity.id
             collapsed = [
                 self_entity
                 if e.is_self
                 else e
                 for e in collapsed
             ]
-            for rel in result.relationships:
-                if rel.from_id in dropped_self_ids:
-                    rel.from_id = canonical_id
-                if rel.to_id in dropped_self_ids:
-                    rel.to_id = canonical_id
         result.entities = collapsed
 
         # -- stages 2 + 4: resolution and dedup planning (reads inside the tx) --

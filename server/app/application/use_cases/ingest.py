@@ -9,6 +9,7 @@ exist in the transaction.
 """
 
 from dataclasses import dataclass, field
+import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from server.app.domain.entities import (
@@ -77,6 +78,33 @@ def plan_normalize_first_person(
     for entity in self_entities[1:]:
         dropped[entity.id] = keep.id
     return [e for e in extraction_entities if e.id not in dropped], dropped
+
+
+def collect_self_placeholders(
+    extraction_entities: List[ExtractedEntity],
+) -> set:
+    """Stage 1: every self PLACEHOLDER id in the extracted result, kept or
+    dropped in the collapse. Pure so the endpoint remap rule stays unit
+    testable on its own (Bug #2)."""
+    return {e.id for e in extraction_entities if e.is_self}
+
+
+def plan_rewrite_self_endpoints(
+    relationships: List[RelationshipEntity],
+    placeholder_ids: set,
+    canonical_self_id: str,
+) -> List[RelationshipEntity]:
+    """Stage 1 endpoint pass: every relationship endpoint that is a self
+    placeholder (the single one kept, or one dropped in the collapse) maps to
+    the canonical self entity id (Bug #2). Pure; links stay link-stage work."""
+    if not placeholder_ids:
+        return relationships
+    for rel in relationships:
+        if rel.from_id in placeholder_ids:
+            rel.from_id = canonical_self_id
+        if rel.to_id in placeholder_ids:
+            rel.to_id = canonical_self_id
+    return relationships
 
 
 def plan_resolve_entities(
@@ -152,11 +180,25 @@ def plan_links(
 ) -> LinkPlan:
     """Stage 3: map relationship endpoints through the id map."""
     plan = LinkPlan()
+    logger = logging.getLogger("echo.ingest")
     for rel in relationships:
         source = id_map.get(rel.from_id)
         target = id_map.get(rel.to_id)
         if not source or not target or source == target:
             plan.skipped_relationships += 1
+            # A dangling endpoint is never silently dropped: the capture_id
+            # and unresolved id go to the log so a bad extractor never eats
+            # graph links invisibly.
+            reason = (
+                "same_endpoint"
+                if source and target and source == target
+                else "unresolved_endpoint"
+            )
+            logger.warning(
+                "relationship skipped capture_id=%s reason=%s from_id=%s to_id=%s "
+                "relation_type=%s",
+                capture_id, reason, rel.from_id, rel.to_id, rel.relation_type,
+            )
             continue
         rel.from_id = source
         rel.to_id = target
