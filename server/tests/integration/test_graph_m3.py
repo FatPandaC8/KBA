@@ -154,6 +154,52 @@ def test_graph_search_does_not_match_everything_for_an_unrelated_query(
     assert [item["entity"]["name"] for item in matched["entities"]] == ["FastAPI"]
 
 
+def test_entity_detail_accepts_relationship_without_source_capture(user_factory):
+    """Regression (e2e Bug #1): a relationship whose source_capture_id is NULL
+    (seeded / provenance-less relationship, matches ``ON DELETE SET NULL``) must
+    yield a 200 detail response with ``source_capture_id == ""`` in the body —
+    the HTTP contract keeps the pre-Postgres non-null string semantics.
+    Covers both the self node and a regular node."""
+    import psycopg
+
+    user = user_factory(client)
+    from server.app.api.dependencies import get_container
+
+    graph = client.get("/api/graph", headers=user.headers).json()
+    self_node = next(node for node in graph["nodes"] if node["kind"] == "self")
+
+    other_id = str(uuid.uuid4())
+    # NOTE: worker_database_url() would DROP/recreate the per-worker database;
+    # the app container is already connected to the session database.
+    with psycopg.connect(get_container().settings.database_url, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO entities (id, user_id, capture_id, name, normalized_name,
+                entity_type, description, confidence, certainty, provenance,
+                provider_id, model_version, user_edited, created_at, updated_at)
+            VALUES (%s, %s::uuid, NULL, %s, %s, 'concept', '', 1, 'confirmed',
+                    'test', 'test', 'test', false, now(), now())
+            """,
+            (other_id, user.id, "RegressionOther", "regressionother"),
+        )
+        cur.execute(
+            """
+            INSERT INTO relationships (id, user_id, from_id, to_id, relation_type,
+                status, confidence, certainty, source_capture_id, provenance,
+                user_edited, created_at)
+            VALUES (%s, %s::uuid, %s::uuid, %s::uuid, 'Related to', 'suggested',
+                    0.6, 'confirmed', NULL, 'test', false, now())
+            """,
+            (str(uuid.uuid4()), user.id, self_node["id"], other_id),
+        )
+
+    for target in (self_node["id"], other_id):
+        detail = client.get(f"/api/graph/entities/{target}", headers=user.headers)
+        assert detail.status_code == 200, detail.text
+        rel = next(r for r in detail.json()["relationships"] if r["to_id"] in {self_node["id"], other_id})
+        assert rel["source_capture_id"] == ""
+
+
 def test_entity_detail_update_and_delete(user_factory, monkeypatch):
     user = user_factory(client)
     ingest(client, user, "Echo depends on FastAPI.", monkeypatch)

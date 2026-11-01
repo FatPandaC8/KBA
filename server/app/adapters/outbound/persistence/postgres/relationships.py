@@ -385,7 +385,9 @@ def _row_to_relationship(r) -> RelationshipEntity:
         status=r["status"],
         confidence=r["confidence"],
         certainty=r["certainty"],
-        source_capture_id=str(r["source_capture_id"]) if r["source_capture_id"] else None,
+        # Domain + HTTP contract are non-null str (""); SQL NULL (e.g. from
+        # ON DELETE SET NULL or seeded provenance-less rows) maps back to "".
+        source_capture_id=str(r["source_capture_id"]) if r["source_capture_id"] else "",
         provenance=r["provenance"],
         user_edited=r["user_edited"],
         evidence_utterance=r["evidence_utterance"],
