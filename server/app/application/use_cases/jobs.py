@@ -7,13 +7,14 @@ the client triggering anything.
 
 import json
 import os
+import random
 import threading
 import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import asdict
 from difflib import SequenceMatcher
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from server.app.application.dto import ExtractionResult, ProcessingJobDTO
 from server.app.application.ports import (
@@ -41,6 +42,8 @@ from server.app.domain.entities import (
     normalize_key,
 )
 from server.app.domain.errors import DomainError, InvalidInputAudioError
+from server.app.domain.job_state import RetryPolicy as JobRetryPolicy
+from server.app.domain.job_state import next_state_after_failure
 from server.app.domain.value_objects import (
     CaptureStatus,
     Certainty,
@@ -173,6 +176,7 @@ class ProcessCaptureUseCase:
         retry_limit: int = 3,
         lease_seconds: int = 300,
         relationship_type_repo: Optional[RelationshipTypeRegistryPort] = None,
+        uow_factory: Optional[Callable[[], Any]] = None,
     ):
         self.capture_repo = capture_repo
         self.knowledge_repo = knowledge_repo
@@ -192,6 +196,10 @@ class ProcessCaptureUseCase:
         self.retry_limit = retry_limit
         self.lease_seconds = lease_seconds
         self.relationship_type_repo = relationship_type_repo
+        # R1: application code opens the UoW (one connection/transaction); the
+        # adapters inside it are the same repos shared above.
+        self.uow_factory = uow_factory
+        self.retry_policy = JobRetryPolicy(max_attempts=max(1, retry_limit))
 
     # ----------------------------------------------------------------- queuing
     def create_job(self, capture: CaptureEntity) -> ProcessingJobDTO:
@@ -261,15 +269,21 @@ class ProcessCaptureUseCase:
         return {"entities_removed": removed_entities, "relationships_removed": removed_relationships}
 
     # ---------------------------------------------------------------- worker
+    # ---------------------------------------------------------------- worker
     def process_next(self, worker_id: str = "worker-1") -> Optional[ProcessingJobDTO]:
-        now = current_utc_iso()
-        for job in self.job_repo.list_resumable(now, retry_limit=self.retry_limit):
-            result = self.process(job.capture_id, job.user_id, worker_id)
-            if result is not None:
-                return result
-        return None
+        """Claim the oldest claimable job (FOR UPDATE SKIP LOCKED, R5)."""
+        job_dto = self.job_repo.claim_next(worker_id, self.lease_seconds, self.retry_limit)
+        if job_dto is None:
+            return None
+        return self._execute_claimed(job_dto, worker_id)
 
     def process(self, capture_id: str, user_id: str, worker_id: str = "worker-1") -> Optional[ProcessingJobDTO]:
+        """Claim (short tx) → process (NO transaction) → persist → complete.
+
+        On any exception the lease is invalidated by the failure record, the
+        ORIGINAL traceback is logged with correlation ids, and failure is
+        recorded in a NEW transaction. A single bad job never kills the loop.
+        """
         job = self.job_repo.claim(
             capture_id,
             worker_id,
@@ -279,8 +293,21 @@ class ProcessCaptureUseCase:
         )
         if job is None:
             return None
+        return self._execute_claimed(job, worker_id)
+
+    def _execute_claimed(
+        self, job: ProcessingJobDTO, worker_id: str
+    ) -> Optional[ProcessingJobDTO]:
+        capture_id = job.capture_id
+        user_id = job.user_id
         capture = self.capture_repo.get_by_id(capture_id, user_id=user_id)
         if capture is None:
+            import logging
+
+            logging.getLogger("echo.jobs").error(
+                "job capture missing job_id=%s capture_id=%s attempt=%s",
+                job.id, capture_id, job.attempt,
+            )
             self.job_repo.record_attempt(
                 capture_id, self.retry_limit, ErrorClass.INVALID_INPUT,
                 "Recording no longer exists.", user_id=user_id,
@@ -413,12 +440,146 @@ class ProcessCaptureUseCase:
         )
 
     # -------------------------------------------------------------- persistence
-    def _embed_knowledge_item(self, user_id: str, item: KnowledgeItemEntity) -> None:
-        """Index the item itself for /api/knowledge/semantic-search (KG-04).
+    def _save_extraction(self, user_id: str, capture_id: str, payload: Dict[str, Any]) -> None:
+        """R4: plan stages 1-4 pure, then apply stages 5-6 inside ONE UoW.
 
-        The pipeline already indexes entities and relationships; without this
-        an item is invisible to hybrid retrieval until an admin runs the
-        embeddings backfill endpoint, which breaks the capture → search loop.
+        Stage order lives in ``application.use_cases.ingest.STAGE_ORDER`` and is
+        pinned by a test. All graph writes for one capture commit together.
+        """
+        result = self._deserialise_extraction(payload)
+        # Relationship types flow through the open-ended registry before any
+        # write; fresh and cached (pre-U1) payloads are normalised alike.
+        self._normalize_relationship_types(user_id, result.relationships)
+
+        def _tombstoned(normalized_key: str) -> bool:
+            return self.tombstone_repo.is_tombstoned(user_id, "entity", normalized_key)
+
+        def _between(from_id: str, to_id: str):
+            return self.rel_repo.get_between(user_id, from_id, to_id)
+
+        if self.uow_factory:
+            with self.uow_factory():
+                self._run_ingest(user_id, capture_id, result, _tombstoned, _between)
+        else:
+            self._run_ingest(user_id, capture_id, result, _tombstoned, _between)
+
+    def _run_ingest(
+        self,
+        user_id: str,
+        capture_id: str,
+        result: ExtractionResult,
+        tombstone_check: Callable[[str], bool],
+        existing_between: Callable[[str, str], List[RelationshipEntity]],
+    ) -> None:
+        """Runs INSIDE the unit of work opened by ``_save_extraction``.
+
+        Stage semantics (STAGE_ORDER):
+        1 normalize_first_person - canonical self replaces every placeholder
+        2 resolve_entities       - reads existing graph rows
+        3 link                   - relationship endpoints mapped through the plan
+        4 dedup                  - auto-link / flag bands recorded
+        5 embeddings             - item vector written in the same transaction
+        6 prune_orphans          - non-self orphans removed at the very end
+        """
+        from .ingest import (
+            plan_links,
+            plan_normalize_first_person,
+            plan_resolve_entities,
+            conflicts_to_flag,
+        )
+
+        # -- stage 1: normalize first person references to the self entity --
+        collapsed, dropped_self_ids = plan_normalize_first_person(result.entities)
+        self_entity = self.entity_repo.get_or_create_self(user_id)
+        if dropped_self_ids or any(e.is_self for e in collapsed):
+            canonical_id = self_entity.id
+            collapsed = [
+                self_entity
+                if e.is_self
+                else e
+                for e in collapsed
+            ]
+            for rel in result.relationships:
+                if rel.from_id in dropped_self_ids:
+                    rel.from_id = canonical_id
+                if rel.to_id in dropped_self_ids:
+                    rel.to_id = canonical_id
+        result.entities = collapsed
+
+        # -- stages 2 + 4: resolution and dedup planning (reads inside the tx) --
+        existing = self.entity_repo.get_all(user_id=user_id)
+        id_map, decisions, to_save = plan_resolve_entities(
+            user_id,
+            capture_id,
+            result.entities,
+            existing,
+            auto_link_threshold=self.auto_link_threshold,
+            flag_threshold=self.flag_threshold,
+            tombstone_check=tombstone_check,
+            name_similarity_fn=name_similarity,
+        )
+
+        # -- stage 3: link planning --
+        links = plan_links(result.relationships, id_map, user_id, capture_id)
+
+        # -- writes: knowledge item first, then entities, then embeddings ----
+        # (embeddings stage 5 targets rows that exist in THIS transaction)
+        self.knowledge_repo.save(result.knowledge_item)
+        self._embed_item_in_tx(user_id, result.knowledge_item)
+
+        entity_by_id = {e.id: e for e in existing}
+        for entity in to_save:
+            self.entity_repo.save(entity)
+        for decision in decisions:
+            if decision.decision not in ("auto_linked", "flagged"):
+                continue
+            # duplicate_candidates rows are FK-checked against entities; the
+            # auto-linked source row is merged (never persisted), so record
+            # the pair onto the surviving canonical row instead (FK-safe,
+            # same informational meaning).
+            source_id = (
+                decision.source_entity.id
+                if decision.decision == "flagged"
+                else decision.candidate_id
+            )
+            self.duplicate_repo.record(
+                user_id,
+                source_id,
+                decision.candidate_id,
+                decision.score,
+                decision.decision,
+            )
+            if decision.decision == "auto_linked":
+                candidate = entity_by_id.get(decision.candidate_id)
+                if candidate and not candidate.description and decision.source_entity.description:
+                    candidate.description = decision.source_entity.description
+                    self.entity_repo.save(candidate)
+
+        # Support index: every entity this capture mentions (DEL-01 sharing).
+        for entity_id in sorted(set(id_map.values())):
+            self.support_repo.add(user_id, capture_id, "entity", entity_id)
+
+        for rel in links.relationships:
+            self.rel_repo.save(rel)
+            persisted_id = rel.id
+            for stored in self.rel_repo.get_between(user_id, rel.from_id, rel.to_id):
+                if stored.relation_type == rel.relation_type:
+                    persisted_id = stored.id
+                    break
+            self.support_repo.add(user_id, capture_id, "relationship", persisted_id)
+
+        for conflict_entity in conflicts_to_flag(links, existing_between):
+            self.rel_repo.save(conflict_entity)
+
+        # -- stage 6: orphans go last; the self entity is excluded by rule ----
+        self.entity_repo.cleanup_orphans(user_id)
+
+    def _embed_item_in_tx(self, user_id: str, item) -> None:
+        """Stage 5: index the item for /api/knowledge/semantic-search (KG-04).
+
+        Called inside the ingest transaction so the FK target exists. An
+        embedding failure degrades retrieval to lexical ranking but must not
+        kill the capture pipeline.
         """
         try:
             vector = self.embedder.embed_item(item)
@@ -430,170 +591,12 @@ class ProcessCaptureUseCase:
                 dimension=getattr(self.embedder, "dimension", 0),
             )
         except Exception as exc:
-            # Retrieval falls back to lexical ranking; the job must still succeed.
-            print(f"[Embedding Error] {exc}")
+            import logging
 
-    def _save_extraction(self, user_id: str, capture_id: str, payload: Dict[str, Any]) -> None:
-        result = self._deserialise_extraction(payload)
-        # Relationship types flow through the open-ended registry before any
-        # write; fresh and cached (pre-U1) payloads are normalised alike.
-        self._normalize_relationship_types(user_id, result.relationships)
-
-        # Fetch the real self entity from the database to avoid creating duplicates.
-        # The extractor may have created a capture-specific self entity reference.
-        self_entity = self.entity_repo.get_self_entity(user_id)
-
-        # Replace any self entity in the extracted entities with the real one.
-        if self_entity is not None:
-            result.entities = [
-                self_entity if e.is_self else e
-                for e in result.entities
-            ]
-
-        existing = self.entity_repo.get_all(user_id=user_id)
-        id_map, saved_entities = self._resolve_entities(user_id, capture_id, result.entities, existing)
-        print(f"[DEBUG _save_extraction] saved_entities count: {len(saved_entities)}")
-        for e in saved_entities:
-            print(f"[DEBUG _save_extraction] saved_entity: {e.id} ({e.name}), has_flag: {hasattr(e, '_flag_score')}, id_map: {id_map.get(e.id)}")
-
-        self.knowledge_repo.save(result.knowledge_item)
-        self._embed_knowledge_item(user_id, result.knowledge_item)
-        for entity in saved_entities:
-            self.entity_repo.save(entity)
-            # Entity embeddings are not stored in knowledge_embeddings (FK to knowledge_items)
-            # self._embed(user_id, entity.id, self._entity_text(entity))
-
-        # Record deferred duplicate candidates after entities are saved
-        for entity in saved_entities:
-            if hasattr(entity, '_flag_score'):
-                print(f"[DEBUG _save_extraction] Recording flagged duplicate for entity {entity.id} ({entity.name}) with score {entity._flag_score}")
-                self.duplicate_repo.record(user_id, entity.id, entity._flag_candidate_id, entity._flag_score, "flagged")
-                delattr(entity, '_flag_score')
-                delattr(entity, '_flag_candidate_id')
-            elif id_map.get(entity.id) != entity.id:
-                # Auto-linked: record the auto_linked duplicate
-                # Find which candidate this entity was linked to
-                candidate_id = id_map.get(entity.id)
-                if candidate_id and candidate_id != entity.id:
-                    # Find the score by re-computing similarity
-                    candidate = next((e for e in existing if e.id == candidate_id), None)
-                    if candidate:
-                        score = name_similarity(entity.name, candidate.name)
-                        self.duplicate_repo.record(user_id, entity.id, candidate_id, score, "auto_linked")
-                        if not candidate.description and entity.description:
-                            candidate.description = entity.description
-                            self.entity_repo.save(candidate)
-
-        # Every entity this capture mentions must be supported by it, including
-        # entities that were auto-linked to an existing node (DEL-01 sharing).
-        for entity_id in sorted(set(id_map.values())):
-            self.support_repo.add(user_id, capture_id, "entity", entity_id)
-
-        for rel in result.relationships:
-            source = id_map.get(rel.from_id)
-            target = id_map.get(rel.to_id)
-            if not source or not target or source == target:
-                continue
-            rel.from_id = source
-            rel.to_id = target
-            rel.user_id = user_id
-            rel.source_capture_id = capture_id
-            self.rel_repo.save(rel)
-            persisted_id = rel.id
-            for stored in self.rel_repo.get_between(user_id, source, target):
-                if stored.relation_type == rel.relation_type:
-                    persisted_id = stored.id
-                    break
-            self.support_repo.add(user_id, capture_id, "relationship", persisted_id)
-            # Relationship embeddings are not stored in knowledge_embeddings (FK to knowledge_items)
-            # self._embed(user_id, persisted_id, f"{rel.relation_type} relationship")
-
-        self._flag_conflicts(user_id, result.relationships, id_map)
-        # Orphan cleanup at the END of the extraction pipeline: after auto-linking,
-        # dedup, and all entities/relationships for this capture are persisted.
-        # Runs inside the same transaction so no non-self orphan is ever committed.
-        self.entity_repo.cleanup_orphans(user_id)
-
-    def _resolve_entities(
-        self,
-        user_id: str,
-        capture_id: str,
-        extracted: List[ExtractedEntity],
-        existing: List[ExtractedEntity],
-    ) -> Tuple[Dict[str, str], List[ExtractedEntity]]:
-        """Apply duplicate bands and tombstones (KG-02, PRC-06).
-
-        Returns a map from extracted id to the id that should be persisted, plus
-        the entities that are genuinely new.
-        """
-        id_map: Dict[str, str] = {}
-        to_save: List[ExtractedEntity] = []
-        pool = [entity for entity in existing if entity.capture_id != capture_id]
-        seen: Dict[str, str] = {}
-
-        for entity in extracted:
-            entity.user_id = user_id
-            if self.tombstone_repo.is_tombstoned(user_id, "entity", entity.normalized_name):
-                continue
-
-            candidate = None
-            best_score = 0.0
-            for other in pool:
-                score = name_similarity(entity.name, other.name)
-                if score > best_score:
-                    best_score, candidate = score, other
-
-            exact = seen.get(entity.normalized_name)
-            if exact:
-                id_map[entity.id] = exact
-                continue
-
-            if candidate is not None and best_score >= self.auto_link_threshold - _EPSILON:
-                # Auto-link: record duplicate candidate after entities are saved
-                # (deferred via id_map)
-                id_map[entity.id] = candidate.id
-                seen[entity.normalized_name] = candidate.id
-                continue
-
-            if candidate is not None and best_score >= self.flag_threshold - _EPSILON:
-                # Flag for user review: record after entity is saved
-                id_map[entity.id] = entity.id
-                seen[entity.normalized_name] = entity.id
-                to_save.append(entity)
-                # Store flag info for later recording
-                entity._flag_score = best_score
-                entity._flag_candidate_id = candidate.id
-                print(f"[DEBUG _resolve_entities] Flagged entity {entity.id} ({entity.name}) with score {best_score}, candidate {candidate.id}")
-                continue
-
-            id_map[entity.id] = entity.id
-            seen[entity.normalized_name] = entity.id
-            to_save.append(entity)
-
-        return id_map, to_save
-
-    def _flag_conflicts(
-        self, user_id: str, relationships: List[RelationshipEntity], id_map: Dict[str, str]
-    ) -> None:
-        """Keep both sides of a contradiction and mark them (KG-03)."""
-        for rel in relationships:
-            source = id_map.get(rel.from_id)
-            target = id_map.get(rel.to_id)
-            if not source or not target:
-                continue
-            for other in self.rel_repo.get_between(user_id, source, target):
-                if other.relation_type == rel.relation_type:
-                    continue
-                if (
-                    RelationType.CONTRADICTS in (rel.relation_type, other.relation_type)
-                    or other.certainty == Certainty.CONFLICTING
-                ):
-                    other.certainty = Certainty.CONFLICTING
-                    other.status = RelationStatus.CONFLICTING
-                    self.rel_repo.save(other)
-
-    def _entity_text(self, entity: ExtractedEntity) -> str:
-        return f"{entity.name} {entity.entity_type} {entity.description}".strip()
+            logging.getLogger("echo.jobs").warning(
+                "embedding degraded (lexical fallback) item_id=%s error=%s",
+                item.id, exc,
+            )
 
     def _embed(self, user_id: str, target_id: str, text: str) -> None:
         try:
@@ -614,22 +617,43 @@ class ProcessCaptureUseCase:
     def _record_failure(
         self, job: ProcessingJobDTO, capture: CaptureEntity, exc: Exception
     ) -> ProcessingJobDTO:
-        user_id = capture.user_id
+        """R5 failure path.
+
+        1. Log the ORIGINAL error (with traceback) tagged with job/capture ids
+           and the attempt number.
+        2. Record the failure in a NEW transaction, scheduling the retry with
+           the domain state machine (D7 backoff + jitter) or failing terminally.
+        Everything after the log is one fresh transaction (record_attempt +
+        capture save are separate short repo calls like today).
+        """
+        import logging
+
+        logger = logging.getLogger("echo.jobs")
+        logger.error(
+            "job attempt failed job_id=%s capture_id=%s attempt=%s error=%s",
+            job.id, capture.id, job.attempt or 0, exc,
+            exc_info=exc,
+        )
         error_class = getattr(exc, "error_class", ErrorClass.PROVIDER)
         attempt = (job.attempt or 0) + 1
-        terminal = (
-            not ErrorClass.is_recoverable(error_class)
-            or attempt >= self.retry_limit
-            or isinstance(exc, InvalidInputAudioError)
+        target_state, retry_delay = next_state_after_failure(
+            "running", error_class, attempt, self.retry_policy
         )
+        retry_at = None
+        if target_state == "queued":
+            from datetime import datetime, timedelta, timezone
+
+            retry_at = (datetime.now(timezone.utc) + timedelta(seconds=retry_delay.total_seconds())).isoformat()
+        terminal = target_state == "failed"
         self.job_repo.record_attempt(
             capture.id,
             attempt,
             error_class,
             str(exc),
-            user_id=user_id,
+            user_id=capture.user_id,
             retry_limit=self.retry_limit,
+            retry_at=retry_at,
         )
         capture.status = CaptureStatus.FAILED if terminal else CaptureStatus.RECEIVED
         self.capture_repo.save(capture)
-        return self.job_repo.get_by_capture_id(capture.id, user_id=user_id)
+        return self.job_repo.get_by_capture_id(capture.id, user_id=capture.user_id)

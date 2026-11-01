@@ -36,13 +36,11 @@ setup_logging()
 async def lifespan(app: FastAPI):
     container = get_container()
     container.open_database()
-    # The worker resumes jobs whose lease expired during a restart (PRC-03).
-    if container.settings.worker_enabled:
-        container.worker.start()
+    # D8: the worker is a separate process (`python -m app.worker`); the API
+    # process owns only its pool. Graceful shutdown closes the pool.
     try:
         yield
     finally:
-        container.worker.stop()
         container.close_database()
 
 

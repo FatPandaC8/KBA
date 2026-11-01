@@ -87,3 +87,14 @@ def test_no_sqlite_leftovers_anywhere_under_app():
             content = fh.read()
         for token in FORBIDDEN_TEXT:
             assert token not in content, f"{fpath} contains {token}"
+
+
+def test_worker_is_not_started_from_the_api_lifespan():
+    """D8: the worker is its own process/entrypoint, never the API lifespan."""
+    with open(os.path.join(_APP_ROOT, "main.py"), encoding="utf-8") as fh:
+        content = fh.read()
+    assert "worker.start()" not in content
+    with open(os.path.join(_APP_ROOT, "worker.py"), encoding="utf-8") as fh:
+        worker_src = fh.read()
+    assert "reclaim_stale" in worker_src, "worker must reclaim stale leases on boot"
+    assert "SIGTERM" in worker_src, "worker must handle SIGTERM gracefully"

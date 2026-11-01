@@ -130,11 +130,19 @@ class ServerSettings:
     allow_real_llm: bool = os.getenv("ECHO_ALLOW_REAL_LLM", "0") in ("1", "true", "True")
     ai_providers_json: str = os.getenv("ECHO_AI_PROVIDERS", "")
 
-    # Processing jobs (PRC-02 … PRC-05)
+    # Processing jobs (PRC-02 … PRC-05). The background loop itself is the
+    # separate worker process (D8): `python -m app.worker`.
     job_retry_limit: int = int(os.getenv("ECHO_JOB_RETRY_LIMIT", "3"))
     job_lease_seconds: int = int(os.getenv("ECHO_JOB_LEASE_SECONDS", "300"))
     job_poll_seconds: float = float(os.getenv("ECHO_JOB_POLL_SECONDS", "1.0"))
     worker_enabled: bool = os.getenv("ECHO_WORKER_ENABLED", "1") not in ("0", "false", "False")
+
+    # D7: 3 attempts total, 30s backoff after attempt 1 and 120s after
+    # attempt 2, +/-20% jitter. All env-overridable.
+    job_max_attempts: int = int(os.getenv("ECHO_JOB_MAX_ATTEMPTS", "3"))
+    job_backoff_a1_seconds: float = float(os.getenv("ECHO_JOB_BACKOFF_A1_SECONDS", "30"))
+    job_backoff_a2_seconds: float = float(os.getenv("ECHO_JOB_BACKOFF_A2_SECONDS", "120"))
+    job_backoff_jitter: float = float(os.getenv("ECHO_JOB_BACKOFF_JITTER", "0.2"))
 
     # PostgreSQL connection pool (ADR R7). The API opens its pool in the
     # FastAPI lifespan; the worker process owns its own pool. No schema is

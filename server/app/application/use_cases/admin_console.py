@@ -15,7 +15,7 @@ from server.app.domain.errors import ValidationError
 
 
 class AdminConsoleUseCase:
-    def __init__(self, admin_repo, auth_service, user_repo, account_delete, capture_delete, process_capture, worker, upload_dir, password_min_length):
+    def __init__(self, admin_repo, auth_service, user_repo, account_delete, capture_delete, process_capture, worker, upload_dir, password_min_length):  # worker kept for API compatibility; the background loop is a separate process (D8)
         self.admin_repo = admin_repo
         self.auth_service = auth_service
         self.user_repo = user_repo

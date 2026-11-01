@@ -41,7 +41,6 @@ from server.app.application.use_cases import (
 from server.app.domain.entities import UserEntity
 from server.app.domain.errors import AuthError
 from server.app.infrastructure.config import ServerSettings, get_settings
-from server.app.infrastructure.worker import JobWorker
 
 security = HTTPBearer(auto_error=False)
 logger = logging.getLogger("echo.container")
@@ -204,7 +203,6 @@ class Container:
             upload_dir=settings.upload_dir,
         )
 
-        self.worker = JobWorker(self.process_capture_uc, poll_interval=settings.job_poll_seconds)
         self.admin_console_uc = AdminConsoleUseCase(
             admin_repo=self.admin_repo,
             auth_service=self.auth_service,
@@ -212,7 +210,7 @@ class Container:
             account_delete=self.delete_account_uc,
             capture_delete=self.delete_capture_uc,
             process_capture=self.process_capture_uc,
-            worker=self.worker,
+            worker=None,
             upload_dir=settings.upload_dir,
             password_min_length=settings.password_min_length,
         )

@@ -179,7 +179,6 @@ async def upload_capture(
         else:
             # A fresh upload of the same recording is an explicit retry (REC-05).
             container.process_capture_uc.retry(effective_id, user.id)
-        container.worker.kick()
 
         response.status_code = 202
         return CaptureUploadResponse(
@@ -475,7 +474,6 @@ def retry_recording(
                 updated_at=job.updated_at,
             )
         raise HTTPException(status_code=409, detail="Recording cannot be retried")
-    container.worker.kick()
     job = container.job_repo.get_by_capture_id(capture_id, user_id=user.id)
     return JobStatusResponse(
         capture_id=capture_id,

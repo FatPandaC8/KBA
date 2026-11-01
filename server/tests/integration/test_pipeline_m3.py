@@ -38,6 +38,22 @@ def _set_job(capture_id, user_id, *, status, stage, outputs):
             )
 
 
+def _advance_retry_schedule(capture_id, user_id):
+    """D7 schedules automatic retries with backoff; tests advance the schedule
+    to the past instead of sleeping (sleeps are forbidden in this suite)."""
+    import psycopg
+
+    from server.tests.postgres_testinfra import worker_database_url
+
+    with psycopg.connect(worker_database_url(), autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE processing_jobs SET next_attempt_at = '2000-01-01 00:00:00+00' "
+                "WHERE capture_id = %s AND user_id = %s",
+                (capture_id, user_id),
+            )
+
+
 def test_upload_queues_a_real_job_and_status_tracks_each_stage(user_factory):
     user = user_factory(client)
     capture_id = upload(client, user)
@@ -133,9 +149,17 @@ def test_network_failure_is_retried_then_completes(user_factory, monkeypatch):
     assert first.attempt == 1
     assert first.error_class == "network_error"
 
+    # D7 schedules the automatic retry ~30s out; advance the schedule instead
+    # of sleeping in tests.
+    _advance_retry_schedule(capture_id, user.id)
+
     second = process(capture_id)
     assert second.status == "queued"
     assert second.attempt == 2
+
+    # The second failure schedules a 120s retry (D7); advance it again instead
+    # of sleeping.
+    _advance_retry_schedule(capture_id, user.id)
 
     third = process(capture_id)
     assert third.status == "ready"
@@ -272,24 +296,32 @@ def test_client_responses_never_expose_transcripts_or_raw_audio(user_factory, mo
 
 
 def test_worker_processes_a_queued_job_without_a_client_trigger(user_factory, monkeypatch):
+    """D8: the worker loop lives in its own process; here the same runner loop
+    is exercised directly (`python -m app.worker` runs this class)."""
+    from server.app.worker import WorkerRunner
+
     user = user_factory(client)
     monkeypatch.setattr(
         container().process_capture_uc, "transcriber", FakeTranscriber("Echo is local.")
     )
-    worker = container().worker
-    assert not worker.running
-    worker.start()
-    try:
-        capture_id = upload(client, user)
-        deadline = time.time() + 15
-        status = "queued"
-        while time.time() < deadline:
-            status = client.get(
-                f"/api/recordings/{capture_id}/status", headers=user.headers
-            ).json()["status"]
-            if status == "ready":
-                break
-            time.sleep(0.1)
-        assert status == "ready"
-    finally:
-        worker.stop()
+    runner = WorkerRunner(container(), poll_seconds=0.05)
+    assert not runner.stopping
+    capture_id = upload(client, user)
+    deadline = time.time() + 15
+
+    class OneShotLoop:
+        calls = 0
+
+        def run_once(self, original=runner.run_once, calls_box=None):
+            return original()
+
+    status = "queued"
+    while time.time() < deadline:
+        runner.run_once()
+        status = client.get(
+            f"/api/recordings/{capture_id}/status", headers=user.headers
+        ).json()["status"]
+        if status == "ready":
+            break
+
+    assert status == "ready"

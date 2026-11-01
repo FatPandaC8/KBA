@@ -117,7 +117,6 @@ def retry_job(
         if not job or job.status != "failed":
             raise HTTPException(status_code=409, detail="Job is already queued or running")
         raise HTTPException(status_code=409, detail="Job cannot be retried")
-    container.worker.kick()
     _audit(request, container, "jobs.retry", "capture", capture_id, user_id=capture.user_id)
     return {"status": "queued", "capture_id": capture.id}
 
