@@ -192,6 +192,12 @@ class EntityRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    def get_or_create_self(
+        self, user_id: str, provider_id: str = "", model_version: str = ""
+    ) -> ExtractedEntity:
+        """Atomic one-self-per-user upsert (ADR R3)."""
+
+    @abstractmethod
     def list_by_capture(self, capture_id: str, user_id: Optional[str] = None) -> List[ExtractedEntity]:
         pass
 
@@ -269,8 +275,12 @@ class RelationshipRepositoryPort(ABC):
         pass
 
     @abstractmethod
-    def get_graph(self, user_id: Optional[str] = None) -> GraphDataDTO:
-        pass
+    def read_graph_rows(self, user_id: Optional[str] = None):
+        """Plain (entity_rows, relationship_rows) dicts for the read service.
+
+        Layout/DTO mapping happens in the application layer (R6): this method
+        never writes and never computes layout.
+        """
 
     @abstractmethod
     def count(self, user_id: Optional[str] = None) -> int:
@@ -538,6 +548,31 @@ class JobStatusRepositoryPort(ABC):
         """Atomically take the job lease. Returns None when already leased."""
 
     @abstractmethod
+    def claim_next(self, lease_owner: str, lease_seconds: int, retry_limit: int = 3) -> Optional[ProcessingJobDTO]:
+        """Claim the oldest claimable job (FOR UPDATE SKIP LOCKED)."""
+
+    @abstractmethod
+    def reclaim_stale(self, retry_limit: int = 3) -> int:
+        """Requeue jobs whose lease expired; each loss costs one attempt."""
+
+    @abstractmethod
+    def heartbeat(self, job_id: str, lease_owner: str, lease_seconds: int) -> bool:
+        """Renew a live lease without releasing it."""
+
+    @abstractmethod
+    def fail(
+        self,
+        capture_id: str,
+        attempt: int,
+        error_class: str,
+        error_message: Optional[str],
+        retry_limit: int = 3,
+        retry_at: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> bool:
+        """Record one failed attempt: schedule retry or mark failed."""""
+
+    @abstractmethod
     def renew_lease(self, capture_id: str, lease_owner: str, lease_seconds: int, user_id: Optional[str] = None) -> bool:
         """Extend a live lease without releasing it (long provider calls)."""
 
@@ -554,7 +589,7 @@ class JobStatusRepositoryPort(ABC):
         """Persist stage output and advance the stage idempotently."""
 
     @abstractmethod
-    def record_attempt(self, capture_id: str, attempt: int, error_class: str, error_message: str, user_id: Optional[str] = None, retry_limit: int = 3) -> None:
+    def record_attempt(self, capture_id: str, attempt: int, error_class: str, error_message: str, user_id: Optional[str] = None, retry_limit: int = 3, retry_at: Optional[str] = None) -> None:
         pass
 
     @abstractmethod

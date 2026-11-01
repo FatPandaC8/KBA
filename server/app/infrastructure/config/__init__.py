@@ -136,6 +136,19 @@ class ServerSettings:
     job_poll_seconds: float = float(os.getenv("ECHO_JOB_POLL_SECONDS", "1.0"))
     worker_enabled: bool = os.getenv("ECHO_WORKER_ENABLED", "1") not in ("0", "false", "False")
 
+    # PostgreSQL connection pool (ADR R7). The API opens its pool in the
+    # FastAPI lifespan; the worker process owns its own pool. No schema is
+    # created at startup: ``alembic upgrade head`` owns the schema.
+    database_pool_min: int = int(os.getenv("ECHO_DB_POOL_MIN", "1"))
+    database_pool_max: int = int(os.getenv("ECHO_DB_POOL_MAX", "4"))
+    database_connect_timeout: float = float(os.getenv("ECHO_DB_CONNECT_TIMEOUT", "30"))
+    database_statement_timeout_ms: int = int(
+        os.getenv("ECHO_DB_STATEMENT_TIMEOUT_MS", "30000")
+    )
+    database_idle_in_tx_timeout_ms: int = int(
+        os.getenv("ECHO_DB_IDLE_IN_TX_TIMEOUT_MS", "30000")
+    )
+
     # Duplicate matching bands (KG-02)
     duplicate_auto_link_threshold: float = float(os.getenv("ECHO_DUPLICATE_AUTO_LINK", "0.90"))
     duplicate_flag_threshold: float = float(os.getenv("ECHO_DUPLICATE_FLAG", "0.75"))

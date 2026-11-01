@@ -72,7 +72,53 @@ class GraphQueryUseCase:
 
     # ------------------------------------------------------------------- graph
     def get_graph(self, user_id: str) -> GraphDataDTO:
-        return self.rel_repo.get_graph(user_id=user_id)
+        """Read side (R6): plain rows from the read repo; layout is the pure
+        domain module; DTO mapping happens here (never in an adapter)."""
+        from server.app.application.dto import GraphClusterDTO, GraphEdgeDTO, GraphNodeDTO
+        from server.app.domain.graph_layout import compute_layout
+
+        entity_rows, rel_rows = self.rel_repo.read_graph_rows(user_id=user_id)
+        nodes, edges, clusters = compute_layout(entity_rows, rel_rows)
+        return GraphDataDTO(
+            nodes=[
+                GraphNodeDTO(
+                    id=node["id"],
+                    title=node["title"],
+                    kind=node["kind"],
+                    x=node["x"],
+                    y=node["y"],
+                    cluster_id=node["cluster_id"],
+                    certainty=node["certainty"],
+                    confidence=node["confidence"],
+                    degree=node["degree"],
+                    is_self=node["is_self"],
+                )
+                for node in nodes
+            ],
+            edges=[
+                GraphEdgeDTO(
+                    id=edge["id"],
+                    from_node=edge["from_node"],
+                    to_node=edge["to_node"],
+                    type=edge["type"],
+                    status=edge["status"],
+                    certainty=edge["certainty"],
+                    confidence=edge["confidence"],
+                    evidence=edge["evidence"],
+                )
+                for edge in edges
+            ],
+            clusters=[
+                GraphClusterDTO(
+                    id=cluster["id"],
+                    label=cluster["label"],
+                    x=cluster["x"],
+                    y=cluster["y"],
+                    size=cluster["size"],
+                )
+                for cluster in clusters
+            ],
+        )
 
     # ------------------------------------------------------------------ search
     def search(self, user_id: str, query: str, limit: int = 20) -> GraphSearchDTO:

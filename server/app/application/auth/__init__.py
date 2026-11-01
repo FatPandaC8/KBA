@@ -11,6 +11,7 @@ from server.app.application.ports import (
     ConsentRepositoryPort,
     EmailPort,
     GoogleTokenVerifierPort,
+    EntityRepositoryPort,
 )
 from server.app.domain.entities import UserEntity, ConsentEntity
 from server.app.domain.errors import AuthError, ValidationError
@@ -41,6 +42,7 @@ class AuthService:
         email_port: EmailPort,
         google_verifier: GoogleTokenVerifierPort,
         settings: Any,
+        entity_repo: Optional[EntityRepositoryPort] = None,
     ):
         self.user_repo = user_repo
         self.session_repo = session_repo
@@ -48,6 +50,9 @@ class AuthService:
         self.email_port = email_port
         self.google_verifier = google_verifier
         self.settings = settings
+        # Optional: archives the self entity at signup via the atomic upsert
+        # (R3). None in tests that only construct an AuthService directly.
+        self.entity_repo = entity_repo
 
     # ------------------------------------------------------------------ tokens
     def _issue_session(self, user: UserEntity) -> str:
@@ -92,6 +97,10 @@ class AuthService:
 
         user = UserEntity.create(normalized, hash_password(password))
         self.user_repo.save(user)
+        if self.entity_repo is not None:
+            # R3: the one-self-entity rule is owned by the repository gate
+            # (atomic upsert), so registering a user guarantees the self node.
+            self.entity_repo.get_or_create_self(user.id)
         token = self.send_verification(user)
         return user, token, True
 

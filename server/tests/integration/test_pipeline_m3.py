@@ -23,19 +23,19 @@ def _job(capture_id, user_id):
 
 
 def _set_job(capture_id, user_id, *, status, stage, outputs):
-    from server.app.adapters.outbound.persistence.postgres import get_connection, put_connection
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE processing_jobs SET status = %s, stage = %s, stage_outputs = %s, "
-            "lease_owner = '', lease_expires_at = '2000-01-01 00:00:00+00', attempt = 0 WHERE capture_id = %s AND user_id = %s",
-            (status, stage, json.dumps(outputs), capture_id, user_id),
-        )
-        conn.commit()
-    finally:
-        cur.close()
-        put_connection(conn)
+    import psycopg
+
+    from server.tests.postgres_testinfra import worker_database_url
+
+    with psycopg.connect(worker_database_url(), autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE processing_jobs SET status = %s, stage = %s, "
+                "stage_outputs = %s::jsonb, "
+                "lease_owner = '', lease_expires_at = '2000-01-01 00:00:00+00', attempt = 0 "
+                "WHERE capture_id = %s AND user_id = %s",
+                (status, stage, json.dumps(outputs), capture_id, user_id),
+            )
 
 
 def test_upload_queues_a_real_job_and_status_tracks_each_stage(user_factory):

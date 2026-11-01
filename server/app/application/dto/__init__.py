@@ -152,6 +152,7 @@ class ProcessingJobDTO:
     lease_owner: str = ""
     lease_expires_at: str = ""
     stage_outputs: str = "{}"
+    next_attempt_at: str = ""
 
 
 @dataclass

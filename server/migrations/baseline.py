@@ -76,8 +76,7 @@ CREATE TABLE captures (
 CREATE TABLE knowledge_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    capture_id UUID REFERENCES captures(id) ON DELETE CASCADE,
-    title TEXT NOT NULL,
+    capture_id UUID REFERENCES captures(id) ON DELETE CASCADE,    title TEXT NOT NULL,
     core_idea TEXT,
     details TEXT NOT NULL DEFAULT '',
     transcript TEXT,
@@ -98,7 +97,7 @@ CREATE TABLE knowledge_items (
 CREATE TABLE entities (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    capture_id UUID REFERENCES captures(id) ON DELETE CASCADE,
+    capture_id UUID REFERENCES captures(id) ON DELETE SET NULL,
     name TEXT NOT NULL,
     normalized_name TEXT NOT NULL,
     entity_type TEXT NOT NULL DEFAULT 'concept',
@@ -124,7 +123,7 @@ CREATE TABLE relationships (
     status TEXT NOT NULL DEFAULT 'suggested',
     confidence REAL NOT NULL DEFAULT 0.6,
     certainty TEXT NOT NULL DEFAULT 'confirmed',
-    source_capture_id UUID REFERENCES captures(id) ON DELETE CASCADE,
+    source_capture_id UUID REFERENCES captures(id) ON DELETE SET NULL,
     provenance TEXT NOT NULL DEFAULT 'voice-capture',
     user_edited BOOLEAN NOT NULL DEFAULT FALSE,
     evidence_utterance TEXT NOT NULL DEFAULT '',
@@ -208,7 +207,7 @@ CREATE TABLE knowledge_embeddings (
 CREATE TABLE processing_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    capture_id UUID NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
+    capture_id UUID REFERENCES captures(id) ON DELETE SET NULL,
     stage TEXT NOT NULL DEFAULT 'queued',
     status TEXT NOT NULL DEFAULT 'queued',
     attempt INTEGER NOT NULL DEFAULT 0,

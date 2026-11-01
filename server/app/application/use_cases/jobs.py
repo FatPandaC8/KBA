@@ -610,21 +610,6 @@ class ProcessCaptureUseCase:
             print(f"[Embedding Error] {exc}")
 
     # ---------------------------------------------------------------- failures
-    def _cleanup_orphans(user_id: str, entity_repo, rel_repo) -> int:
-        """Remove non-self entities that have no relationships.
-
-        Must be called at the END of the pipeline, after auto-linking and dedup,
-        inside the same transaction, to ensure no entity exists without a relationship.
-        """
-        count = entity_repo.db.get_connection().execute(
-            """DELETE FROM entities WHERE user_id=? AND is_self=0 AND NOT EXISTS
-               (SELECT 1 FROM relationships r WHERE r.user_id=entities.user_id
-                AND (r.from_id=entities.id OR r.to_id=entities.id))""",
-            (user_id,),
-        ).rowcount
-        conn = entity_repo.db.get_connection()
-        conn.commit()
-        return count
 
     def _record_failure(
         self, job: ProcessingJobDTO, capture: CaptureEntity, exc: Exception

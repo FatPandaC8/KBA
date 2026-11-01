@@ -115,7 +115,7 @@ def test_schema_invalid_twice_fails_without_falling_back(user_factory, monkeypat
     assert job.status == "failed"
     assert job.error_class == "schema_invalid"
     assert len(fake.calls) == 2, "one attempt plus exactly one repair"
-    assert container().entity_repo.get_all(user_id=user.id) == []
+    assert [e for e in container().entity_repo.get_all(user_id=user.id) if not e.is_self] == []
 
 
 def test_timeout_is_retryable_and_never_silently_local(user_factory, monkeypatch):
@@ -129,7 +129,7 @@ def test_timeout_is_retryable_and_never_silently_local(user_factory, monkeypatch
     assert job.status == "queued"
     assert job.error_class == "network_error"
     assert job.attempt == 1
-    assert container().entity_repo.get_all(user_id=user.id) == []
+    assert [e for e in container().entity_repo.get_all(user_id=user.id) if not e.is_self] == []
     recording = client.get("/api/recordings", headers=user.headers).json()[0]
     # A recoverable network failure is automatically requeued, so it is not a
     # manual-retry terminal state.
@@ -161,16 +161,21 @@ def test_resume_reuses_persisted_llm_output_without_second_call(user_factory, mo
     assert process(capture_id).status == "ready"
     assert len(fake.calls) == 1
 
-    conn = container().db_manager.get_connection()
+    import psycopg
+
+    from server.tests.postgres_testinfra import worker_database_url
+
     job = _job(capture_id, user.id)
     outputs = json.loads(job.stage_outputs)
     outputs.pop("saved", None)
-    conn.execute(
-        "UPDATE processing_jobs SET status='queued', stage='save', attempt=0, "
-        "stage_outputs=?, lease_owner='', lease_expires_at='' WHERE capture_id=? AND user_id=?",
-        (json.dumps(outputs), capture_id, user.id),
-    )
-    conn.commit()
+    with psycopg.connect(worker_database_url(), autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE processing_jobs SET status='queued', stage='save', attempt=0, "
+                "stage_outputs=%s::jsonb, lease_owner='', lease_expires_at=NULL "
+                "WHERE capture_id=%s AND user_id=%s",
+                (json.dumps(outputs), capture_id, user.id),
+            )
 
     resumed = process(capture_id, worker_id="resumed")
     assert resumed.status == "ready"
@@ -181,7 +186,7 @@ def test_user_edited_knowledge_is_not_overwritten_by_a_later_save(user_factory):
     user = user_factory(client)
     item = KnowledgeItemEntity(
         id=str(uuid.uuid4()),
-        capture_id=str(uuid.uuid4()),
+        capture_id=None,  # no capture row exists; a dangling FK is invalid data on Postgres
         title="Edited title",
         core_idea="Edited idea",
         user_id=user.id,

@@ -15,74 +15,73 @@ client = TestClient(app)
 
 
 def _seed_large_graph(user_id: str, count: int = 2000):
-    from server.app.adapters.outbound.persistence.postgres import get_connection, put_connection
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        now = "2026-01-01T00:00:00+00:00"
-        entity_rows = []
-        for index in range(count):
-            entity_rows.append(
-                (
-                    str(uuid.uuid4()),
-                    user_id,
-                    None,  # capture_id = NULL
-                    f"Node {index}",
-                    f"node {index}",
-                    "concept",
-                    "",
-                    0.5,
-                    "confirmed",
-                    "test",
-                    "test",
-                    "test",
-                    False,
-                    now,
-                    now,
+    import psycopg
+
+    from server.tests.postgres_testinfra import worker_database_url
+
+    with psycopg.connect(worker_database_url(), autocommit=True) as conn:
+        with conn.cursor() as cur:
+            now = "2026-01-01T00:00:00+00:00"
+            entity_rows = []
+            for index in range(count):
+                entity_rows.append(
+                    (
+                        str(uuid.uuid4()),
+                        user_id,
+                        None,  # capture_id = NULL
+                        f"Node {index}",
+                        f"node {index}",
+                        "concept",
+                        "",
+                        0.5,
+                        "confirmed",
+                        "test",
+                        "test",
+                        "test",
+                        False,
+                        now,
+                        now,
+                    )
                 )
+            cur.executemany(
+                """
+                INSERT INTO entities
+                (id, user_id, capture_id, name, normalized_name, entity_type, description,
+                 confidence, certainty, provenance, provider_id, model_version,
+                 user_edited, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                entity_rows,
             )
-        cur.executemany(
-            """
-            INSERT INTO entities
-            (id, user_id, capture_id, name, normalized_name, entity_type, description,
-             confidence, certainty, provenance, provider_id, model_version,
-             user_edited, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            entity_rows,
-        )
-        relation_rows = []
-        for index in range(count - 1):
-            relation_rows.append(
-                (
-                    str(uuid.uuid4()),
-                    user_id,
-                    entity_rows[index][0],
-                    entity_rows[index + 1][0],
-                    "Related to",
-                    "suggested",
-                    0.6,
-                    "confirmed",
-                    None,  # source_capture_id = NULL
-                    "test",  # provenance
-                    False,  # user_edited
-                    now,
+            relation_rows = []
+            for index in range(count - 1):
+                relation_rows.append(
+                    (
+                        str(uuid.uuid4()),
+                        user_id,
+                        entity_rows[index][0],
+                        entity_rows[index + 1][0],
+                        "Related to",
+                        "suggested",
+                        0.6,
+                        "confirmed",
+                        None,  # source_capture_id = NULL
+                        "test",  # provenance
+                        False,  # user_edited
+                        now,
+                    )
                 )
+            cur.executemany(
+                """
+                INSERT INTO relationships
+                (id, user_id, from_id, to_id, relation_type, status, confidence,
+                 certainty, source_capture_id, provenance, user_edited, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                relation_rows,
             )
-        cur.executemany(
-            """
-            INSERT INTO relationships
-            (id, user_id, from_id, to_id, relation_type, status, confidence,
-             certainty, source_capture_id, provenance, user_edited, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            relation_rows,
-        )
-        conn.commit()
-        return entity_rows
-    finally:
-        cur.close()
-        put_connection(conn)
+            return entity_rows
+
 
 
 def test_graph_layout_is_clustered_and_deterministic(user_factory, monkeypatch):

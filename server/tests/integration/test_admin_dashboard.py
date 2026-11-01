@@ -19,12 +19,12 @@ def _admin_headers():
     return {"Authorization": f"Bearer {get_settings().admin_token}"}
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(autouse=True)
 def create_system_user():
-    """Create a system user for admin tests."""
+    """Create a system user for admin tests (fresh per test: the shared
+    Postgres fixture truncates the schema before every test)."""
     container = get_container()
     system_user_id = "11111111-1111-1111-1111-111111111111"
-    print(f"[DEBUG] Creating system user: {system_user_id}", flush=True)
     container.user_repo.save(
         UserEntity(
             id=system_user_id,
@@ -34,9 +34,7 @@ def create_system_user():
             is_locked=False,
         )
     )
-    print(f"[DEBUG] System user created", flush=True)
     yield
-    # Cleanup (optional, but good practice)
     container.user_repo.delete(system_user_id)
 
 

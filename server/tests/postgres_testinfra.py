@@ -14,6 +14,8 @@ from typing import Dict
 import psycopg
 from psycopg import sql
 
+_CACHED_CONNECTIONS: Dict[str, psycopg.Connection] = {}
+
 MAINTENANCE_DSN = os.environ.get(
     "ECHO_PG_MAINTENANCE_DSN",
     "postgresql://echo:echo_dev_password@127.0.0.1:5432/echo_kb",
@@ -93,16 +95,18 @@ def worker_database_url() -> str:
 
 def truncate_schema() -> None:
     """Remove test rows without dropping the migrated schema."""
-    with psycopg.connect(
-        worker_database_url(), autocommit=True, connect_timeout=10
-    ) as conn:
-        with conn.cursor() as cur:
-            cur.execute(ALL_TABLES_SQL)
-            tables = [row[0] for row in cur.fetchall()]
-            if not tables:
-                return
-            cur.execute(
-                sql.SQL("TRUNCATE TABLE {} RESTART IDENTITY CASCADE").format(
-                    sql.SQL(", ").join(sql.Identifier(t) for t in tables)
-                )
+    url = worker_database_url()
+    conn = _CACHED_CONNECTIONS.get(url)
+    if conn is None or conn.closed:
+        conn = psycopg.connect(url, autocommit=True, connect_timeout=10)
+        _CACHED_CONNECTIONS[url] = conn
+    with conn.cursor() as cur:
+        cur.execute(ALL_TABLES_SQL)
+        tables = [row[0] for row in cur.fetchall()]
+        if not tables:
+            return
+        cur.execute(
+            sql.SQL("TRUNCATE TABLE {} RESTART IDENTITY CASCADE").format(
+                sql.SQL(", ").join(sql.Identifier(t) for t in tables)
             )
+        )

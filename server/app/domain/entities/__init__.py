@@ -427,6 +427,7 @@ class ProcessingJobDTO:
     error_message: Optional[str]
     created_at: str
     updated_at: str
+    next_attempt_at: Optional[str] = None
 
 
 @dataclass

@@ -12,8 +12,14 @@ import uuid
 
 from fastapi.testclient import TestClient
 
+from fastapi.testclient import TestClient
+
+from psycopg.rows import dict_row
+
+import psycopg
+
 from server.app.main import app
-from server.app.adapters.outbound.persistence.postgres import get_connection, put_connection
+from server.tests.postgres_testinfra import worker_database_url
 
 from .m3_support import container, upload
 
@@ -49,8 +55,9 @@ def test_202_returns_only_after_file_and_rows_are_durable(user_factory):
 
     # 2. Capture and job rows are committed: a connection the route does not
     # own must already see them, or a 202 could leave no durable record.
-    conn = get_connection()
-    try:
+    with psycopg.connect(
+        worker_database_url(), autocommit=True, row_factory=dict_row
+    ) as conn:
         cur = conn.cursor()
         cur.execute(
             "SELECT user_id, status FROM captures WHERE id = %s", (capture_id,)
@@ -67,6 +74,3 @@ def test_202_returns_only_after_file_and_rows_are_durable(user_factory):
         )
         job_row = cur.fetchone()
         assert job_row is not None, "processing job row must be committed before 202"
-    finally:
-        cur.close()
-        put_connection(conn)

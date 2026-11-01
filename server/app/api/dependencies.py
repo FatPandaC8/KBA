@@ -1,3 +1,11 @@
+"""Composition root (ADR R7).
+
+One Settings object, one persistence backend (PostgreSQL), no factory
+branching. Repositories come from ``persistence.postgres.PostgresContainer``
+(one process-wide pool per process). The FastAPI lifespan opens and closes the
+pool; the worker process (``python -m app.worker``) owns its own pool.
+"""
+
 import logging
 import secrets
 from typing import Any, Dict, Optional
@@ -5,53 +13,35 @@ from typing import Any, Dict, Optional
 from fastapi import Header, HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from server.app.infrastructure.config import get_settings, ServerSettings
-from server.app.infrastructure.database import DatabaseManager
-from server.app.infrastructure.worker import JobWorker
-from server.app.adapters.outbound.persistence import (
-    SqliteKnowledgeRepository,
-    SqliteEntityRepository,
-    SqliteRelationshipRepository,
-    SqliteDuplicateCandidateRepository,
-    SqliteEmbeddingRepository,
-    SqliteCaptureRepository,
-    SqliteEvalRecordRepository,
-    SqliteJobStatusRepository,
-    SqliteUserRepository,
-    SqliteSessionRepository,
-    SqliteEmailTokenRepository,
-    SqliteConsentRepository,
-    SqliteTombstoneRepository,
-    SqliteRecordSupportRepository,
-    SqliteRelationshipTypeRegistryRepository,
-    SqliteAdminAuditLogRepository,
-    SqliteLLMUsageRepository,
-    SqliteAppSettingsRepository,
-)
-from server.app.adapters.outbound.persistence.factory import get_container as get_persistence_container
 from server.app.adapters.outbound.embeddings import FastEmbedProvider
-from server.app.adapters.outbound.speech import FasterWhisperSpeechAdapter
 from server.app.adapters.outbound.extraction import SemanticKnowledgeExtractor
 from server.app.adapters.outbound.extraction.groq import GroqExtractionAdapter
-from server.app.adapters.outbound.providers import LocalProviderRegistry
+from server.app.adapters.outbound.identity import (
+    GoogleTokenInfoVerifier,
+    LogEmailAdapter,
+)
 from server.app.adapters.outbound.llm.factory import build_llm_client
-from server.app.adapters.outbound.identity import LogEmailAdapter, GoogleTokenInfoVerifier
+from server.app.adapters.outbound.persistence.postgres import PostgresContainer
+from server.app.adapters.outbound.providers import LocalProviderRegistry
+from server.app.adapters.outbound.speech import FasterWhisperSpeechAdapter
+from server.app.application.auth import AuthService, ConsentService
 from server.app.application.use_cases import (
-    ProcessCaptureUseCase,
-    GraphQueryUseCase,
-    SemanticRecallUseCase,
-    ManageKnowledgeUseCase,
-    ManageRelationshipsUseCase,
-    BackfillEmbeddingsUseCase,
-    AdminSystemStatusUseCase,
-    DeleteCaptureUseCase,
-    PurgeRetainedAudioUseCase,
     AccountDeletionUseCase,
     AdminConsoleUseCase,
+    AdminSystemStatusUseCase,
+    BackfillEmbeddingsUseCase,
+    DeleteCaptureUseCase,
+    GraphQueryUseCase,
+    ManageKnowledgeUseCase,
+    ManageRelationshipsUseCase,
+    ProcessCaptureUseCase,
+    PurgeRetainedAudioUseCase,
+    SemanticRecallUseCase,
 )
-from server.app.application.auth import AuthService, ConsentService
 from server.app.domain.entities import UserEntity
 from server.app.domain.errors import AuthError
+from server.app.infrastructure.config import ServerSettings, get_settings
+from server.app.infrastructure.worker import JobWorker
 
 security = HTTPBearer(auto_error=False)
 logger = logging.getLogger("echo.container")
@@ -61,17 +51,18 @@ class Container:
     def __init__(self, settings: ServerSettings):
         self.settings = settings
 
-        # Use factory to get the appropriate persistence container (SQLite or PostgreSQL)
-        persistence = get_persistence_container()
+        persistence = PostgresContainer(settings)
+        self.persistence = persistence
 
-        # Repositories
+        # Repositories (all bound to the one pool in `persistence.db`)
         self.knowledge_repo = persistence.knowledge_repo
         self.entity_repo = persistence.entity_repo
         self.rel_repo = persistence.rel_repo
+        self.rel_type_repo = persistence.rel_type_repo
         self.duplicate_repo = persistence.duplicate_repo
         self.embedding_repo = persistence.embedding_repo
         self.capture_repo = persistence.capture_repo
-        self.eval_repo = persistence.eval_repo if hasattr(persistence, 'eval_repo') else SqliteEvalRecordRepository(self.db_manager)
+        self.eval_repo = persistence.eval_repo
         self.job_repo = persistence.job_repo
         self.user_repo = persistence.user_repo
         self.session_repo = persistence.session_repo
@@ -79,24 +70,14 @@ class Container:
         self.consent_repo = persistence.consent_repo
         self.tombstone_repo = persistence.tombstone_repo
         self.support_repo = persistence.support_repo
-        self.rel_type_repo = persistence.relationship_type_repo
-        self.audit_repo = persistence.audit_repo if hasattr(persistence, 'audit_repo') else SqliteAdminAuditLogRepository(self.db_manager)
-        self.llm_usage_repo = persistence.llm_usage_repo if hasattr(persistence, 'llm_usage_repo') else SqliteLLMUsageRepository(self.db_manager)
-        self.app_settings_repo = persistence.app_settings_repo if hasattr(persistence, 'app_settings_repo') else SqliteAppSettingsRepository(self.db_manager)
+        self.audit_repo = persistence.audit_repo
+        self.llm_usage_repo = persistence.llm_usage_repo
+        self.app_settings_repo = persistence.app_settings_repo
+        self.admin_repo = persistence.admin_repo
+        self.db = persistence.db
 
-        # For SQLite, we still need the db_manager for some repositories
-        self.db_manager = DatabaseManager(settings.db_path)
-        self.db_manager.init_database()
-
-        # Runtime overrides from the admin console survive a restart. The env
-        # var remains the default; the persisted selection wins only when an
-        # operator explicitly chose it.
-        stored_provider = self.app_settings_repo.get("llm_provider")
-        stored_model = self.app_settings_repo.get("llm_model")
-        if stored_provider:
-            settings.llm_provider = stored_provider.strip().lower()
-        if stored_model:
-            settings.groq_model = stored_model.strip()
+        self._ai_config_restored = False
+        self._restore_llm_prefs()
 
         # STT and embeddings stay local. Only text ever reaches a hosted LLM.
         self.embedder = FastEmbedProvider()
@@ -124,6 +105,7 @@ class Container:
             email_port=self.email_port,
             google_verifier=self.google_verifier,
             settings=settings,
+            entity_repo=self.entity_repo,
         )
         self.consent_service = ConsentService(self.consent_repo, settings)
 
@@ -224,7 +206,7 @@ class Container:
 
         self.worker = JobWorker(self.process_capture_uc, poll_interval=settings.job_poll_seconds)
         self.admin_console_uc = AdminConsoleUseCase(
-            db=self.db_manager,
+            admin_repo=self.admin_repo,
             auth_service=self.auth_service,
             user_repo=self.user_repo,
             account_delete=self.delete_account_uc,
@@ -235,7 +217,32 @@ class Container:
             password_min_length=settings.password_min_length,
         )
 
-    # ---------------------------------------------------------- AI configuration
+    def open_database(self) -> None:
+        """Open the pool explicitly (FastAPI lifespan / worker startup)."""
+        self.persistence.open_pool()
+
+    def close_database(self) -> None:
+        self.persistence.close_pool()
+
+    def _restore_llm_prefs(self) -> None:
+        """Admin runtime overrides survive a restart after a DB round-trip.
+
+        Read lazily and only once; the env var remains the default and the
+        persisted selection wins when an operator explicitly chose it.
+        """
+        if self._ai_config_restored:
+            return
+        self._ai_config_restored = True
+        try:
+            stored_provider = self.app_settings_repo.get("llm_provider")
+            stored_model = self.app_settings_repo.get("llm_model")
+        except Exception:
+            return
+        if stored_provider:
+            self.settings.llm_provider = stored_provider.strip().lower()
+        if stored_model:
+            self.settings.groq_model = stored_model.strip()
+
     def ai_config(self) -> Dict[str, Any]:
         """Admin-visible AI configuration. Never includes the API key."""
         from datetime import datetime, timedelta, timezone
@@ -348,9 +355,6 @@ class Container:
                 user="ping",
                 schema=TEST_SCHEMA,
                 schema_name=TEST_SCHEMA_NAME,
-                # gpt-oss is a reasoning model: a tiny JSON answer still spends
-                # reasoning tokens, so 16 was rejected as json_validate_failed
-                # (empty generation). 128 is the smallest reliable bound.
                 max_tokens=128,
                 temperature=0.0,
             )
@@ -420,6 +424,12 @@ def get_container() -> Container:
     if _CONTAINER is None:
         _CONTAINER = Container(get_settings())
     return _CONTAINER
+
+
+def reset_container() -> None:
+    """For tests: drop the singleton so a new DATABASE_URL is honoured."""
+    global _CONTAINER
+    _CONTAINER = None
 
 
 def _extract_bearer_token(
