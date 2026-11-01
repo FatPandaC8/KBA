@@ -1,5 +1,5 @@
-version: '3.8'
-
+# Local development database. Postgres 16 in Docker, reachable on loopback only.
+# Dev credentials only — match docker-compose.yml.
 services:
   postgres:
     image: postgres:16-alpine
@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: echo
       POSTGRES_PASSWORD: echo_dev_password
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
