@@ -15,68 +15,74 @@ client = TestClient(app)
 
 
 def _seed_large_graph(user_id: str, count: int = 2000):
-    conn = container().db_manager.get_connection()
-    now = "2026-01-01T00:00:00+00:00"
-    entity_rows = []
-    for index in range(count):
-        entity_rows.append(
-            (
-                str(uuid.uuid4()),
-                user_id,
-                "",
-                f"Node {index}",
-                f"node {index}",
-                "concept",
-                "",
-                0.5,
-                "confirmed",
-                "test",
-                "test",
-                "test",
-                0,
-                now,
-                now,
+    from server.app.adapters.outbound.persistence.postgres import get_connection, put_connection
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        now = "2026-01-01T00:00:00+00:00"
+        entity_rows = []
+        for index in range(count):
+            entity_rows.append(
+                (
+                    str(uuid.uuid4()),
+                    user_id,
+                    None,  # capture_id = NULL
+                    f"Node {index}",
+                    f"node {index}",
+                    "concept",
+                    "",
+                    0.5,
+                    "confirmed",
+                    "test",
+                    "test",
+                    "test",
+                    False,
+                    now,
+                    now,
+                )
             )
+        cur.executemany(
+            """
+            INSERT INTO entities
+            (id, user_id, capture_id, name, normalized_name, entity_type, description,
+             confidence, certainty, provenance, provider_id, model_version,
+             user_edited, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            entity_rows,
         )
-    conn.executemany(
-        """
-        INSERT INTO entities
-        (id, user_id, capture_id, name, normalized_name, entity_type, description,
-         confidence, certainty, provenance, provider_id, model_version,
-         user_edited, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        entity_rows,
-    )
-    relation_rows = []
-    for index in range(count - 1):
-        relation_rows.append(
-            (
-                str(uuid.uuid4()),
-                user_id,
-                entity_rows[index][0],
-                entity_rows[index + 1][0],
-                "Related to",
-                "suggested",
-                0.6,
-                "confirmed",
-                "",
-                "test",
-                0,
-                now,
+        relation_rows = []
+        for index in range(count - 1):
+            relation_rows.append(
+                (
+                    str(uuid.uuid4()),
+                    user_id,
+                    entity_rows[index][0],
+                    entity_rows[index + 1][0],
+                    "Related to",
+                    "suggested",
+                    0.6,
+                    "confirmed",
+                    None,  # source_capture_id = NULL
+                    "test",  # provenance
+                    False,  # user_edited
+                    now,
+                )
             )
+        cur.executemany(
+            """
+            INSERT INTO relationships
+            (id, user_id, from_id, to_id, relation_type, status, confidence,
+             certainty, source_capture_id, provenance, user_edited, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            relation_rows,
         )
-    conn.executemany(
-        """
-        INSERT INTO relationships
-        (id, user_id, from_id, to_id, relation_type, status, confidence,
-         certainty, source_capture_id, provenance, user_edited, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        relation_rows,
-    )
-    conn.commit()
-    return entity_rows
+        conn.commit()
+        return entity_rows
+    finally:
+        cur.close()
+        put_connection(conn)
 
 
 def test_graph_layout_is_clustered_and_deterministic(user_factory, monkeypatch):
@@ -105,7 +111,8 @@ def test_graph_handles_two_thousand_nodes_within_budget(user_factory):
 
     assert response.status_code == 200
     body = response.json()
-    assert len(body["nodes"]) == 2000
+    # +1 for the self entity that is automatically created for each user
+    assert len(body["nodes"]) == 2001
     assert len(body["edges"]) == 1999
     assert body["clusters"]
     # Server-side layout must stay interactive for the 2,000 node budget.
@@ -193,7 +200,12 @@ def test_graph_is_scoped_to_the_owner(user_factory, monkeypatch):
     ingest(client, alice, "Alice supports Echo.", monkeypatch)
     alice_node = client.get("/api/graph", headers=alice.headers).json()["nodes"][0]
 
-    assert client.get("/api/graph", headers=bob.headers).json()["nodes"] == []
+    # Bob's graph should only contain his self entity (no other nodes)
+    bob_graph = client.get("/api/graph", headers=bob.headers).json()
+    assert len(bob_graph["nodes"]) == 1
+    assert bob_graph["nodes"][0]["title"] == "Me"
+    assert bob_graph["nodes"][0]["kind"] == "self"
+    assert bob_graph["edges"] == []
     assert (
         client.get(f"/api/graph/entities/{alice_node['id']}", headers=bob.headers).status_code
         == 404

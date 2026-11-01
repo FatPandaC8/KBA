@@ -142,6 +142,7 @@ class ExtractedEntity:
     provider_id: str = ""
     model_version: str = ""
     user_edited: bool = False
+    is_self: bool = False
     created_at: str = field(default_factory=current_utc_iso)
     updated_at: str = field(default_factory=current_utc_iso)
 
@@ -163,6 +164,7 @@ class ExtractedEntity:
         provider_id: str = "",
         model_version: str = "",
         id: Optional[str] = None,
+        is_self: bool = False,
     ) -> "ExtractedEntity":
         clean_name = (name or "").strip()
         if not clean_name:
@@ -183,6 +185,7 @@ class ExtractedEntity:
             provenance=provenance,
             provider_id=provider_id,
             model_version=model_version,
+            is_self=is_self,
         )
 
 
@@ -374,7 +377,56 @@ class CaptureEntity:
     user_id: str = ""
     duration_ms: int = 0
     status: str = CaptureStatus.RECEIVED
+    stage: str = "uploaded"
+    error_class: str = ""
+    error_message: str = ""
+    retry_count: int = 0
+    user_edited_title: bool = False
+    user_edited_summary: bool = False
+    knowledge_item_id: Optional[str] = None
+    has_audio: bool = False
+    audio_on_server: bool = False
     created_at: str = field(default_factory=current_utc_iso)
+    updated_at: str = field(default_factory=current_utc_iso)
+
+
+@dataclass
+class EmailTokenEntity:
+    id: str
+    token_hash: str
+    user_id: str
+    purpose: str
+    expires_at: str
+    consumed_at: Optional[str] = None
+    created_at: str = field(default_factory=current_utc_iso)
+
+
+@dataclass
+class SessionEntity:
+    id: str
+    user_id: str
+    token_hash: str
+    created_at: str
+    last_used_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+
+
+@dataclass
+class ProcessingJobDTO:
+    id: str
+    user_id: str
+    capture_id: Optional[str]
+    stage: str
+    status: str
+    attempt: int
+    error_class: str
+    lease_owner: str
+    lease_expires_at: Optional[str]
+    stage_outputs: Dict[str, Any]
+    duration_ms: Optional[int]
+    error_message: Optional[str]
+    created_at: str
+    updated_at: str
 
 
 @dataclass

@@ -4,15 +4,34 @@ The application container is a process-wide singleton, so every test uses a
 unique email address and the in-process rate limiter is cleared between tests.
 """
 
+import os
 import uuid
 from dataclasses import dataclass
 from typing import Optional
 
 import pytest
 
+from server.app.infrastructure.config import get_settings
 from server.app.security import rate_limiter
 
 PASSWORD = "EchoTest1234"
+
+
+@pytest.fixture(autouse=True)
+def set_admin_token():
+    """Set a default admin token for tests that need it."""
+    settings = get_settings()
+    original = settings.admin_token
+    settings.admin_token = "test-admin-token"
+    yield
+    settings.admin_token = original
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    rate_limiter.reset()
+    yield
+    rate_limiter.reset()
 
 
 @dataclass
@@ -25,13 +44,6 @@ class TestUser:
     @property
     def headers(self) -> dict:
         return {"Authorization": f"Bearer {self.token}"}
-
-
-@pytest.fixture(autouse=True)
-def reset_rate_limiter():
-    rate_limiter.reset()
-    yield
-    rate_limiter.reset()
 
 
 @pytest.fixture

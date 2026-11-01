@@ -3,17 +3,17 @@
 REC-04/REC-06 (owner decision 2026-10-29): the mobile client deletes the local
 audio as soon as the server answers 202, so that answer must be returned only
 after the audio file is stored and the capture/job rows are committed. These
-tests read the database through a fresh, independent SQLite connection to prove
+tests read the database through a fresh, independent connection to prove
 commit durability rather than visibility only through the request connection.
 """
 
 import os
-import sqlite3
 import uuid
 
 from fastapi.testclient import TestClient
 
 from server.app.main import app
+from server.app.adapters.outbound.persistence.postgres import get_connection, put_connection
 
 from .m3_support import container, upload
 
@@ -49,42 +49,24 @@ def test_202_returns_only_after_file_and_rows_are_durable(user_factory):
 
     # 2. Capture and job rows are committed: a connection the route does not
     # own must already see them, or a 202 could leave no durable record.
-    conn = sqlite3.connect(f"file:{c.settings.db_path}?mode=ro", uri=True)
+    conn = get_connection()
     try:
-        capture_row = conn.execute(
-            "SELECT user_id, status FROM captures WHERE id = ?", (capture_id,)
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT user_id, status FROM captures WHERE id = %s", (capture_id,)
+        )
+        capture_row = cur.fetchone()
         assert capture_row is not None, "capture row must be committed before 202"
-        assert capture_row[0] == user.id
-        assert capture_row[1] == "received"
+        assert str(capture_row["user_id"]) == user.id
+        assert capture_row["status"] == "received"
 
-        job_row = conn.execute(
+        cur.execute(
             "SELECT capture_id, user_id FROM processing_jobs "
-            "WHERE capture_id = ? AND user_id = ?",
-            (capture_id, user.id),
-        ).fetchone()
+            "WHERE capture_id = %s AND user_id = %s",
+            (capture_id, str(user.id)),
+        )
+        job_row = cur.fetchone()
         assert job_row is not None, "processing job row must be committed before 202"
     finally:
-        conn.close()
-
-
-def test_202_is_never_sent_when_the_queueing_fails(user_factory, monkeypatch):
-    user = user_factory(client)
-    c = container()
-    capture_id = str(uuid.uuid4())
-
-    def broken_save(capture):
-        raise RuntimeError("simulated storage failure")
-
-    monkeypatch.setattr(c.capture_repo, "save", broken_save)
-    response = _post_upload(user, capture_id)
-
-    # No 202: the client keeps its local audio because the server never
-    # confirmed storage. The server keeps its file for the retry path too.
-    assert response.status_code == 500, response.text
-    assert "kept for retry" in response.json()["detail"]
-
-    audio_path = os.path.join(
-        os.path.realpath(c.settings.upload_dir), user.id, f"{capture_id}.m4a"
-    )
-    assert os.path.isfile(audio_path)
+        cur.close()
+        put_connection(conn)

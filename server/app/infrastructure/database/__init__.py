@@ -149,6 +149,7 @@ class DatabaseManager:
                 provider_id TEXT NOT NULL DEFAULT '',
                 model_version TEXT NOT NULL DEFAULT '',
                 user_edited INTEGER NOT NULL DEFAULT 0,
+                is_self INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT,
                 updated_at TEXT
             );
@@ -274,6 +275,11 @@ class DatabaseManager:
             );
             """
         )
+
+        columns = {row[1] for row in c.execute("PRAGMA table_info(entities)").fetchall()}
+        if "is_self" not in columns:
+            c.execute("ALTER TABLE entities ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_one_self_per_user ON entities(user_id) WHERE is_self = 1")
 
         # SQLite cannot add these constraints to legacy tables without a
         # destructive table rebuild. These triggers provide DB-level ownership

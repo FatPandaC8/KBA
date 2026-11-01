@@ -35,7 +35,9 @@ class KnowledgeGraphWidget extends StatefulWidget {
   final GraphDataModel graph;
   final BackendService backend;
   final GraphFocusRequest? focus;
+  final String? selfNodeId;
   final Future<void> Function() onGraphMutated;
+  final Map<String, Offset>? presetPositions;
 
   const KnowledgeGraphWidget({
     super.key,
@@ -43,6 +45,8 @@ class KnowledgeGraphWidget extends StatefulWidget {
     required this.backend,
     required this.onGraphMutated,
     this.focus,
+    this.selfNodeId,
+    this.presetPositions,
   });
 
   @override
@@ -65,6 +69,7 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
   String? _focusedEdgeId;
   bool _detailOpen = false;
   int _appliedFocusSequence = -1;
+  bool _initialCenterApplied = false;
 
   bool get _collapsed => _scale < _collapsedAtScale;
 
@@ -79,7 +84,6 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
   void didUpdateWidget(KnowledgeGraphWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.graph, widget.graph)) {
-      _fitted = false;
       if (_selectedEntityId != null &&
           !widget.graph.nodes.any((node) => node.id == _selectedEntityId)) {
         _selectedEntityId = null;
@@ -181,10 +185,6 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
     _transform.value = _matrixFor(Offset(contentX, contentY), target);
   }
 
-  void _scheduleFit() {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _fitToView());
-  }
-
   void _fitToView() {
     if (!mounted || _viewport.isEmpty) return;
     if (_bounds.width <= 0 || _bounds.height <= 0) return;
@@ -194,6 +194,14 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
     // The child spans `_bounds.size` starting at the origin, so its centre is
     // half its size — not `_bounds.center` in graph coordinates.
     _transform.value = _matrixFor(_bounds.size.center(Offset.zero), scale);
+  }
+
+  void _centerOnSelf() {
+    final id = widget.selfNodeId;
+    if (id == null || _viewport.isEmpty) return;
+    final center = _centersFor(widget.graph)[id];
+    if (center == null) return;
+    _transform.value = _matrixFor(center - _bounds.topLeft, 0.9);
   }
 
   Future<void> _openEntityDetail(String entityId) async {
@@ -330,7 +338,15 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
         _viewport = Size(constraints.maxWidth, constraints.maxHeight);
         if (!_fitted && !_viewport.isEmpty) {
           _fitted = true;
-          _scheduleFit();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || _initialCenterApplied) return;
+            _initialCenterApplied = true;
+            if (widget.selfNodeId != null) {
+              _centerOnSelf();
+            } else {
+              _fitToView();
+            }
+          });
         }
 
         return Container(
@@ -381,7 +397,36 @@ class _KnowledgeGraphWidgetState extends State<KnowledgeGraphWidget> {
                 ),
               ),
               Positioned(top: 10, right: 10, child: _zoomControls()),
+              if (widget.selfNodeId != null)
+                Positioned(
+                  top: 10,
+                  left: 10,
+                  child: TextButton.icon(
+                    onPressed: _centerOnSelf,
+                    icon: const Icon(
+                      Icons.person_pin_circle_outlined,
+                      size: 16,
+                    ),
+                    label: const Text('Back to Me'),
+                    style: TextButton.styleFrom(
+                      backgroundColor: Colors.white.withValues(alpha: 0.92),
+                      foregroundColor: EchoColors.forest,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                  ),
+                ),
               Positioned(left: 10, bottom: 10, child: _legend()),
+              if (graph.nodes.length == 1 && graph.nodes.first.isSelf)
+                const Positioned(
+                  left: 20,
+                  right: 20,
+                  bottom: 56,
+                  child: Text(
+                    'No data yet. Record something to get started.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: EchoColors.muted),
+                  ),
+                ),
               if (_collapsed)
                 Positioned(
                   left: 10,

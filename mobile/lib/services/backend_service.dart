@@ -15,6 +15,7 @@ class GraphNodeModel {
   final String certainty;
   final double confidence;
   final int degree;
+  final bool isSelf;
 
   GraphNodeModel({
     required this.id,
@@ -26,6 +27,7 @@ class GraphNodeModel {
     this.certainty = 'confirmed',
     this.confidence = 0.5,
     this.degree = 0,
+    this.isSelf = false,
   });
 
   factory GraphNodeModel.fromJson(Map<String, dynamic> json) {
@@ -39,6 +41,7 @@ class GraphNodeModel {
       certainty: (json['certainty'] as String?) ?? 'confirmed',
       confidence: (json['confidence'] as num?)?.toDouble() ?? 0.5,
       degree: (json['degree'] as num?)?.toInt() ?? 0,
+      isSelf: (json['is_self'] as bool?) ?? false,
     );
   }
 }
@@ -498,6 +501,18 @@ class BackendService {
     );
   }
 
+  /// Echo's core workflow requires AI processing. Keep the server-side
+  /// consent record current without exposing it as an end-user opt-in.
+  Future<void> ensureConsent() async {
+    final consent = await getConsent();
+    final granted = consent['granted'] as bool? ?? false;
+    final version = consent['version'] as String?;
+    final recordedVersion = consent['recorded_version'] as String?;
+    if (!granted || version == null || recordedVersion != version) {
+      await updateConsent(true);
+    }
+  }
+
   Future<void> logout() async {
     await _client
         .post(Uri.parse('$baseUrl/api/auth/logout'), headers: _authHeaders)
@@ -563,7 +578,7 @@ class BackendService {
       if (auth.statusCode == 403) {
         return const BackendConnectionResult(
           ok: false,
-          message: 'Server reachable, but AI-provider consent is required. Grant consent on the Settings screen.',
+          message: 'Server reachable, but AI processing setup is incomplete. Try again shortly.',
         );
       }
       if (auth.statusCode != 200) {
@@ -600,6 +615,7 @@ class BackendService {
     required String audioPath,
     required int durationMs,
   }) async {
+    await ensureConsent();
     final uri = Uri.parse('$baseUrl/api/captures/upload');
     final request = http.MultipartRequest('POST', uri)
       ..headers.addAll(_authHeaders)

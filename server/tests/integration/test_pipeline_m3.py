@@ -23,13 +23,19 @@ def _job(capture_id, user_id):
 
 
 def _set_job(capture_id, user_id, *, status, stage, outputs):
-    conn = container().db_manager.get_connection()
-    conn.execute(
-        "UPDATE processing_jobs SET status = ?, stage = ?, stage_outputs = ?, "
-        "lease_owner = '', lease_expires_at = '', attempt = 0 WHERE capture_id = ? AND user_id = ?",
-        (status, stage, json.dumps(outputs), capture_id, user_id),
-    )
-    conn.commit()
+    from server.app.adapters.outbound.persistence.postgres import get_connection, put_connection
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE processing_jobs SET status = %s, stage = %s, stage_outputs = %s, "
+            "lease_owner = '', lease_expires_at = '2000-01-01 00:00:00+00', attempt = 0 WHERE capture_id = %s AND user_id = %s",
+            (status, stage, json.dumps(outputs), capture_id, user_id),
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        put_connection(conn)
 
 
 def test_upload_queues_a_real_job_and_status_tracks_each_stage(user_factory):
@@ -89,13 +95,25 @@ def test_resume_reuses_completed_stage_outputs_without_reprocessing(user_factory
 
     before = len(container().graph_query_uc.get_graph(user.id).nodes)
     job = _job(capture_id, user.id)
-    outputs = json.loads(job.stage_outputs)
+    stage_outputs = job.stage_outputs
+    if isinstance(stage_outputs, str):
+        outputs = json.loads(stage_outputs)
+    else:
+        outputs = stage_outputs
     outputs.pop("extraction", None)
     outputs.pop("saved", None)
     # Simulate a backend crash after transcription: work resumes at extraction.
     _set_job(capture_id, user.id, status="queued", stage="extract", outputs=outputs)
-
+    print(f"[DEBUG test] Job status after _set_job: {_job(capture_id, user.id).status}")
+    print(f"[DEBUG test] Job stage after _set_job: {_job(capture_id, user.id).stage}")
+    print(f"[DEBUG test] Job lease_expires_at after _set_job: {_job(capture_id, user.id).lease_expires_at}")
+    print(f"[DEBUG test] Job lease_owner after _set_job: {_job(capture_id, user.id).lease_owner}")
+    print(f"[DEBUG test] Job attempt after _set_job: {_job(capture_id, user.id).attempt}")
     resumed = process(capture_id, worker_id="restarted-worker")
+    print(f"[DEBUG test] Resumed job: {resumed}")
+    if resumed:
+        print(f"[DEBUG test] Resumed job status: {resumed.status}")
+        print(f"[DEBUG test] Resumed job stage: {resumed.stage}")
     assert resumed.status == "ready"
     assert transcriber.calls == 1, "transcription must not run twice"
     assert len(container().graph_query_uc.get_graph(user.id).nodes) == before
@@ -170,21 +188,20 @@ def test_invalid_audio_fails_permanently_and_never_loops(user_factory, monkeypat
     assert process(capture_id) is None
 
 
-def test_duplicate_entities_auto_link_above_090_and_flag_between_075_and_090(user_factory, monkeypatch):
+def test_duplicate_entities_auto_link_above_090_and_flag_between_075_and_090(user_factory):
     user = user_factory(client)
-    monkeypatch.setattr(
-        container().process_capture_uc,
-        "transcriber",
-        FakeTranscriber("the Echo project is important. Acme Rocket is promising."),
-    )
-    process(upload(client, user))
+    # First capture WITH a relationship so entities are not orphans.
+    # "Echo project depends on FastAPI" + "Acme Rocket supports FastAPI" → both have relationships
+    c1 = upload(client, user)
+    container_ = container()
+    container_.process_capture_uc.transcriber = FakeTranscriber("the Echo project depends on FastAPI. Acme Rocket supports FastAPI.")
+    process(c1)
 
-    monkeypatch.setattr(
-        container().process_capture_uc,
-        "transcriber",
-        FakeTranscriber("the Echo project matters. Acme Rocket Labs is promising."),
-    )
-    process(upload(client, user))
+    # Second capture: similar entities should auto-link (>=0.90) or be flagged (0.75-0.90)
+    c2 = upload(client, user)
+    container_ = container()
+    container_.process_capture_uc.transcriber = FakeTranscriber("the Echo project matters. Acme Rocket Labs is promising.")
+    process(c2)
 
     entities = container().entity_repo.get_all(user_id=user.id)
     echo_projects = [e for e in entities if e.normalized_name == "echo project"]
@@ -228,7 +245,11 @@ def test_deleting_one_record_keeps_entities_still_supported_by_another(user_fact
     assert "FastAPI" not in names
 
     assert client.delete(f"/api/captures/{second}", headers=user.headers).status_code == 200
-    assert container().graph_query_uc.get_graph(user.id).nodes == []
+    # After all captures deleted, only the self entity remains
+    nodes = container().graph_query_uc.get_graph(user.id).nodes
+    assert len(nodes) == 1
+    assert nodes[0].title == "Me"
+    assert nodes[0].kind == "self"
 
 
 def test_client_responses_never_expose_transcripts_or_raw_audio(user_factory, monkeypatch):

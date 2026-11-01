@@ -60,6 +60,7 @@ def entity_to_dto(e: KnowledgeItemEntity) -> KnowledgeItemDTO:
         updated_at=e.updated_at,
         provider_id=e.provider_id,
         model_version=e.model_version,
+        is_self=False,  # KnowledgeItemEntity doesn't have is_self; only ExtractedEntity does
     )
 
 
@@ -72,7 +73,7 @@ def extracted_entity_to_dto(e: ExtractedEntity) -> EntityDTO:
         confidence=e.confidence,
         certainty=e.certainty,
         provenance=e.provenance,
-        capture_id=e.capture_id,
+        capture_id=e.capture_id or "",
         created_at=e.created_at,
         updated_at=e.updated_at,
         provider_id=e.provider_id,
@@ -237,6 +238,9 @@ class ManageRelationshipsUseCase:
         if not self.rel_repo.get_by_id(rel_id, user_id=user_id):
             return False
         self.rel_repo.delete(rel_id, user_id=user_id)
+        # The entity repo may not be directly available here; cleanup will run
+        # on the next extraction or capture deletion. For immediate consistency
+        # the caller (GraphQueryUseCase.delete_relationship) also invokes cleanup.
         return True
 
 
@@ -352,11 +356,13 @@ class DeleteCaptureUseCase:
             self.rel_repo.delete(rel_id, user_id=user_id)
             relationships_removed += 1
 
-        self.knowledge_repo.delete(capture_id, user_id=user_id)
+        self.knowledge_repo.delete_by_capture_id(capture_id, user_id=user_id)
         jobs_deleted = self.job_repo.delete_by_capture_id(capture_id, user_id=user_id)
         eval_deleted = self.eval_repo.delete_by_capture_id(capture_id, user_id=user_id)
         if capture:
             self.capture_repo.delete(capture_id, user_id=user_id)
+
+        self.entity_repo.cleanup_orphans(user_id)
 
         return {
             "deleted": capture is not None,

@@ -162,6 +162,9 @@ class GraphQueryUseCase:
     def update_entity(
         self, user_id: str, entity_id: str, name: Optional[str], description: Optional[str]
     ) -> EntityDTO:
+        entity = self.entity_repo.get_by_id(entity_id, user_id=user_id)
+        if entity and entity.is_self:
+            raise ValidationError("The self entity is system-managed.")
         if name is not None and not name.strip():
             raise ValidationError("Entity name cannot be empty")
         if not self.entity_repo.update_fields(entity_id, user_id, name, description):
@@ -173,12 +176,15 @@ class GraphQueryUseCase:
         entity = self.entity_repo.get_by_id(entity_id, user_id=user_id)
         if not entity:
             raise EntityNotFoundError("Entity", entity_id)
+        if entity.is_self:
+            raise ValidationError("The self entity is system-managed.")
         self.tombstone_repo.add(user_id, "entity", entity.normalized_name)
         self.rel_repo.delete_for_entity(entity_id, user_id=user_id)
         self.support_repo.delete_for_target(user_id, "entity", entity_id)
         self.duplicate_repo.delete_for_entity(entity_id, user_id=user_id)
         self.embedding_repo.delete(entity_id, user_id=user_id)
         self.entity_repo.delete(entity_id, user_id=user_id)
+        self.entity_repo.cleanup_orphans(user_id)
 
     # ----------------------------------------------------------- relationships
     def delete_relationship(self, user_id: str, relationship_id: str) -> None:
@@ -187,6 +193,7 @@ class GraphQueryUseCase:
         self.support_repo.delete_for_target(user_id, "relationship", relationship_id)
         self.embedding_repo.delete(relationship_id, user_id=user_id)
         self.rel_repo.delete(relationship_id, user_id=user_id)
+        self.entity_repo.cleanup_orphans(user_id)
 
     def update_relationship(
         self, user_id: str, relationship_id: str, status: str, relation_type: Optional[str] = None

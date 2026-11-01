@@ -21,6 +21,7 @@ class KnowledgeItemDTO:
     updated_at: str
     provider_id: str = ""
     model_version: str = ""
+    is_self: bool = False
 
 
 @dataclass
@@ -63,6 +64,7 @@ class GraphNodeDTO:
     certainty: str = "confirmed"
     confidence: float = 0.5
     degree: int = 0
+    is_self: bool = False
 
 
 @dataclass

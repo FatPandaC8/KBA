@@ -414,7 +414,7 @@ class NoteProvider extends ChangeNotifier {
       return 'Your session is no longer valid. Sign in again; the recording is kept on this device.';
     }
     if (errorClass == 'consent_required') {
-      return 'AI-provider consent is required. Open Settings and grant consent before recording.';
+      return 'AI processing is not ready yet. Try recording again in a moment.';
     }
     if (errorClass == 'verification_required') {
       return 'Verify your email before recording. Your capture is kept on this device.';
@@ -447,7 +447,7 @@ class NoteProvider extends ChangeNotifier {
       case 'auth':
         return 'Your session is no longer valid. Sign in again; the recording is kept on this device.';
       case 'consent_required':
-        return 'AI-provider consent is required. Open Settings and grant consent before recording.';
+        return 'AI processing is not ready yet. Try recording again in a moment.';
       case 'verification_required':
         return 'Verify your email before recording. Your capture is kept on this device.';
       case 'forbidden':

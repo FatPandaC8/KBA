@@ -364,6 +364,7 @@ def get_graph(
                 certainty=n.certainty,
                 confidence=n.confidence,
                 degree=n.degree,
+                is_self=n.is_self,
             )
             for n in graph_dto.nodes
         ],

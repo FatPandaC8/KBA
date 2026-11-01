@@ -35,8 +35,11 @@ class AdminConsoleUseCase:
     def overview(self) -> Dict[str, Any]:
         conn = self.db.get_connection()
         counts = {}
-        for key, table in (("users", "users"), ("captures", "captures"), ("entities", "entities"), ("relationships", "relationships")):
+        for key, table in (("users", "users"), ("captures", "captures"), ("relationships", "relationships")):
             counts[key] = conn.execute(f"SELECT count(*) AS count FROM {table}").fetchone()["count"]
+        counts["entities"] = conn.execute(
+            "SELECT count(*) AS count FROM entities WHERE is_self = 0"
+        ).fetchone()["count"]
         statuses = [dict(row) for row in conn.execute("SELECT status, count(*) AS count FROM captures GROUP BY status ORDER BY status")]
         failures = [dict(row) for row in conn.execute("SELECT error_class, count(*) AS count FROM processing_jobs WHERE status = 'failed' GROUP BY error_class ORDER BY count DESC")]
         recent = [dict(row) for row in conn.execute("SELECT actor, action, resource_type, outcome, created_at FROM admin_audit_log ORDER BY created_at DESC LIMIT 8")]
@@ -46,7 +49,7 @@ class AdminConsoleUseCase:
         term = f"%{q.strip().lower()}%"
         sql = """SELECT u.id, u.email, u.email_verified_at, u.created_at,
             (SELECT count(*) FROM captures c WHERE c.user_id = u.id) AS capture_count,
-            (SELECT count(*) FROM entities e WHERE e.user_id = u.id) AS entity_count,
+            (SELECT count(*) FROM entities e WHERE e.user_id = u.id AND e.is_self = 0) AS entity_count,
             (SELECT count(*) FROM relationships r WHERE r.user_id = u.id) AS relationship_count
             FROM users u WHERE lower(u.email) LIKE ? ORDER BY u.created_at DESC"""
         return self._page(sql, [term], limit, offset)
@@ -90,7 +93,7 @@ class AdminConsoleUseCase:
             (user_id,),
         )]
         data["entities"] = [dict(row) for row in conn.execute(
-            "SELECT id, name, entity_type, capture_id FROM entities WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
+            "SELECT id, name, entity_type, capture_id, is_self FROM entities WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
             (user_id,),
         )]
         data["relationships"] = [dict(row) for row in conn.execute(
@@ -181,7 +184,7 @@ class AdminConsoleUseCase:
         clauses, params = ["1=1"], []
         if q.strip(): clauses.append("(lower(e.name) LIKE ? OR lower(e.description) LIKE ?)"); params.extend([f"%{q.strip().lower()}%"] * 2)
         if user_id: clauses.append("e.user_id = ?"); params.append(user_id)
-        return self._page(f"SELECT e.id, e.user_id, e.name, e.entity_type, e.description, e.confidence, e.certainty, e.capture_id, e.created_at FROM entities e WHERE {' AND '.join(clauses)} ORDER BY e.created_at DESC", params, limit, offset)
+        return self._page(f"SELECT e.id, e.user_id, e.name, e.entity_type, e.description, e.confidence, e.certainty, e.capture_id, e.created_at, e.is_self FROM entities e WHERE {' AND '.join(clauses)} ORDER BY e.created_at DESC", params, limit, offset)
 
     def graph_relationships(self, q: str, user_id: str, limit: int, offset: int) -> Dict[str, Any]:
         clauses, params = ["1=1"], []

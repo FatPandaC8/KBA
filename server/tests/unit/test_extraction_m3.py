@@ -3,6 +3,8 @@
 import pytest
 
 from server.app.adapters.outbound.extraction import SemanticKnowledgeExtractor
+from server.app.adapters.outbound.extraction.groq import GroqExtractionAdapter
+from server.app.adapters.outbound.llm.fake import FakeLLMClient, FakeScript
 from server.app.domain.errors import ValidationError
 from server.app.domain.value_objects import Certainty, EntityType, RelationType
 
@@ -17,6 +19,13 @@ def _extract(transcript=TRANSCRIPT, capture_id="capture-1", user_id="user-1"):
     return SemanticKnowledgeExtractor().extract_graph(
         transcript, capture_id, user_id=user_id
     )
+
+
+def _extract_groq(transcript, capture_id, user_id, fake_response):
+    """Helper to test Groq extractor with a fake LLM response."""
+    fake_client = FakeLLMClient(script=[FakeScript(content=fake_response)])
+    adapter = GroqExtractionAdapter(client=fake_client)
+    return adapter.extract_graph(transcript, capture_id, user_id=user_id)
 
 
 def test_extraction_is_deterministic_with_stable_ids_and_provenance():
@@ -69,7 +78,7 @@ def test_negated_dependency_is_never_extracted_as_contradiction():
 
 def test_co_occurrence_alone_never_creates_an_edge():
     # U1: two entities mentioned together without a typed cue stay unlinked.
-    result = _extract("I met Alice about the Echo project.")
+    result = _extract("I saw Alice near the Echo project.")
     assert result.relationships == []
 
 
@@ -88,3 +97,73 @@ def test_cued_relationship_keeps_evidence_and_direction():
 def test_empty_transcript_is_rejected():
     with pytest.raises(ValidationError):
         _extract("   ")
+
+
+def test_local_extractor_maps_first_person_to_self_entity():
+    """First-person pronouns (i, me, etc.) map to the self entity."""
+    result = _extract("Today I met Minh.", capture_id="cap-1", user_id="user-1")
+
+    # Should have self entity
+    self_entities = [e for e in result.entities if e.is_self]
+    assert len(self_entities) == 1
+    self_entity = self_entities[0]
+    assert self_entity.name == "Me"
+    assert self_entity.entity_type == EntityType.SELF
+
+    # Should have Minh entity
+    minh_entities = [e for e in result.entities if e.normalized_name == "minh"]
+    assert len(minh_entities) == 1
+
+    # Should have relationship from self to Minh
+    rels = [r for r in result.relationships if r.from_id == self_entity.id]
+    assert len(rels) >= 1
+    assert rels[0].to_id == minh_entities[0].id
+
+
+def test_local_extractor_maps_english_first_person_to_self():
+    """English first-person pronouns (I, me, we) map to the self entity."""
+    result = _extract("I met Alice yesterday.", capture_id="cap-2", user_id="user-2")
+
+    self_entities = [e for e in result.entities if e.is_self]
+    assert len(self_entities) == 1
+
+    alice_entities = [e for e in result.entities if e.normalized_name == "alice"]
+    assert len(alice_entities) == 1
+
+    # Relationship from self to Alice
+    rels = [r for r in result.relationships if r.from_id == self_entities[0].id]
+    assert len(rels) >= 1
+    assert rels[0].to_id == alice_entities[0].id
+
+
+def test_groq_extractor_maps_first_person_to_self_entity():
+    """Groq extractor also maps first-person references to self entity via post-processing."""
+    # Fake LLM response that includes a first-person entity
+    fake_response = {
+        "title": "Meeting with Minh",
+        "core_idea": "User met Minh today.",
+        "entities": [
+            {"name": "Me", "type": "person", "confidence": 0.9},
+            {"name": "Minh", "type": "person", "confidence": 0.9},
+        ],
+        "relationships": [
+            {"source": "Me", "target": "Minh", "relation_type": "Met", "confidence": 0.9, "evidence": "I met Minh"}
+        ]
+    }
+    result = _extract_groq("Today I met Minh.", "cap-3", "user-3", fake_response)
+
+    # Should have self entity (added by post-processing)
+    self_entities = [e for e in result.entities if e.is_self]
+    assert len(self_entities) == 1
+    self_entity = self_entities[0]
+    assert self_entity.name == "Me"
+    assert self_entity.entity_type == EntityType.SELF
+
+    # Should have Minh entity
+    minh_entities = [e for e in result.entities if e.normalized_name == "minh"]
+    assert len(minh_entities) == 1
+
+    # Relationship should be from self to Minh
+    rels = [r for r in result.relationships if r.from_id == self_entity.id]
+    assert len(rels) >= 1
+    assert rels[0].to_id == minh_entities[0].id

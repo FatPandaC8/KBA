@@ -172,6 +172,7 @@ def _layout_graph(entity_rows, rel_rows) -> Tuple[List[GraphNodeDTO], List[Graph
             certainty=row["certainty"] if "certainty" in row.keys() and row["certainty"] else "confirmed",
             confidence=float(row["confidence"]) if "confidence" in row.keys() and row["confidence"] is not None else 0.5,
             degree=degree.get(eid, 0),
+            is_self=bool(row["is_self"]) if "is_self" in row.keys() else False,
         ))
 
     edges: List[GraphEdgeDTO] = []
@@ -224,6 +225,15 @@ class SqliteUserRepository(UserRepositoryPort):
                 user.created_at,
                 user.updated_at,
             ),
+        )
+        conn.execute(
+            """INSERT INTO entities
+               (id, user_id, capture_id, name, normalized_name, entity_type,
+                description, confidence, certainty, provenance, provider_id,
+                model_version, user_edited, is_self, created_at, updated_at)
+               VALUES (?, ?, NULL, ?, ?, 'self', '', 1.0, 'confirmed',
+                       'system', '', '', 0, 1, ?, ?)""",
+            (str(uuid.uuid4()), user.id, "Me", "me", user.created_at, user.updated_at),
         )
         conn.commit()
 
@@ -319,8 +329,18 @@ class SqliteSessionRepository(SessionRepositoryPort):
         return SqliteUserRepository(self.db)._row_to_entity(r)
 
     def touch(self, token_hash: str) -> None:
+        # Throttle to once per ~60s to avoid write-on-read.
         conn = self.db.get_connection()
-        conn.execute("UPDATE sessions SET last_used_at = ? WHERE token_hash = ?", (current_utc_iso(), token_hash))
+        conn.execute(
+            """
+            UPDATE sessions
+            SET last_used_at = ?
+            WHERE token_hash = ?
+              AND (last_used_at IS NULL
+                   OR last_used_at < datetime(?, '-60 seconds'))
+            """,
+            (current_utc_iso(), token_hash, current_utc_iso()),
+        )
         conn.commit()
 
     def revoke(self, token_hash: str) -> None:
@@ -790,7 +810,7 @@ class SqliteRelationshipRepository(RelationshipRepositoryPort):
         rel_where, rel_params = _where_scoped("user_id", user_id)
         entity_rows = conn.execute(
             f"""
-            SELECT id, name, entity_type, certainty, confidence
+            SELECT id, name, entity_type, certainty, confidence, is_self
             FROM entities{entity_where}
             ORDER BY id
             """,
@@ -851,8 +871,8 @@ class SqliteEntityRepository(EntityRepositoryPort):
             INSERT INTO entities
             (id, user_id, capture_id, name, normalized_name, entity_type, description,
              confidence, certainty, provenance, provider_id, model_version,
-             user_edited, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             user_edited, is_self, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = CASE WHEN entities.user_edited = 1 THEN entities.name ELSE excluded.name END,
                 normalized_name = CASE WHEN entities.user_edited = 1 THEN entities.normalized_name ELSE excluded.normalized_name END,
@@ -865,6 +885,7 @@ class SqliteEntityRepository(EntityRepositoryPort):
                     ELSE excluded.certainty END,
                 provider_id = excluded.provider_id,
                 model_version = excluded.model_version,
+                is_self = entities.is_self,
                 updated_at = excluded.updated_at
             WHERE entities.user_id = excluded.user_id
             """,
@@ -882,6 +903,7 @@ class SqliteEntityRepository(EntityRepositoryPort):
                 entity.provider_id,
                 entity.model_version,
                 1 if entity.user_edited else 0,
+                1 if entity.is_self else 0,
                 entity.created_at,
                 entity.updated_at,
             ),
@@ -903,6 +925,14 @@ class SqliteEntityRepository(EntityRepositoryPort):
             params.append(limit)
         rows = self.db.get_connection().execute(sql, tuple(params)).fetchall()
         return [self._row_to_entity(r) for r in rows]
+
+    def get_self_entity(self, user_id: str) -> Optional[ExtractedEntity]:
+        """Get the self entity for a user (is_self = 1)."""
+        row = self.db.get_connection().execute(
+            "SELECT * FROM entities WHERE user_id = ? AND is_self = 1 LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        return self._row_to_entity(row) if row else None
 
     def list_by_capture(self, capture_id: str, user_id: Optional[str] = None) -> List[ExtractedEntity]:
         clause, params = _scoped("user_id", user_id)
@@ -953,6 +983,17 @@ class SqliteEntityRepository(EntityRepositoryPort):
         conn.commit()
         return True
 
+    def cleanup_orphans(self, user_id: str) -> int:
+        conn = self.db.get_connection()
+        cur = conn.execute(
+            """DELETE FROM entities WHERE user_id=? AND is_self=0 AND NOT EXISTS
+               (SELECT 1 FROM relationships r WHERE r.user_id=entities.user_id
+                AND (r.from_id=entities.id OR r.to_id=entities.id))""",
+            (user_id,),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+
     def _row_to_entity(self, r: sqlite3.Row) -> ExtractedEntity:
         return ExtractedEntity(
             id=r["id"],
@@ -967,6 +1008,7 @@ class SqliteEntityRepository(EntityRepositoryPort):
             provider_id=r["provider_id"] or "",
             model_version=r["model_version"] or "",
             user_edited=bool(r["user_edited"]),
+            is_self=bool(r["is_self"]) if "is_self" in r.keys() else False,
             created_at=r["created_at"],
             updated_at=r["updated_at"],
         )

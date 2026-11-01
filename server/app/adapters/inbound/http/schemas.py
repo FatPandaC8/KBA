@@ -68,6 +68,7 @@ class GraphNode(BaseModel):
     certainty: str = "confirmed"
     confidence: float = 0.5
     degree: int = 0
+    is_self: bool = False
 
 
 class GraphEdge(BaseModel):
@@ -108,6 +109,7 @@ class EntityResponse(BaseModel):
     updated_at: str
     provider_id: str = ""
     model_version: str = ""
+    is_self: bool = False
 
 
 class EntityDetailRelationship(BaseModel):

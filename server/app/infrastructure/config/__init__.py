@@ -78,7 +78,10 @@ def _provider_entry(
 @dataclass
 class ServerSettings:
     app_env: str = os.getenv("ECHO_ENV", "production")
+    # Database configuration: either SQLite path (ECHO_DB_PATH) or PostgreSQL URL (DATABASE_URL)
+    # If DATABASE_URL is set, PostgreSQL is used; otherwise SQLite with db_path.
     db_path: str = os.getenv("ECHO_DB_PATH", "server/echo_backend.db")
+    database_url: str = os.getenv("DATABASE_URL", "")
     upload_dir: str = os.getenv("ECHO_UPLOAD_DIR", "server/uploads")
     pipeline_version: str = "v2.0-echo-mvp"
     max_voice_seconds: int = int(os.getenv("ECHO_MAX_VOICE_SECONDS", "120"))

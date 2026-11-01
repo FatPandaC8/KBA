@@ -28,6 +28,7 @@ from server.app.adapters.outbound.persistence import (
     SqliteLLMUsageRepository,
     SqliteAppSettingsRepository,
 )
+from server.app.adapters.outbound.persistence.factory import get_container as get_persistence_container
 from server.app.adapters.outbound.embeddings import FastEmbedProvider
 from server.app.adapters.outbound.speech import FasterWhisperSpeechAdapter
 from server.app.adapters.outbound.extraction import SemanticKnowledgeExtractor
@@ -59,28 +60,33 @@ logger = logging.getLogger("echo.container")
 class Container:
     def __init__(self, settings: ServerSettings):
         self.settings = settings
-        self.db_manager = DatabaseManager(settings.db_path)
-        self.db_manager.init_database()
+
+        # Use factory to get the appropriate persistence container (SQLite or PostgreSQL)
+        persistence = get_persistence_container()
 
         # Repositories
-        self.knowledge_repo = SqliteKnowledgeRepository(self.db_manager)
-        self.entity_repo = SqliteEntityRepository(self.db_manager)
-        self.rel_repo = SqliteRelationshipRepository(self.db_manager)
-        self.duplicate_repo = SqliteDuplicateCandidateRepository(self.db_manager)
-        self.embedding_repo = SqliteEmbeddingRepository(self.db_manager)
-        self.capture_repo = SqliteCaptureRepository(self.db_manager)
-        self.eval_repo = SqliteEvalRecordRepository(self.db_manager)
-        self.job_repo = SqliteJobStatusRepository(self.db_manager)
-        self.user_repo = SqliteUserRepository(self.db_manager)
-        self.session_repo = SqliteSessionRepository(self.db_manager)
-        self.email_token_repo = SqliteEmailTokenRepository(self.db_manager)
-        self.consent_repo = SqliteConsentRepository(self.db_manager)
-        self.tombstone_repo = SqliteTombstoneRepository(self.db_manager)
-        self.support_repo = SqliteRecordSupportRepository(self.db_manager)
-        self.rel_type_repo = SqliteRelationshipTypeRegistryRepository(self.db_manager)
-        self.audit_repo = SqliteAdminAuditLogRepository(self.db_manager)
-        self.llm_usage_repo = SqliteLLMUsageRepository(self.db_manager)
-        self.app_settings_repo = SqliteAppSettingsRepository(self.db_manager)
+        self.knowledge_repo = persistence.knowledge_repo
+        self.entity_repo = persistence.entity_repo
+        self.rel_repo = persistence.rel_repo
+        self.duplicate_repo = persistence.duplicate_repo
+        self.embedding_repo = persistence.embedding_repo
+        self.capture_repo = persistence.capture_repo
+        self.eval_repo = persistence.eval_repo if hasattr(persistence, 'eval_repo') else SqliteEvalRecordRepository(self.db_manager)
+        self.job_repo = persistence.job_repo
+        self.user_repo = persistence.user_repo
+        self.session_repo = persistence.session_repo
+        self.email_token_repo = persistence.email_token_repo
+        self.consent_repo = persistence.consent_repo
+        self.tombstone_repo = persistence.tombstone_repo
+        self.support_repo = persistence.support_repo
+        self.rel_type_repo = persistence.relationship_type_repo
+        self.audit_repo = persistence.audit_repo if hasattr(persistence, 'audit_repo') else SqliteAdminAuditLogRepository(self.db_manager)
+        self.llm_usage_repo = persistence.llm_usage_repo if hasattr(persistence, 'llm_usage_repo') else SqliteLLMUsageRepository(self.db_manager)
+        self.app_settings_repo = persistence.app_settings_repo if hasattr(persistence, 'app_settings_repo') else SqliteAppSettingsRepository(self.db_manager)
+
+        # For SQLite, we still need the db_manager for some repositories
+        self.db_manager = DatabaseManager(settings.db_path)
+        self.db_manager.init_database()
 
         # Runtime overrides from the admin console survive a restart. The env
         # var remains the default; the persisted selection wins only when an

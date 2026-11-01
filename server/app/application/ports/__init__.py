@@ -188,6 +188,10 @@ class EntityRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    def get_self_entity(self, user_id: str) -> Optional[ExtractedEntity]:
+        pass
+
+    @abstractmethod
     def list_by_capture(self, capture_id: str, user_id: Optional[str] = None) -> List[ExtractedEntity]:
         pass
 
@@ -205,6 +209,11 @@ class EntityRepositoryPort(ABC):
 
     @abstractmethod
     def update_fields(self, entity_id: str, user_id: str, name: Optional[str], description: Optional[str]) -> bool:
+        pass
+
+    @abstractmethod
+    def cleanup_orphans(self, user_id: str) -> int:
+        """Delete non-self entities with no relationship endpoints."""
         pass
 
 

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
@@ -44,15 +45,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Set<String> _readySignature = {};
   Timer? _reloadTimer;
+  bool _hasNewGraphData = false;
+
+  // For incremental graph updates
+  Map<String, Offset> _nodePositions = {};
 
   @override
   void initState() {
     super.initState();
     widget.noteProvider.addListener(_onProviderChanged);
     _readySignature = _currentReadySignature();
-    // Graph is intentionally lazy: the initial canvas is a quiet search
-    // surface, not a dump of every entity in the account.
-    _loading = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadGraph());
   }
 
   @override
@@ -87,7 +90,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final signature = _currentReadySignature();
     if (setEquals(signature, _readySignature)) return;
     _readySignature = signature;
-    if (_graph != null) _loadGraph();
+    if (_graph != null && mounted) setState(() => _hasNewGraphData = true);
   }
 
   Future<void> _loadGraph() async {
@@ -102,13 +105,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     try {
       final graph = await widget.noteProvider.backendService.fetchGraph();
       if (!mounted) return;
-      setState(() {
-        _graph = graph;
-        _loading = false;
-        _loadError = null;
-        _graphErrorMessage = null;
-        _graphErrorSubmessage = null;
-      });
+      _mergeGraphData(graph, isFullReload: true);
       // Connectivity returned: stop the background reload attempts.
       _reloadTimer?.cancel();
       _reloadTimer = null;
@@ -144,6 +141,116 @@ class _LibraryScreenState extends State<LibraryScreen> {
       });
       _scheduleAutoReload();
     }
+  }
+
+  /// Merges new graph data with existing graph, preserving node positions for
+  /// existing nodes and placing new nodes near their connected neighbors.
+  void _mergeGraphData(GraphDataModel newGraph, {required bool isFullReload}) {
+    final oldGraph = _graph;
+    
+    if (oldGraph == null || isFullReload) {
+      // First load or explicit full reload: use server positions as base
+      _nodePositions = {
+        for (final node in newGraph.nodes) node.id: Offset(node.x, node.y),
+      };
+      setState(() {
+        _graph = newGraph;
+        _hasNewGraphData = false;
+        _loading = false;
+        _loadError = null;
+        _graphErrorMessage = null;
+        _graphErrorSubmessage = null;
+      });
+      return;
+    }
+
+    // Incremental merge: preserve existing node positions
+    final oldNodeIds = oldGraph.nodes.map((n) => n.id).toSet();
+    final newNodeIds = newGraph.nodes.map((n) => n.id).toSet();
+    final addedNodeIds = newNodeIds.difference(oldNodeIds);
+    final removedNodeIds = oldNodeIds.difference(newNodeIds);
+
+    // Build adjacency for new nodes to find neighbors
+    final adjacency = <String, Set<String>>{};
+    for (final node in newGraph.nodes) {
+      adjacency[node.id] = <String>{};
+    }
+    for (final edge in newGraph.edges) {
+      if (adjacency.containsKey(edge.fromNode) && adjacency.containsKey(edge.toNode)) {
+        adjacency[edge.fromNode]!.add(edge.toNode);
+        adjacency[edge.toNode]!.add(edge.fromNode);
+      }
+    }
+
+    // Preserve positions for existing nodes
+    final mergedPositions = Map<String, Offset>.from(_nodePositions);
+    
+    // Remove positions for deleted nodes
+    for (final id in removedNodeIds) {
+      mergedPositions.remove(id);
+    }
+
+    // Place new nodes near their neighbors
+    for (final node in newGraph.nodes) {
+      if (addedNodeIds.contains(node.id)) {
+        final neighbors = adjacency[node.id] ?? <String>{};
+        final knownNeighbors = neighbors.where(mergedPositions.containsKey).toList();
+        
+        if (knownNeighbors.isNotEmpty) {
+          // Average position of known neighbors
+          double avgX = 0, avgY = 0;
+          for (final nbrId in knownNeighbors) {
+            final pos = mergedPositions[nbrId]!;
+            avgX += pos.dx;
+            avgY += pos.dy;
+          }
+          avgX /= knownNeighbors.length;
+          avgY /= knownNeighbors.length;
+          // Add small random offset to avoid exact overlap
+          final angle = math.Random(node.id.hashCode).nextDouble() * 2 * math.pi;
+          const radius = 80.0;
+          mergedPositions[node.id] = Offset(
+            avgX + radius * math.cos(angle),
+            avgY + radius * math.sin(angle),
+          );
+        } else {
+          // No known neighbors, use server position
+          mergedPositions[node.id] = Offset(node.x, node.y);
+        }
+      }
+    }
+
+    // Create updated graph with merged positions
+    final updatedNodes = newGraph.nodes.map((node) {
+      final pos = mergedPositions[node.id];
+      if (pos != null) {
+        return GraphNodeModel(
+          id: node.id,
+          title: node.title,
+          kind: node.kind,
+          x: pos.dx,
+          y: pos.dy,
+          clusterId: node.clusterId,
+          certainty: node.certainty,
+          confidence: node.confidence,
+          degree: node.degree,
+          isSelf: node.isSelf,
+        );
+      }
+      return node;
+    }).toList();
+
+    final updatedGraph = GraphDataModel(
+      nodes: updatedNodes,
+      edges: newGraph.edges,
+      clusters: newGraph.clusters,
+    );
+
+    _nodePositions = mergedPositions;
+    setState(() {
+      _graph = updatedGraph;
+      _hasNewGraphData = false;
+    });
   }
 
   /// When the graph fails to load, poll the health endpoint in the background
@@ -263,6 +370,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ),
               const SizedBox(height: 10),
               _searchField(),
+              if (_hasNewGraphData)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _loadGraph,
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: const Text('New data available'),
+                  ),
+                ),
               if (_query.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 _searchResults(),
@@ -491,7 +607,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       );
     }
 
-    if (_loadError != null) {
+    if (_loadError != null || _graphErrorMessage != null) {
       return Container(
         alignment: Alignment.center,
         padding: const EdgeInsets.all(20),
@@ -533,12 +649,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
 
     return KnowledgeGraphWidget(
-      graph:
-          _graph ??
-          GraphDataModel(nodes: const [], edges: const [], clusters: const []),
+      graph: _graph ?? GraphDataModel(nodes: const [], edges: const [], clusters: const []),
       backend: widget.noteProvider.backendService,
       focus: _focus,
+      selfNodeId: _selfNodeId,
       onGraphMutated: _loadGraph,
+      presetPositions: _nodePositions.isNotEmpty ? _nodePositions : null,
     );
+  }
+
+  String? get _selfNodeId {
+    for (final node in _graph?.nodes ?? const <GraphNodeModel>[]) {
+      if (node.isSelf) return node.id;
+    }
+    return null;
   }
 }

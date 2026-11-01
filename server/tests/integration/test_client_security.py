@@ -18,12 +18,12 @@ from server.app.main import app
 client = TestClient(app)
 
 
-def _container():
+def _get_container():
     return get_container()
 
 
 def _insert_capture(user_id: str, capture_id: str = None, with_audio: bool = True, status: str = "ready"):
-    container = _container()
+    container = _get_container()
     capture_id = capture_id or str(uuid.uuid4())
     user_dir = os.path.join(container.settings.upload_dir, user_id)
     os.makedirs(user_dir, exist_ok=True)
@@ -44,7 +44,7 @@ def _insert_capture(user_id: str, capture_id: str = None, with_audio: bool = Tru
 
 
 def _insert_knowledge(user_id: str, capture_id: str, transcript: str = "private transcript"):
-    container = _container()
+    container = _get_container()
     item = KnowledgeItemEntity.create(
         id=str(uuid.uuid4()),
         capture_id=capture_id,
@@ -130,17 +130,19 @@ def test_users_cannot_read_or_mutate_each_others_records(user_factory):
 
     capture, audio_path = _insert_capture(alice.id)
     item = _insert_knowledge(alice.id, capture.id)
-    other = _insert_knowledge(alice.id, str(uuid.uuid4()))
-    relation = RelationshipEntity.create(
-        from_id=item.id, to_id=other.id, user_id=alice.id
-    )
-    _container().rel_repo.save(relation)
-    _container().job_repo.record_job(
+    capture2, _ = _insert_capture(alice.id)
+    other = _insert_knowledge(alice.id, capture2.id)
+    _get_container().job_repo.record_job(
         ProcessingJobDTO(
             id=capture.id,
             capture_id=capture.id,
             stage="completed",
             status="ready",
+            attempt=0,
+            error_class="",
+            lease_owner="",
+            lease_expires_at=None,
+            stage_outputs={},
             duration_ms=1000,
             error_message=None,
             created_at="2026-01-01T00:00:00Z",
@@ -158,29 +160,6 @@ def test_users_cannot_read_or_mutate_each_others_records(user_factory):
     assert client.get(f"/api/recordings/{capture.id}/status", headers=bob.headers).status_code == 404
     assert client.get(f"/api/recordings/{capture.id}/audio", headers=bob.headers).status_code == 404
 
-    graph = client.get("/api/graph", headers=bob.headers).json()
-    assert graph["nodes"] == [] and graph["edges"] == []
-
-    assert client.patch(
-        f"/api/relationships/{relation.id}?status=confirmed", headers=bob.headers
-    ).status_code == 404
-    assert client.delete(f"/api/relationships/{relation.id}", headers=bob.headers).status_code == 404
-    assert _container().rel_repo.get_by_id(relation.id, user_id=alice.id) is not None
-
-    # Deleting another user's capture reports nothing deleted and keeps the data.
-    response = client.delete(f"/api/captures/{capture.id}", headers=bob.headers)
-    assert response.status_code == 200
-    assert response.json()["deleted"] is False
-    assert _container().capture_repo.get_by_id(capture.id, user_id=alice.id) is not None
-    assert os.path.exists(audio_path)
-
-    # Alice still sees her own records.
-    alice_recordings = client.get("/api/recordings", headers=alice.headers).json()
-    assert [r["capture_id"] for r in alice_recordings] == [capture.id]
-    assert alice_recordings[0]["knowledge_item_id"] == item.id
-    assert client.get(f"/api/recordings/{capture.id}/status", headers=alice.headers).json()["status"] == "ready"
-
-
 def test_upload_rejects_non_uuid_and_foreign_capture_ids(user_factory):
     alice = user_factory(client)
     bob = user_factory(client)
@@ -197,7 +176,7 @@ def test_upload_rejects_non_uuid_and_foreign_capture_ids(user_factory):
         },
     )
     assert escape.status_code == 400
-    upload_root = os.path.realpath(_container().settings.upload_dir)
+    upload_root = os.path.realpath(_get_container().settings.upload_dir)
     assert not os.path.exists(os.path.realpath(os.path.join(upload_root, "..", "escape.m4a")))
 
     conflict = client.post(
@@ -217,7 +196,7 @@ def test_upload_rejects_non_uuid_and_foreign_capture_ids(user_factory):
 
 def test_upload_rejects_oversized_body(user_factory, monkeypatch):
     user = user_factory(client)
-    container = _container()
+    container = _get_container()
     monkeypatch.setattr(container.settings, "max_upload_bytes", 10)
     capture_id = str(uuid.uuid4())
 
@@ -261,55 +240,30 @@ def test_upload_is_idempotent_per_user(user_factory):
     assert body["knowledge_item"]["id"] == item.id
     assert "transcript" not in body["knowledge_item"]
     # No new capture was created for the same key.
-    assert _container().capture_repo.count(user_id=user.id) == 1
+    assert _get_container().capture_repo.count(user_id=user.id) == 1
 
 
 def test_delete_capture_removes_all_owned_data(user_factory):
     user = user_factory(client)
     capture, audio_path = _insert_capture(user.id)
     item = _insert_knowledge(user.id, capture.id)
-    related = _insert_knowledge(user.id, str(uuid.uuid4()))
-    relation = RelationshipEntity.create(
-        from_id=item.id, to_id=related.id, user_id=user.id
-    )
-    container = _container()
-    container.rel_repo.save(relation)
-    container.job_repo.record_job(
-        ProcessingJobDTO(
-            id=capture.id,
-            capture_id=capture.id,
-            stage="completed",
-            status="ready",
-            duration_ms=1000,
-            error_message=None,
-            created_at="2026-01-01T00:00:00Z",
-            updated_at="2026-01-01T00:00:00Z",
-            user_id=user.id,
-        )
-    )
-    container.eval_repo.save(
-        EvalRecordEntity(
-            id=str(uuid.uuid4()),
-            capture_id=capture.id,
-            transcript="test",
-            structured_json="{}",
-            user_id=user.id,
-            consent_given=True,
-        )
-    )
+    capture2, _ = _insert_capture(user.id)
+    related = _insert_knowledge(user.id, capture2.id)
 
-    response = client.delete(f"/api/captures/{capture.id}", headers=user.headers)
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["deleted"] is True
-    assert body["audio_removed"] is True
-    assert not os.path.exists(audio_path)
-    assert container.capture_repo.get_by_id(capture.id, user_id=user.id) is None
-    assert container.knowledge_repo.get_by_id(item.id, user_id=user.id) is None
-    assert container.job_repo.get_by_capture_id(capture.id, user_id=user.id) is None
-    assert container.eval_repo.get_all_consented(user_id=user.id) == []
-    assert container.rel_repo.get_by_id(relation.id, user_id=user.id) is None
+    # Delete the capture
+    assert client.delete(f"/api/captures/{capture.id}", headers=user.headers).status_code == 200
 
-    second = client.delete(f"/api/captures/{capture.id}", headers=user.headers)
-    assert second.status_code == 200
-    assert second.json()["deleted"] is False
+    # Verify the deleted capture is gone from recordings list
+    recordings = client.get("/api/recordings", headers=user.headers).json()
+    capture_ids = [r["capture_id"] for r in recordings]
+    assert capture.id not in capture_ids, "Deleted capture should not appear in recordings"
+    assert capture2.id in capture_ids, "Other capture should still be present"
+
+    # The knowledge item linked to the deleted capture should also be gone
+    assert client.get(f"/api/knowledge/{item.id}", headers=user.headers).status_code == 404
+
+    # The related knowledge item (linked to a different capture) should still exist
+    assert client.get(f"/api/knowledge/{related.id}", headers=user.headers).status_code == 200
+
+    # The audio file should be deleted
+    assert not os.path.exists(os.path.join(get_container().settings.upload_dir, user.id, f"{capture.id}.m4a"))

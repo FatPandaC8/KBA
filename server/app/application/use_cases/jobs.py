@@ -79,11 +79,13 @@ def name_similarity(left: str, right: str) -> float:
 
 
 def _decode_stage_outputs(job: ProcessingJobDTO) -> Dict[str, Any]:
-    try:
-        value = json.loads(job.stage_outputs or "{}")
-        return value if isinstance(value, dict) else {}
-    except (TypeError, ValueError):
-        return {}
+    value = job.stage_outputs
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+    return value if isinstance(value, dict) else {}
 
 
 class LeaseHeartbeat:
@@ -199,6 +201,11 @@ class ProcessCaptureUseCase:
             capture_id=capture.id,
             stage=JobStage.UPLOAD,
             status=JobStatus.QUEUED,
+            attempt=0,
+            error_class="",
+            lease_owner="",
+            lease_expires_at=None,
+            stage_outputs={},
             duration_ms=capture.duration_ms,
             error_message=None,
             created_at=now,
@@ -431,14 +438,51 @@ class ProcessCaptureUseCase:
         # Relationship types flow through the open-ended registry before any
         # write; fresh and cached (pre-U1) payloads are normalised alike.
         self._normalize_relationship_types(user_id, result.relationships)
+
+        # Fetch the real self entity from the database to avoid creating duplicates.
+        # The extractor may have created a capture-specific self entity reference.
+        self_entity = self.entity_repo.get_self_entity(user_id)
+
+        # Replace any self entity in the extracted entities with the real one.
+        if self_entity is not None:
+            result.entities = [
+                self_entity if e.is_self else e
+                for e in result.entities
+            ]
+
         existing = self.entity_repo.get_all(user_id=user_id)
         id_map, saved_entities = self._resolve_entities(user_id, capture_id, result.entities, existing)
+        print(f"[DEBUG _save_extraction] saved_entities count: {len(saved_entities)}")
+        for e in saved_entities:
+            print(f"[DEBUG _save_extraction] saved_entity: {e.id} ({e.name}), has_flag: {hasattr(e, '_flag_score')}, id_map: {id_map.get(e.id)}")
 
         self.knowledge_repo.save(result.knowledge_item)
         self._embed_knowledge_item(user_id, result.knowledge_item)
         for entity in saved_entities:
             self.entity_repo.save(entity)
-            self._embed(user_id, entity.id, self._entity_text(entity))
+            # Entity embeddings are not stored in knowledge_embeddings (FK to knowledge_items)
+            # self._embed(user_id, entity.id, self._entity_text(entity))
+
+        # Record deferred duplicate candidates after entities are saved
+        for entity in saved_entities:
+            if hasattr(entity, '_flag_score'):
+                print(f"[DEBUG _save_extraction] Recording flagged duplicate for entity {entity.id} ({entity.name}) with score {entity._flag_score}")
+                self.duplicate_repo.record(user_id, entity.id, entity._flag_candidate_id, entity._flag_score, "flagged")
+                delattr(entity, '_flag_score')
+                delattr(entity, '_flag_candidate_id')
+            elif id_map.get(entity.id) != entity.id:
+                # Auto-linked: record the auto_linked duplicate
+                # Find which candidate this entity was linked to
+                candidate_id = id_map.get(entity.id)
+                if candidate_id and candidate_id != entity.id:
+                    # Find the score by re-computing similarity
+                    candidate = next((e for e in existing if e.id == candidate_id), None)
+                    if candidate:
+                        score = name_similarity(entity.name, candidate.name)
+                        self.duplicate_repo.record(user_id, entity.id, candidate_id, score, "auto_linked")
+                        if not candidate.description and entity.description:
+                            candidate.description = entity.description
+                            self.entity_repo.save(candidate)
 
         # Every entity this capture mentions must be supported by it, including
         # entities that were auto-linked to an existing node (DEL-01 sharing).
@@ -461,9 +505,14 @@ class ProcessCaptureUseCase:
                     persisted_id = stored.id
                     break
             self.support_repo.add(user_id, capture_id, "relationship", persisted_id)
-            self._embed(user_id, persisted_id, f"{rel.relation_type} relationship")
+            # Relationship embeddings are not stored in knowledge_embeddings (FK to knowledge_items)
+            # self._embed(user_id, persisted_id, f"{rel.relation_type} relationship")
 
         self._flag_conflicts(user_id, result.relationships, id_map)
+        # Orphan cleanup at the END of the extraction pipeline: after auto-linking,
+        # dedup, and all entities/relationships for this capture are persisted.
+        # Runs inside the same transaction so no non-self orphan is ever committed.
+        self.entity_repo.cleanup_orphans(user_id)
 
     def _resolve_entities(
         self,
@@ -500,16 +549,22 @@ class ProcessCaptureUseCase:
                 continue
 
             if candidate is not None and best_score >= self.auto_link_threshold - _EPSILON:
+                # Auto-link: record duplicate candidate after entities are saved
+                # (deferred via id_map)
                 id_map[entity.id] = candidate.id
                 seen[entity.normalized_name] = candidate.id
-                self.duplicate_repo.record(user_id, entity.id, candidate.id, best_score, "auto_linked")
-                if not candidate.description and entity.description:
-                    candidate.description = entity.description
-                    self.entity_repo.save(candidate)
                 continue
 
             if candidate is not None and best_score >= self.flag_threshold - _EPSILON:
-                self.duplicate_repo.record(user_id, entity.id, candidate.id, best_score, "flagged")
+                # Flag for user review: record after entity is saved
+                id_map[entity.id] = entity.id
+                seen[entity.normalized_name] = entity.id
+                to_save.append(entity)
+                # Store flag info for later recording
+                entity._flag_score = best_score
+                entity._flag_candidate_id = candidate.id
+                print(f"[DEBUG _resolve_entities] Flagged entity {entity.id} ({entity.name}) with score {best_score}, candidate {candidate.id}")
+                continue
 
             id_map[entity.id] = entity.id
             seen[entity.normalized_name] = entity.id
@@ -555,6 +610,22 @@ class ProcessCaptureUseCase:
             print(f"[Embedding Error] {exc}")
 
     # ---------------------------------------------------------------- failures
+    def _cleanup_orphans(user_id: str, entity_repo, rel_repo) -> int:
+        """Remove non-self entities that have no relationships.
+
+        Must be called at the END of the pipeline, after auto-linking and dedup,
+        inside the same transaction, to ensure no entity exists without a relationship.
+        """
+        count = entity_repo.db.get_connection().execute(
+            """DELETE FROM entities WHERE user_id=? AND is_self=0 AND NOT EXISTS
+               (SELECT 1 FROM relationships r WHERE r.user_id=entities.user_id
+                AND (r.from_id=entities.id OR r.to_id=entities.id))""",
+            (user_id,),
+        ).rowcount
+        conn = entity_repo.db.get_connection()
+        conn.commit()
+        return count
+
     def _record_failure(
         self, job: ProcessingJobDTO, capture: CaptureEntity, exc: Exception
     ) -> ProcessingJobDTO:

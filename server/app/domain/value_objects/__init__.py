@@ -54,6 +54,7 @@ class EntityType:
     CONCEPT: str = "concept"
     TOOL: str = "tool"
     IDEA: str = "idea"
+    SELF: str = "self"
 
     @classmethod
     def is_valid(cls, value: str) -> bool:
@@ -65,6 +66,7 @@ class EntityType:
             cls.CONCEPT,
             cls.TOOL,
             cls.IDEA,
+            cls.SELF,
         }
 
 

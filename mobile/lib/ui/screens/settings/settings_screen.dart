@@ -36,10 +36,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _saving = false;
   String? _statusMessage;
   bool _statusOk = false;
-  bool _consentGranted = false;
   List<Map<String, dynamic>> _consentProviders = const [];
   String _consentVersion = '';
-  String? _recordedConsentVersion;
 
   @override
   void initState() {
@@ -64,21 +62,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadConsent() async {
     if (!widget.settingsService.isAuthenticated) return;
     try {
+      await widget.backendService.ensureConsent();
       final consent = await widget.backendService.getConsent();
       if (!mounted) return;
       setState(() {
-        _consentGranted = (consent['granted'] as bool? ?? false);
         _consentVersion = (consent['version'] as String?) ?? '';
-        _recordedConsentVersion = consent['recorded_version'] as String?;
         _consentProviders = ((consent['providers'] as List?) ?? const [])
             .whereType<Map>()
             .map((entry) => entry.cast<String, dynamic>())
             .toList();
       });
     } catch (_) {
-      // Consent endpoint may 403 before consent; treat as not granted.
-      if (!mounted) return;
-      setState(() => _consentGranted = false);
+      // Processing status is informational here; recording retries the same
+      // server-side setup before uploading if the request was unavailable.
     }
   }
 
@@ -93,11 +89,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool get _usesHostedProvider => _consentProviders.any(
     (provider) => provider['id'].toString().contains('groq'),
   );
-
-  bool get _needsReconsent =>
-      _recordedConsentVersion != null &&
-      _consentVersion.isNotEmpty &&
-      _recordedConsentVersion != _consentVersion;
 
   String get _hostedProviderName {
     for (final provider in _consentProviders) {
@@ -204,26 +195,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _setStatus('Verification failed: $e', false);
     } finally {
       if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  Future<void> _setConsent(bool value) async {
-    final previous = _consentGranted;
-    setState(() => _consentGranted = value);
-    try {
-      await widget.backendService.updateConsent(value);
-      if (!mounted) return;
-      setState(() {
-        _statusOk = true;
-        _statusMessage = value ? 'AI-provider consent granted.' : 'Consent withdrawn. Recording is blocked until consent is re-granted.';
-      });
-    } catch (e) {
-      setState(() => _consentGranted = previous);
-      if (!mounted) return;
-      _setStatus(
-        'Consent update failed. The change was not applied: $e',
-        false,
-      );
     }
   }
 
@@ -502,7 +473,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 24),
         ],
         const Text(
-          'AI-PROVIDER CONSENT',
+          'AI PROCESSING',
           style: TextStyle(
             fontSize: 10,
             fontWeight: FontWeight.w700,
@@ -511,27 +482,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
         const SizedBox(height: 10),
-        if (_needsReconsent && !_consentGranted)
-          Container(
-            width: double.infinity,
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: EchoColors.sageSoft,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: EchoColors.border),
-            ),
-            child: const Text(
-              'The AI provider or model changed since your last consent. '
-              'Review the updated processing details below and grant consent '
-              'again before your next recording or question.',
-              style: TextStyle(
-                fontSize: 11,
-                height: 1.45,
-                color: EchoColors.ink,
-              ),
-            ),
-          ),
         Material(
           color: Colors.white,
           shape: RoundedRectangleBorder(
@@ -542,31 +492,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SwitchListTile(
-                activeThumbColor: EchoColors.forest,
-                title: const Text(
-                  'Allow AI processing of recordings',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 6),
+                child: Text(
+                  'Echo automatically processes every recording to create '
+                  'entities and relationships. This processing is required '
+                  'for the core experience.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                  ),
                 ),
-                subtitle: Text(
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                child: Text(
                   _usesHostedProvider
-                      ? 'Audio is transcribed on your server and never leaves '
-                            'it. Transcript text, and the notes retrieved for a '
-                            'question, are sent to $_hostedProviderName for '
+                      ? 'Audio is transcribed on your server. Transcript '
+                            'text is sent to $_hostedProviderName for '
                             'extraction and answers.'
-                      : 'Recordings are transcribed and processed entirely on '
-                            'your configured server. Declining or withdrawing '
-                            'blocks recording until consent is re-granted.',
+                      : 'Recordings are transcribed and processed on your '
+                            'configured server.',
                   style: const TextStyle(
                     fontSize: 11,
                     color: EchoColors.muted,
                     height: 1.45,
                   ),
                 ),
-                value: _consentGranted,
-                onChanged: widget.settingsService.isAuthenticated
-                    ? _setConsent
-                    : null,
               ),
               if (_usesHostedProvider)
                 Padding(

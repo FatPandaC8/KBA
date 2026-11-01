@@ -8,6 +8,10 @@ given user id — it never goes through the processing pipeline.
 Deterministic: identical arguments always produce an identical graph. Nodes
 are named so they can be distinguished from real extracted entities. Add
 --replace to delete this tool's earlier rows for the user before seeding.
+
+All IDs are globally unique (uuid5 from user_id + index) so multiple users
+can be seeded without collisions. The seed is idempotent: re-running with
+the same args produces identical rows.
 """
 
 import argparse
@@ -17,6 +21,11 @@ import os
 import sqlite3
 import sys
 import tempfile
+import uuid
+
+
+def _uuid5(namespace: str, name: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"echo:seed:{namespace}:{name}"))
 
 
 def main() -> None:
@@ -53,34 +62,34 @@ def main() -> None:
             "SELECT count(*) FROM entities WHERE user_id = ?", (user_id,)
         ).fetchone()[0]
         seeded = conn.execute(
-            "SELECT count(*) FROM entities WHERE user_id = ? AND id LIKE 'devchk-%'",
+            "SELECT count(*) FROM entities WHERE user_id = ? AND id LIKE 'seed-%'",
             (user_id,),
         ).fetchone()[0]
-        print(f"entities for user: {existing} (devchk: {seeded})")
+        print(f"entities for user: {existing} (seed: {seeded})")
         if args.report_only:
             return
         assert seeded == 0 or args.replace, (
             "refusing to double-seed: rerun with --replace to start over"
         )
         if args.replace:
-            # Delete relationships (devchkrel-*) BEFORE entities (devchk-*)
+            # Delete relationships (seed-rel-*) BEFORE entities (seed-*)
             # so foreign-key-like references never dangle mid-delete.
             conn.execute(
-                "DELETE FROM relationships WHERE user_id = ? AND id LIKE 'devchkrel-%'",
+                "DELETE FROM relationships WHERE user_id = ? AND id LIKE 'seed-rel-%'",
                 (user_id,),
             )
             conn.execute(
-                "DELETE FROM entities WHERE user_id = ? AND id LIKE 'devchk-%'",
+                "DELETE FROM entities WHERE user_id = ? AND id LIKE 'seed-%'",
                 (user_id,),
             )
             conn.commit()
-            print(f"removed previous devchk rows for user {user_id}")
+            print(f"removed previous seed rows for user {user_id}")
 
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         conn.execute("BEGIN")
         node_ids = []
         for i in range(args.nodes):
-            eid = f"devchk-{i:04d}"
+            eid = _uuid5(user_id, f"node:{i:05d}")
             node_ids.append(eid)
             conn.execute(
                 """
@@ -88,16 +97,16 @@ def main() -> None:
                 (id, user_id, capture_id, name, normalized_name, entity_type,
                  description, confidence, certainty, provenance, provider_id,
                  model_version, user_edited, created_at, updated_at)
-                VALUES (?, ?, NULL, ?, ?, ?, ?, 0.9, 'confirmed', 'device-check',
-                        'devchk', '', 0, ?, ?)
+                VALUES (?, ?, NULL, ?, ?, ?, ?, 0.9, 'confirmed', 'device-seed',
+                        'devseed', '', 0, ?, ?)
                 """,
                 (
                     eid,
                     user_id,
-                    f"CheckNode {i:04d}",
-                    f"checknode {i:04d}",
+                    f"SeedNode {i:05d}",
+                    f"seednode {i:05d}",
                     ["person", "project", "concept", "place"][i % 4],
-                    f"Synthetic device-check node {i:04d}.",
+                    f"Synthetic device-seed node {i:05d}.",
                     now,
                     now,
                 ),
@@ -108,15 +117,15 @@ def main() -> None:
         last_in_community = {}
         for i, eid in enumerate(node_ids):
             community = i // args.community_size
-            ring = community * args.community_size + (
-                (i + 1) % args.community_size
-                if (i + 1) % args.community_size != 0
-                else community * args.community_size
-            )
+            # Ring: connect to next node in community, wrap to first node
+            next_in_community = (i + 1) % args.community_size
+            ring = community * args.community_size + next_in_community
             if ring != i:
                 relationships.append((i, ring))
             if i % 7 != 0:
-                chord = community * args.community_size + (i + 2) % args.community_size
+                # Chord: connect to node 2 steps ahead within the same community
+                chord_offset = (i + 2) % args.community_size
+                chord = community * args.community_size + chord_offset
                 if chord != i and chord != ring:
                     relationships.append((i, chord))
             last_in_community[community] = i
@@ -126,18 +135,19 @@ def main() -> None:
 
         edge_rows = []
         for j, (a, b) in enumerate(relationships):
+            rel_id = _uuid5(user_id, f"rel:{j:05d}")
             edge_rows.append(
                 (
-                    f"devchkrel-{j:05d}",
+                    rel_id,
                     user_id,
-                    f"devchk-{a:04d}",
-                    f"devchk-{b:04d}",
+                    node_ids[a],
+                    node_ids[b],
                     "related_to",
                     "candidate",
                     0.7,
                     "confirmed",
                     "",
-                    "device-check",
+                    "device-seed",
                     0,
                     now,
                 )
@@ -207,8 +217,8 @@ if __name__ == "__main__":
             os.system(f"python3 {__file__} --db {tmpdb} --user-id 6aba2ba4-0f73-4b73-9a6d-3ecb7c24bf69 --nodes 2000 --replace >/dev/null 2>&1")
             os.system(f"python3 {__file__} --db {tmpdb} --user-id 6aba2ba4-0f73-4b73-9a6d-3ecb7c24bf69 --nodes 2000 --replace >/dev/null 2>&1")
             conn = sqlite3.connect(tmpdb)
-            r1 = conn.execute("SELECT count(*) FROM entities WHERE id LIKE 'devchk-%'").fetchone()[0]
-            r2 = conn.execute("SELECT count(*) FROM relationships WHERE id LIKE 'devchkrel-%'").fetchone()[0]
+            r1 = conn.execute("SELECT count(*) FROM entities WHERE user_id = ?", ("6aba2ba4-0f73-4b73-9a6d-3ecb7c24bf69",)).fetchone()[0]
+            r2 = conn.execute("SELECT count(*) FROM relationships WHERE user_id = ?", ("6aba2ba4-0f73-4b73-9a6d-3ecb7c24bf69",)).fetchone()[0]
             conn.close()
             os.unlink(tmpdb)
             if r1 != 2000 or r2 != 3721:

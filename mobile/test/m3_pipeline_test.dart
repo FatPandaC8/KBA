@@ -174,7 +174,7 @@ void main() {
 
     final failed = noteFor(note.id);
     expect(failed.errorClass, 'consent_required');
-    expect(failed.failureReason, contains('consent'));
+    expect(failed.failureReason, contains('AI processing'));
     expect(failed.failureReason, isNot(contains('session')));
   });
 

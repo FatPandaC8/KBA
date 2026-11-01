@@ -20,6 +20,7 @@ from server.app.domain.entities import (
 )
 from server.app.domain.value_objects import Certainty, EntityType, RelationStatus, RelationType
 from server.app.domain.errors import ValidationError
+from .first_person import map_first_person_to_self, find_self_entity
 
 PROVIDER_ID = "extraction_local"
 
@@ -40,6 +41,7 @@ _PLACE_CUE = re.compile(
     r"\b(?:in|at|near|visit(?:ed)?|moved to)\s+"
     r"([A-Z][\w'\-]+(?:\s+[A-Z][\w'\-]+)?)"
 )
+_FIRST_PERSON = re.compile(r"\b(?:tôi|toi|mình|minh|ta|tớ|to|i|me|we|myself)\b", re.IGNORECASE)
 
 _STOP_PHRASES = {
     "i", "the", "this", "that", "these", "those", "it", "we", "they", "he",
@@ -73,6 +75,7 @@ _HEDGES = (
 )
 
 _RELATION_CUES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("Met", ("met",)),
     (RelationType.DEPENDS_ON, ("depends on", "relies on", "requires", "needs")),
     (RelationType.SUPPORT, ("supports", "helps", "enables", "improves", "backs")),
     (RelationType.EXAMPLE_OF, ("example of", "such as", "for instance")),
@@ -131,6 +134,11 @@ class SemanticKnowledgeExtractor(KnowledgeExtractionPort):
 
         sentences = [s.strip() for s in _SENTENCE_SPLIT.split(clean_text) if s.strip()]
         entities = self._extract_entities(sentences, capture_id, user_id)
+
+        # Map first-person references to the self entity (shared post-processing)
+        self_entity = find_self_entity(entities)
+        entities = map_first_person_to_self(entities, user_id, capture_id, self_entity, transcript=clean_text, provider_id=PROVIDER_ID)
+
         relationships = self._extract_relationships(sentences, entities, capture_id, user_id)
         item = self._build_item(clean_text, sentences, entities, capture_id, user_id)
         return ExtractionResult(knowledge_item=item, entities=entities, relationships=relationships)
@@ -227,6 +235,9 @@ class SemanticKnowledgeExtractor(KnowledgeExtractionPort):
             mentioned = [
                 entity for name, entity in by_sentence_name.items() if name and name in lowered
             ]
+            self_entity = next((entity for entity in entities if entity.is_self), None)
+            if self_entity is not None and _FIRST_PERSON.search(sentence) and self_entity not in mentioned:
+                mentioned.insert(0, self_entity)
             if len(mentioned) < 2:
                 continue
             relation_type, confidence = self._classify_sentence(lowered)

@@ -65,6 +65,7 @@ class FakeBackendService extends BackendService {
   bool failGraph = false;
   bool failSearch = false;
   bool failAuth = false;
+  bool hasNewGraphData = false;
 
   int uploadCalls = 0;
   int deleteCalls = 0;
@@ -118,6 +119,7 @@ class FakeBackendService extends BackendService {
     edges: const [],
     clusters: const [],
   );
+  GraphDataModel? nextGraphData;
   GraphSearchResult searchResult = GraphSearchResult(
     entities: const [],
     relationships: const [],
@@ -252,6 +254,11 @@ class FakeBackendService extends BackendService {
     graphCalls++;
     if (failGraph) {
       throw BackendException('graph failed', statusCode: 500);
+    }
+    if (nextGraphData != null) {
+      final data = nextGraphData!;
+      nextGraphData = null;
+      return data;
     }
     return graphData;
   }

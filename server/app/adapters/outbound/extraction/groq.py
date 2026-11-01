@@ -23,6 +23,7 @@ from server.app.domain.errors import (
     ValidationError,
 )
 from server.app.domain.value_objects import Certainty, RelationStatus
+from .first_person import map_first_person_to_self, find_self_entity
 
 from ..llm.validation import (
     EXTRACTION_SCHEMA,
@@ -188,6 +189,11 @@ class GroqExtractionAdapter(KnowledgeExtractionPort):
                     model_version=self.pipeline_version,
                 )
             )
+
+        # Map first-person references to the self entity (shared post-processing)
+        self_entity = find_self_entity(entities)
+        entities = map_first_person_to_self(entities, user_id, capture_id, self_entity, transcript=clean, provider_id=self.provider_id)
+
         by_name = {normalize_key(entity.name): entity for entity in entities}
 
         relationships = []

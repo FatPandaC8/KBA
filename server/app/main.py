@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -59,6 +60,9 @@ app = FastAPI(
     version=settings.pipeline_version,
     lifespan=lifespan,
 )
+
+# Enable gzip compression for responses larger than 500 bytes.
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 # CORS is disabled unless explicitly configured. The Android client does not
 # need CORS, and the admin UI is served from the same origin.
