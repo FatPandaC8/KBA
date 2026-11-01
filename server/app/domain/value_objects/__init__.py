@@ -116,7 +116,8 @@ class JobStatus:
 
 @dataclass(frozen=True)
 class ErrorClass:
-    """Recoverable vs permanent classification (PRC-05)."""
+    """Label constants for failure classes (classification lives in
+    ``server.app.domain.job_state`` — RETRYABLE_CLASSES/TERMINAL_CLASSES)."""
 
     QUOTA_EXHAUSTED: str = "quota_exhausted"
     NETWORK: str = "network_error"
@@ -124,13 +125,12 @@ class ErrorClass:
     SCHEMA_INVALID: str = "schema_invalid"
     INVALID_INPUT: str = "invalid_input"
     UNKNOWN: str = "unknown"
-
-    # Only these are retried automatically.
-    RECOVERABLE: tuple = (
-        "network_error",
-        "provider_failure",
-    )
+    TIMEOUT: str = "timeout"
+    UNSUPPORTED_LANGUAGE: str = "unsupported_language"
 
     @classmethod
     def is_recoverable(cls, value: str) -> bool:
-        return value in cls.RECOVERABLE
+        # Delegate to the single domain table (no duplicated policy here).
+        from server.app.domain.job_state import is_retryable
+
+        return is_retryable(value)

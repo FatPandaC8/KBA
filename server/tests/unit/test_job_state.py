@@ -43,6 +43,22 @@ def test_recoverable_errors_retry_until_the_budget_is_spent():
     assert decides_terminal("invalid_input", 1, policy) is True
 
 
+def test_classification_table_single_home():
+    """Item 2 (4a/4b): ONE table in job_state defines retryable vs terminal.
+    timeout is retryable; unsupported_language and quota_exhausted terminal."""
+    from server.app.domain.job_state import (
+        TERMINAL_CLASSES,
+        RETRYABLE_CLASSES,
+    )
+
+    assert RETRYABLE_CLASSES == {"network_error", "provider_failure", "timeout"}
+    assert {"invalid_input", "unsupported_language", "quota_exhausted"} <= TERMINAL_CLASSES
+    assert is_recoverable("timeout")
+    assert not is_recoverable("unsupported_language")
+    assert is_recoverable("network_error") and is_recoverable("provider_failure")
+
+
+
 def test_backoff_schedule_and_jitter_bounds():
     policy = RetryPolicy(max_attempts=3,
                          base_backoff_seconds=(30.0, 120.0), jitter_fraction=0.2)

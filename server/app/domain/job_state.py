@@ -20,7 +20,32 @@ ALL_STATES = frozenset({QUEUED, RUNNING, READY, FAILED})
 
 # Recoverable error classes retry automatically; everything else is terminal
 # as soon as it fails once (e.g. quota, invalid input).
-RECOVERABLE_CLASSES = frozenset({"network_error", "provider_failure"})
+# 4b: ONE classification table (used by the adapter, the state machine and
+# the failure path). Retryable = transient, someone might succeed next time.
+# Terminal = the input/config can never work; retrying wastes providers.
+RETRYABLE_CLASSES = frozenset({
+    "network_error",     # DNS/refused/reset
+    "provider_failure",  # upstream 5xx / parse surprise
+    "timeout",           # bounded call timeout
+})
+TERMINAL_CLASSES = frozenset({
+    "invalid_input",          # unusable audio / missing file
+    "unsupported_language",   # STT refusal (never succeeds on retry)
+    "quota_exhausted",        # rate-limited until reset; operator action
+    "schema_invalid",         # provider returned unusable JSON
+    "unknown",
+    "worker_lost",            # reclaimed stale leases exhausted the budget
+})
+
+# Back-compat alias for existing imports (same set, new name).
+RECOVERABLE_CLASSES = RETRYABLE_CLASSES
+
+
+def is_terminal_class(error_class: str) -> bool:
+    return error_class in TERMINAL_CLASSES
+
+
+
 
 # Worker-loss classification for reclaimed stale leases.
 WORKER_LOST = "worker_lost"
@@ -69,7 +94,12 @@ class RetryPolicy:
 
 
 def is_recoverable(error_class: str) -> bool:
-    return error_class in RECOVERABLE_CLASSES
+    """True when the class belongs to the retryable table (item 2/4b)."""
+    return error_class in RETRYABLE_CLASSES
+
+
+# same predicate, clearer name for new callers
+is_retryable = is_recoverable
 
 
 def decides_terminal(

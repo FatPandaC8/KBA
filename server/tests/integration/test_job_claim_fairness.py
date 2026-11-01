@@ -138,10 +138,10 @@ def test_reclaim_stale_takes_only_running_jobs_with_expired_lease(repo, user_id)
     assert repo.claim_next("w1", 1, 3) is not None  # 1-second lease
 
     import psycopg
-    from server.tests.postgres_testinfra import MAINTENANCE_DSN
+    from server.app.api.dependencies import get_container as _gc
 
     _t.sleep(1.2)
-    with psycopg.connect(MAINTENANCE_DSN, dbname="echo_kb") as conn:
+    with psycopg.connect(_gc().settings.database_url) as conn:
         conn.execute(
             "UPDATE processing_jobs SET lease_expires_at = now() - interval '5 seconds'"
             " WHERE capture_id = %s",
@@ -153,6 +153,83 @@ def test_reclaim_stale_takes_only_running_jobs_with_expired_lease(repo, user_id)
     job = repo.get_by_capture_id(cid, user_id=user_id)
     assert job.status == "queued", job.status
 
+    # Item 2 (4a): a reclaimed stale job schedules its retry with backoff —
+    # next_attempt_at must be in the future (30 s ± 20 %), not immediately
+    # claimable.
+    assert job.next_attempt_at is not None, "reclaimed job schedules nothing"
+    import psycopg
+    from server.app.api.dependencies import get_container as _gc
+    with psycopg.connect(_gc().settings.database_url) as conn:
+        row = conn.execute(
+            "SELECT next_attempt_at > now() AS future, "
+            "next_attempt_at - now() AS gap FROM processing_jobs WHERE capture_id = %s",
+            (cid,),
+        ).fetchone()
+        conn.commit()
+    future, gap = row
+    assert future, f"next_attempt_at not in the future: {gap}"
+    assert gap.total_seconds() > 20, f"backoff shrunk to {gap.total_seconds()} s"
+    # policy bounds: 30 s ± 20 % → [24, 36] s
+    assert 24 <= gap.total_seconds() <= 36, gap.total_seconds()
+
     # hygiene: park this job so later tests never see it claimable
     repo.fail(cid, attempt=1, error_class="invalid_input",
               error_message="cleanup", retry_limit=3, user_id=user_id)
+
+
+def test_invalid_input_is_terminal_after_first_failure(repo, user_id):
+    from server.app.domain.value_objects import JobStage
+
+    cid = _record(repo, user_id)
+    repo.save_stage_output(cid, JobStage.EXTRACT, {"transcript": "x"}, user_id=user_id)
+
+    terminal = repo.fail(cid, attempt=1, error_class="invalid_input",
+                         error_message="English audio only. Detected language: vi.",
+                         retry_limit=3, user_id=user_id)
+    job = repo.get_by_capture_id(cid, user_id=user_id)
+    assert terminal is True
+    assert job.status == "failed" and job.attempt == 1, job
+    assert repo.claim_next("w3", 300, 3) is None
+
+
+def test_provider_failure_retries_with_backoff_and_then_fails(repo, user_id):
+    import psycopg
+    from server.tests.postgres_testinfra import MAINTENANCE_DSN
+
+    cid = _record(repo, user_id)
+    # failure 1 (no retry_at given): the ADAPTER must schedule backoff itself
+    terminal1 = repo.fail(cid, attempt=1, error_class="provider_failure",
+                          error_message="LLM upstream 500", retry_limit=3,
+                          user_id=user_id)
+    job = repo.get_by_capture_id(cid, user_id=user_id)
+    assert terminal1 is False
+    assert job.status == "queued" and job.attempt == 1, job
+    from server.app.api.dependencies import get_container as _gc
+    with psycopg.connect(_gc().settings.database_url) as conn:
+        row = conn.execute(
+            "SELECT next_attempt_at > now() FROM processing_jobs WHERE capture_id = %s",
+            (cid,),
+        ).fetchone()
+        conn.commit()
+    assert row[0] is True, "provider_failure scheduled an immediate retry"
+
+    assert repo.claim_next("w1", 300, 3) is None, "claimable before next_attempt_at"
+
+    # fast-forward the schedule (tests may not sleep): retries claimable again
+    from server.app.api.dependencies import get_container as _gc
+    with psycopg.connect(_gc().settings.database_url) as conn:
+        conn.execute(
+            "UPDATE processing_jobs SET next_attempt_at = now() - interval '1 second'"
+            " WHERE capture_id = %s",
+            (cid,),
+        )
+        conn.commit()
+    claimed = repo.claim_next("w1", 300, 3)
+    assert claimed and claimed.capture_id == cid
+
+    # failure 3 — budget spent → terminal
+    terminal3 = repo.fail(cid, attempt=3, error_class="provider_failure",
+                          error_message="LLM upstream 500", retry_limit=3,
+                          user_id=user_id)
+    job = repo.get_by_capture_id(cid, user_id=user_id)
+    assert terminal3 is True and job.status == "failed" and job.attempt == 3

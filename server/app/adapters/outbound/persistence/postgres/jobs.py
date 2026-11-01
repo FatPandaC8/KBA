@@ -133,7 +133,18 @@ class PostgresJobRepository:
             return _row_to_job(row) if row else None
 
     def reclaim_stale(self, retry_limit: int = 3) -> int:
-        """Requeue jobs whose leases expired; each loss costs one attempt."""
+        """Requeue jobs whose leases expired; each loss costs one attempt.
+
+        The next attempt is scheduled with the domain RetryPolicy bands
+        (4a); a job whose budget is spent fails terminally as ``worker_lost``.
+        """
+        from server.app.domain.job_state import RetryPolicy
+
+        policy = RetryPolicy(max_attempts=retry_limit)
+        # Row-aware bands: the FIRST retry (new attempt 1) uses delays[0],
+        # later retries delays[1] ... (set statically; jitter only applies to
+        # provider retries, reclaim backoff is deterministic for testability).
+        base1, base2 = (list(policy.base_backoff_seconds) + [policy.base_backoff_seconds[-1]])[:2]
         with transaction(self.db) as conn:
             cur = conn.execute(
                 """
@@ -143,7 +154,12 @@ class PostgresJobRepository:
                     attempt = attempt + 1,
                     lease_owner = '',
                     lease_expires_at = NULL,
-                    next_attempt_at = NULL,
+                    next_attempt_at = CASE
+                        WHEN attempt + 1 >= %s THEN NULL
+                        WHEN attempt + 1 = 1 THEN
+                            now() + make_interval(secs => %s::double precision)
+                        ELSE now() + make_interval(secs => %s::double precision)
+                        END,
                     error_class = CASE WHEN attempt + 1 >= %s THEN 'worker_lost' ELSE '' END,
                     error_message = CASE WHEN attempt + 1 >= %s
                         THEN 'Worker lost its lease before completing the job.' ELSE NULL END,
@@ -152,7 +168,44 @@ class PostgresJobRepository:
                   AND lease_owner <> '' AND lease_expires_at < NOW()
                   AND attempt + 1 <= %s
                 """,
-                (retry_limit, retry_limit, retry_limit, retry_limit),
+                (
+                    retry_limit,
+                    retry_limit,
+                    base1,
+                    base2,
+                    retry_limit,
+                    retry_limit,
+                    retry_limit,
+                ),
+            )
+            return cur.rowcount
+        with transaction(self.db) as conn:
+            cur = conn.execute(
+                """
+                UPDATE processing_jobs
+                SET status = CASE WHEN attempt + 1 >= %s THEN 'failed'
+                                  ELSE 'queued' END,
+                    attempt = attempt + 1,
+                    lease_owner = '',
+                    lease_expires_at = NULL,
+                    next_attempt_at = CASE WHEN attempt + 1 >= %s THEN NULL
+                        ELSE to_timestamp(%s::double precision) END,
+                    error_class = CASE WHEN attempt + 1 >= %s THEN 'worker_lost' ELSE '' END,
+                    error_message = CASE WHEN attempt + 1 >= %s
+                        THEN 'Worker lost its lease before completing the job.' ELSE NULL END,
+                    updated_at = NOW()
+                WHERE status = 'running'
+                  AND lease_owner <> '' AND lease_expires_at < NOW()
+                  AND attempt + 1 <= %s
+                """,
+                (
+                    retry_limit,
+                    retry_limit,
+                    retry_gap_seconds,
+                    retry_limit,
+                    retry_limit,
+                    retry_limit,
+                ),
             )
             return cur.rowcount
 
@@ -280,13 +333,29 @@ class PostgresJobRepository:
     ) -> bool:
         """Record one failed attempt; scheduled retry or terminal failure.
 
-        Terminal when the error class is not recoverable or the retry budget
-        is spent (D7: 3 attempts total)."""
-        from server.app.domain.value_objects import ErrorClass
+        Terminal when the error class is not retryable or the retry budget
+        is spent (D7: 3 attempts total). Retryable failures without an
+        explicit ``retry_at`` schedule the next attempt with the domain
+        RetryPolicy (30 s / 120 s +/- 20 % jitter) right here, so callers
+        cannot accidentally create an immediately-claimed retry (4a)."""
+        from datetime import datetime, timedelta, timezone
 
-        terminal = (
-            attempt >= retry_limit or not ErrorClass.is_recoverable(error_class)
+        from server.app.domain.job_state import (
+            RetryPolicy,
+            decides_terminal,
+            retry_delay,
         )
+
+        terminal = decides_terminal(error_class, attempt, RetryPolicy(max_attempts=retry_limit))
+        next_attempt_at_value: Optional[str] = None
+        if not terminal:
+            if retry_at:
+                next_attempt_at_value = _parse_iso(retry_at).isoformat()
+            else:
+                delta = retry_delay(attempt, RetryPolicy(max_attempts=retry_limit))
+                base = datetime.now(timezone.utc)
+                next_attempt = base + delta if delta else base
+                next_attempt_at_value = next_attempt.isoformat()
         with transaction(self.db) as conn:
             clause, params = scoped_clause("user_id", user_id)
             cur = conn.execute(
@@ -299,7 +368,7 @@ class PostgresJobRepository:
                     lease_owner = '',
                     lease_expires_at = NULL,
                     next_attempt_at = CASE WHEN %s THEN NULL
-                        ELSE COALESCE(%s::timestamptz, NOW()) END,
+                        ELSE NULLIF(%s::text, '')::timestamptz END,
                     updated_at = NOW()
                 WHERE capture_id = %s{clause}
                 """,
@@ -309,7 +378,7 @@ class PostgresJobRepository:
                     error_message,
                     terminal,
                     terminal,
-                    _parse_iso(retry_at),
+                    next_attempt_at_value,
                     uuid.UUID(capture_id),
                     *params,
                 ),
