@@ -117,7 +117,8 @@ class PostgresJobRepository:
                     next_attempt_at = NULL, updated_at = NOW()
                 WHERE id = (
                     SELECT id FROM processing_jobs
-                    WHERE attempt < %s
+                    WHERE status = 'queued'
+                      AND attempt < %s
                       AND (next_attempt_at IS NULL OR next_attempt_at <= %s)
                       AND (lease_owner = '' OR lease_expires_at < %s)
                     ORDER BY created_at, id
