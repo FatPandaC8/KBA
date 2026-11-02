@@ -95,8 +95,16 @@ func getEnvOrDefault(key, fallback string) string {
 }
 
 func loadDotEnv(filepath string) {
-	file, err := os.Open(filepath)
-	if err != nil {
+	paths := []string{filepath, "../" + filepath, "../../" + filepath}
+	var file *os.File
+	var err error
+	for _, p := range paths {
+		file, err = os.Open(p)
+		if err == nil {
+			break
+		}
+	}
+	if file == nil {
 		return
 	}
 	defer file.Close()

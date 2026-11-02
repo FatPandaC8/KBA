@@ -69,6 +69,15 @@ func TestQueueWorker_EndToEnd(t *testing.T) {
 		]
 	}`)
 
+	// Drain any leftover jobs from earlier tests
+	for {
+		oldJob, err := s.ClaimNextJob(ctx, "drain-worker")
+		if err != nil || oldJob == nil {
+			break
+		}
+		_ = s.CompleteJob(ctx, oldJob.ID)
+	}
+
 	// Enqueue job
 	job, err := s.EnqueueJob(ctx, user.ID, doc.ID, "queued", 10)
 	if err != nil {
