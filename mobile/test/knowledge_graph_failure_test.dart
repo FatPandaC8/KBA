@@ -11,8 +11,6 @@ import 'package:mobile/ui/screens/library/widgets/knowledge_graph_widget.dart';
 import 'support/fakes.dart';
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   late SettingsService settings;
   late FakeNoteRepository repo;
   late FakeBackendService backend;
@@ -20,6 +18,7 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
+    installSecureStorageMock(TestWidgetsFlutterBinding.ensureInitialized());
     settings = SettingsService();
     repo = FakeNoteRepository();
     backend = FakeBackendService(settings);

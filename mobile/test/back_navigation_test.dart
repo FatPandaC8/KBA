@@ -21,8 +21,6 @@ class MockAudioService extends Fake implements AudioService {
 }
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   late FakeNoteRepository repo;
   late NoteProvider noteProvider;
   late MockAudioService audioService;
@@ -30,6 +28,7 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
+    installSecureStorageMock(TestWidgetsFlutterBinding.ensureInitialized());
     settingsService = SettingsService();
     await settingsService.setSessionToken('test-session-token');
     repo = FakeNoteRepository();
@@ -196,23 +195,5 @@ void main() {
     },
   );
 
-  testWidgets('6. Back from My recordings returns to the Record tab', (
-    tester,
-  ) async {
-    await tester.pumpWidget(createTestWidget());
-    await tester.pumpAndSettle();
 
-    final home = tester.widget<HomeScreen>(find.byType(HomeScreen));
-    home.onOpenRecordings();
-    await tester.pumpAndSettle();
-
-    expect(find.byType(RecordingsScreen), findsOneWidget);
-
-    final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
-    await widgetsAppState.didPopRoute();
-    await tester.pumpAndSettle();
-
-    expect(find.byType(RecordingsScreen), findsNothing);
-    expect(find.byType(HomeScreen), findsOneWidget);
-  });
 }

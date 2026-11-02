@@ -25,8 +25,20 @@ class SettingsService extends ChangeNotifier {
 
   String _sessionToken = '';
 
+  /// All secure-storage operations are serialized: the constructor's read and
+  /// a later set/clear must never race (a late read used to overwrite a
+  /// freshly persisted token, silently signing the user out).
+  Future<void> _storageOpLock = Future<void>.value();
+
   SettingsService() {
-    _loadSessionToken();
+    _runStorageOp(_loadSessionToken);
+  }
+
+  Future<void> _runStorageOp(Future<void> Function() op) {
+    final next = _storageOpLock.then((_) => op());
+    // Never let a failed op wedge the chain.
+    _storageOpLock = next.then((_) {}, onError: (_) {});
+    return next;
   }
 
   static Future<SettingsService> init() async {
@@ -51,12 +63,14 @@ class SettingsService extends ChangeNotifier {
   /// Persist a session token obtained after sign-up or login.
   Future<void> setSessionToken(String value) async {
     final next = value.trim();
-    final changed = next != _sessionToken;
-    _sessionToken = next;
-    // Persist to secure storage without blocking; a locked/unavailable
-    // keystore (or headless test VM) must not prevent the app from running.
-    await _persistSessionToken(_sessionToken);
-    if (changed) notifyListeners();
+    // The assignment and the persist run inside the same serialized op, so
+    // the constructor's initial read can never land between them.
+    await _runStorageOp(() async {
+      final changed = next != _sessionToken;
+      _sessionToken = next;
+      await _persistSessionToken(_sessionToken);
+      if (changed) notifyListeners();
+    });
   }
 
   Future<void> _persistSessionToken(String token) async {
@@ -73,10 +87,12 @@ class SettingsService extends ChangeNotifier {
 
   /// Clear the session token (logout / account deletion).
   Future<void> clearSession() async {
-    final changed = _sessionToken.isNotEmpty;
-    _sessionToken = '';
-    await _persistSessionToken('');
-    if (changed) notifyListeners();
+    await _runStorageOp(() async {
+      final changed = _sessionToken.isNotEmpty;
+      _sessionToken = '';
+      await _persistSessionToken('');
+      if (changed) notifyListeners();
+    });
   }
 
   /// Whether a session is currently established.

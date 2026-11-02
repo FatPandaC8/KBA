@@ -11,13 +11,13 @@ import 'package:mobile/services/settings_service.dart';
 
 /// Single source of truth for captures and their processing state.
 ///
-/// Audio uploads are strictly serialized (REC-04): only one upload request is
-/// sent at a time, but the mic is never gated by in-flight uploads or
-/// processing — a new recording can start while the previous one is still on
-/// the server (owner decision, 2026-10-29). The local audio file is deleted as
-/// soon as the backend answers 202, because that response only returns after
-/// the server has written the file and committed the database row; retry then
-/// works from the server-side copy (REC-06).
+/// Pipeline split (S1/S2): the app calls POST /api/stt first (stateless; the
+/// server stores nothing), keeps the transcript in memory, then calls
+/// POST /api/text-kb with a client-generated capture_id. Every call runs
+/// work inside the request; there is no job, no queue and no polling. On any
+/// failure the user taps Retry: the SAME capture_id is re-sent for Text-KB
+/// (idempotent server-side) and the audio is re-sent to /api/stt only if the
+/// transcript was never obtained (or the session restarted).
 class NoteProvider extends ChangeNotifier {
   final NoteRepository _repository;
   final BackendService _backendService;
@@ -30,19 +30,10 @@ class NoteProvider extends ChangeNotifier {
   int _searchRequestId = 0;
   bool _resumeStarted = false;
 
-  final List<String> _uploadQueue = [];
+  /// Transcripts that survive in memory after a successful STT call, keyed by
+  /// note id. A Text-KB retry never re-runs STT while the transcript lives.
+  final Map<String, String> _transcripts = {};
   final Set<String> _processing = {};
-  final Set<String> _uploadingIds = {};
-  final Map<String, Completer<void>> _uploadCompleters = {};
-  bool _draining = false;
-
-  static const int maxRetryAttempts = 3;
-  static const Duration retryBaseDelay = Duration(seconds: 2);
-
-  /// Poll cadence for asynchronous processing status. Mutable so tests can run
-  /// the pipeline without real waiting.
-  static Duration statusPollInterval = const Duration(milliseconds: 600);
-  static const int maxStatusPolls = 500;
 
   NoteProvider(
     this._repository,
@@ -58,7 +49,6 @@ class NoteProvider extends ChangeNotifier {
   List<Note> get searchResults => _searchResults;
   BackendService get backendService => _backendService;
   SettingsService? get settingsService => _settingsService;
-  bool get isUploadInFlight => _uploadingIds.isNotEmpty;
 
   Future<void> loadNotes() async {
     _isLoading = true;
@@ -74,8 +64,9 @@ class NoteProvider extends ChangeNotifier {
     }
   }
 
-  /// Create an audio note with a persistent queue and serialized server sync.
-  /// Text-only capture is removed per PRD v2 (text capture is backlogged).
+  /// Create an audio note and run the synchronous split pipeline for it.
+  /// The screen returns immediately; the processing update stream drives the
+  /// progress states (transcribing -> structuring -> ready/failed).
   Future<Note> createAudioNote({
     required String audioPath,
     required int durationMs,
@@ -89,8 +80,7 @@ class NoteProvider extends ChangeNotifier {
       audioDurationMs: durationMs,
       originalContent: '[Voice recording]',
       title: 'Voice Thought',
-      status: ProcessingStatus.queued,
-      stage: 'upload',
+      status: ProcessingStatus.transcribing,
       createdAt: now,
       updatedAt: now,
     );
@@ -98,128 +88,52 @@ class NoteProvider extends ChangeNotifier {
     await _repository.insertNote(note);
     await loadNotes();
 
-    // Queue without awaiting: the capture screen returns immediately and the
-    // processor works through the queue one upload at a time.
-    unawaited(syncCaptureToBackend(note.id));
+    // Fire-and-forget: the capture screen returns immediately.
+    unawaited(_ingestNote(noteId));
 
     return note;
   }
 
-  /// Queues a capture for upload and processing.
-  ///
-  /// Concurrent calls for the same capture join the same future, so retries can
-  /// never produce two uploads for one record.
-  Future<void> syncCaptureToBackend(String noteId) {
-    final completer = _uploadCompleters.putIfAbsent(
-      noteId,
-      () => Completer<void>(),
-    );
-    if (_processing.contains(noteId) || _uploadQueue.contains(noteId)) {
-      return completer.future;
-    }
-    _uploadQueue.add(noteId);
-    _drainQueue();
-    return completer.future;
-  }
-
-  Future<void> _drainQueue() async {
-    if (_draining) return;
-    _draining = true;
+  /// Runs the two-API pipeline for one note: STT (unless the transcript is
+  /// already known) then Text-KB, updating the note between stages.
+  Future<void> _ingestNote(String noteId) async {
+    if (_processing.contains(noteId)) return;
+    _processing.add(noteId);
     try {
-      while (_uploadQueue.isNotEmpty) {
-        final noteId = _uploadQueue.removeAt(0);
-        if (_processing.contains(noteId)) continue;
-        _processing.add(noteId);
-        try {
-          await _processNote(noteId);
-        } catch (e) {
-          debugPrint('Processing error on note $noteId: $e');
-        } finally {
-          _processing.remove(noteId);
-          _uploadingIds.remove(noteId);
-          notifyListeners();
-          final completer = _uploadCompleters.remove(noteId);
-          if (completer != null && !completer.isCompleted) {
-            completer.complete();
-          }
-        }
-        await loadNotes();
-      }
-    } finally {
-      _draining = false;
-    }
-  }
+      var note = await _repository.getNoteById(noteId);
+      if (note == null) return;
 
-  Future<void> _processNote(String noteId) async {
-    final note = await _repository.getNoteById(noteId);
-    if (note == null) return;
-    if (!note.hasLocalAudio && !note.audioOnServer) return;
+      final transcript = _transcripts[noteId] ?? await _transcribe(noteId, note);
+      if (transcript == null) return; // failed & marked by _transcribe
 
-    try {
-      if (note.hasLocalAudio) {
-        final isOnline = await _backendService.checkHealth();
-        if (!isOnline) {
-          throw BackendException(
-            'Backend server is unreachable. Check the server URL in Settings.',
-          );
-        }
+      note = await _repository.getNoteById(noteId);
+      if (note == null) return;
 
-        await _save(
-          note.copyWith(
-            status: ProcessingStatus.uploading,
-            stage: 'upload',
-            failureReason: null,
-            errorClass: null,
-            updatedAt: DateTime.now(),
-          ),
-        );
+      await _save(
+        note.copyWith(
+          status: ProcessingStatus.structuring,
+          failureReason: null,
+          errorClass: null,
+          updatedAt: DateTime.now(),
+        ),
+      );
 
-        _uploadingIds.add(noteId);
-        notifyListeners();
-        try {
-          await _backendService.uploadCapture(
-            captureId: note.id,
-            idempotencyKey: note.id,
-            audioPath: note.audioPath!,
-            durationMs: note.audioDurationMs ?? 0,
-          );
-        } finally {
-          _uploadingIds.remove(noteId);
-          notifyListeners();
-        }
+      final result = await _backendService.ingestText(
+        captureId: noteId, // re-sends the SAME id on retry (idempotent, S4a)
+        text: transcript,
+      );
+      _transcripts[noteId] = transcript;
+      debugPrint(
+        'text-kb ok capture_id=$noteId entities=${result.entitiesAdded} '
+        'relationships=${result.relationshipsAdded} '
+        'provider=${result.provider} elapsed_ms=${result.elapsedMs}',
+      );
 
-        final uploaded = await _repository.getNoteById(noteId) ?? note;
-        // REC-04/REC-06 (owner decision 2026-10-29): a successful upload means
-        // the server confirmed receipt and durable storage, so the local copy
-        // is redundant and is deleted right away. Retries use the server-side
-        // audio via /recordings/{id}/retry.
-        final removed = await _deleteLocalAudio(uploaded.audioPath);
-        await _save(
-          uploaded.copyWith(
-            status: ProcessingStatus.pending,
-            stage: 'upload',
-            audioPath: removed ? null : uploaded.audioPath,
-            // The server has the bytes now, so retry can work without the
-            // local file even before extraction completes.
-            audioOnServer: true,
-            failureReason: null,
-            errorClass: null,
-            updatedAt: DateTime.now(),
-          ),
-        );
-      } else {
-        await _save(
-          note.copyWith(
-            status: ProcessingStatus.pending,
-            stage: note.stage.isEmpty ? 'upload' : note.stage,
-            failureReason: null,
-            errorClass: null,
-            updatedAt: DateTime.now(),
-          ),
-        );
-      }
-
-      await _pollUntilTerminal(noteId);
+      final knowledge = await _backendService.fetchKnowledgeForCapture(noteId);
+      await _markReady(
+        (await _repository.getNoteById(noteId)) ?? note,
+        knowledge,
+      );
     } catch (e) {
       final current = await _repository.getNoteById(noteId);
       if (current == null) return;
@@ -229,61 +143,68 @@ class NoteProvider extends ChangeNotifier {
           status: ProcessingStatus.failed,
           errorClass: errorClass,
           failureReason: _friendlyError(e, errorClass),
-          retryCount: current.retryCount + 1,
           updatedAt: DateTime.now(),
         ),
       );
+    } finally {
+      _processing.remove(noteId);
+      notifyListeners();
     }
   }
 
-  Future<void> _pollUntilTerminal(String noteId) async {
-    for (var poll = 0; poll < maxStatusPolls; poll++) {
-      final status = await _backendService.fetchRecordingStatus(noteId);
-      final current = await _repository.getNoteById(noteId);
-      if (current == null) return;
-
-      if (status.status == 'ready') {
-        final knowledge = await _backendService.fetchKnowledgeForCapture(
-          noteId,
-        );
-        await _markReady(current, knowledge);
-        return;
-      }
-
-      if (status.status == 'failed') {
-        await _markFailed(
-          current,
-          status.errorClass,
-          status.errorMessage,
-          status.attempt,
-          status.stage,
-        );
-        return;
-      }
-
+  /// POST /api/stt. Returns the transcript on success, or null after marking
+  /// the note failed. The transcript is remembered in memory so a Text-KB
+  /// retry never runs STT again.
+  Future<String?> _transcribe(String noteId, Note note) async {
+    if (note.audioPath == null || note.audioPath!.isEmpty) {
+      return null;
+    }
+    final isOnline = await _backendService.checkHealth();
+    if (!isOnline) {
       await _save(
-        current.copyWith(
-          status: _mapStage(status.stage),
-          stage: status.stage,
-          retryCount: status.attempt,
-          audioOnServer: true,
-          failureReason: null,
-          errorClass: null,
+        note.copyWith(
+          status: ProcessingStatus.failed,
+          errorClass: 'network_error',
+          failureReason:
+              'Backend server is unreachable. Check the server URL in Settings.',
           updatedAt: DateTime.now(),
         ),
       );
-      await Future<void>.delayed(statusPollInterval);
+      return null;
     }
 
-    final current = await _repository.getNoteById(noteId);
-    if (current != null) {
-      await _markFailed(
-        current,
-        'provider_failure',
-        'Processing did not finish in time.',
-        current.retryCount,
-        current.stage,
+    await _save(
+      note.copyWith(
+        status: ProcessingStatus.transcribing,
+        failureReason: null,
+        errorClass: null,
+        updatedAt: DateTime.now(),
+      ),
+    );
+
+    try {
+      final stt = await _backendService.transcribe(
+        audioPath: note.audioPath!,
+        durationMs: note.audioDurationMs ?? 0,
       );
+      _transcripts[noteId] = stt.transcript;
+      debugPrint('stt ok capture_id=$noteId provider=${stt.provider} '
+          'language=${stt.language ?? "-"}');
+      return stt.transcript;
+    } catch (e) {
+      final current = await _repository.getNoteById(noteId);
+      if (current != null) {
+        final errorClass = _errorClassFor(e);
+        await _save(
+          current.copyWith(
+            status: ProcessingStatus.failed,
+            errorClass: errorClass,
+            failureReason: _friendlyError(e, errorClass),
+            updatedAt: DateTime.now(),
+          ),
+        );
+      }
+      return null;
     }
   }
 
@@ -306,17 +227,10 @@ class NoteProvider extends ChangeNotifier {
   }
 
   Future<void> _markReady(Note note, KnowledgeSnapshot? knowledge) async {
-    // REC-06: post-upload deletion is the primary path; this only catches the
-    // rare case where deletion failed during upload or the state was rebuilt
-    // through reconciliation.
-    if (note.hasLocalAudio) {
-      await _deleteLocalAudio(note.audioPath);
-    }
-
     await _save(
       note.copyWith(
-        audioPath: null,
-        audioOnServer: true,
+        // Local audio stays: the split pipeline stores nothing server-side
+        // (S4b), so this device holds the only playable copy (VR-02).
         // Local wins (U3): a user-edited title/summary is never overwritten
         // by server-derived text; unedited fields keep following the server.
         title:
@@ -333,58 +247,16 @@ class NoteProvider extends ChangeNotifier {
         openQuestions: knowledge?.openQuestions ?? note.openQuestions,
         knowledgeItemId: knowledge?.knowledgeItemId ?? note.knowledgeItemId,
         status: ProcessingStatus.ready,
-        stage: 'completed',
         failureReason: null,
         errorClass: null,
-        retryCount: 0,
         updatedAt: DateTime.now(),
       ),
     );
-  }
-
-  Future<void> _markFailed(
-    Note note,
-    String errorClass,
-    String? rawMessage,
-    int attempt,
-    String stage,
-  ) async {
-    await _save(
-      note.copyWith(
-        status: ProcessingStatus.failed,
-        stage: stage,
-        errorClass: errorClass,
-        failureReason: _friendlyErrorClass(errorClass, rawMessage),
-        retryCount: attempt,
-        updatedAt: DateTime.now(),
-      ),
-    );
-  }
-
-  ProcessingStatus _mapStage(String stage) {
-    switch (stage) {
-      case 'upload':
-        return ProcessingStatus.uploading;
-      case 'transcribe':
-        return ProcessingStatus.transcribing;
-      case 'extract':
-      case 'save':
-        return ProcessingStatus.structuring;
-      case 'completed':
-        return ProcessingStatus.ready;
-      default:
-        return ProcessingStatus.pending;
-    }
-  }
-
-  ProcessingStatus _mapServerStatus(String status, String stage) {
-    if (status == 'ready') return ProcessingStatus.ready;
-    if (status == 'failed') return ProcessingStatus.failed;
-    return _mapStage(stage);
   }
 
   String _errorClassFor(Object error) {
     if (error is BackendException) {
+      if (error.errorClass.isNotEmpty) return error.errorClass;
       if (error.statusCode == 401) return 'auth';
       if (error.statusCode == 403) {
         final message = error.message.toLowerCase();
@@ -392,7 +264,9 @@ class NoteProvider extends ChangeNotifier {
         if (message.contains('verify')) return 'verification_required';
         return 'forbidden';
       }
+      if (error.statusCode == 409) return 'conflict';
       if (error.statusCode == 422) return 'invalid_input';
+      if (error.statusCode == 413) return 'too_large';
       if (error.statusCode == 429) return 'quota_exhausted';
       if (error.statusCode != null && error.statusCode! >= 500) {
         return 'provider_failure';
@@ -401,6 +275,7 @@ class NoteProvider extends ChangeNotifier {
     final text = error.toString().toLowerCase();
     if (text.contains('socket') ||
         text.contains('timeout') ||
+        text.contains('timed out') ||
         text.contains('network') ||
         text.contains('unreachable') ||
         text.contains('connection')) {
@@ -462,7 +337,8 @@ class NoteProvider extends ChangeNotifier {
   }
 
   /// Rebuilds local processing state from the backend on app open (NET-02).
-  /// Reopening the app never creates a job; it only reads and reconciles.
+  /// Reads the capture journal (capture truth only) — never creates work and
+  /// never polls; missing knowledge items are fetched once.
   Future<void> reconcileWithBackend() async {
     List<RecordingModel> recordings;
     try {
@@ -480,7 +356,7 @@ class NoteProvider extends ChangeNotifier {
       final local = existing[recording.captureId];
       if (local == null) {
         KnowledgeSnapshot? knowledge;
-        if (recording.status == 'ready') {
+        if (recording.hasKnowledgeItem) {
           knowledge = await _backendService.fetchKnowledgeForCapture(
             recording.captureId,
           );
@@ -490,7 +366,6 @@ class NoteProvider extends ChangeNotifier {
         final note = Note(
           id: recording.captureId,
           audioPath: null,
-          audioDurationMs: recording.durationMs,
           originalContent: '[Voice recording]',
           title: (knowledge != null && knowledge.title.isNotEmpty)
               ? knowledge.title
@@ -499,18 +374,14 @@ class NoteProvider extends ChangeNotifier {
           keyFacts: knowledge?.concepts ?? const [],
           openQuestions: knowledge?.openQuestions ?? const [],
           tags: knowledge?.tags ?? const [],
-          status: _mapServerStatus(recording.status, recording.stage),
-          stage: recording.stage,
-          audioOnServer: recording.hasAudio,
-          knowledgeItemId:
-              recording.knowledgeItemId ?? knowledge?.knowledgeItemId,
-          failureReason: recording.status == 'failed'
-              ? _friendlyErrorClass(
-                  recording.errorClass,
-                  recording.errorMessage,
-                )
-              : null,
-          errorClass: recording.errorClass,
+          status: recording.hasKnowledgeItem
+              ? ProcessingStatus.ready
+              : ProcessingStatus.failed,
+          knowledgeItemId: knowledge?.knowledgeItemId,
+          failureReason: recording.hasKnowledgeItem
+              ? null
+              : _friendlyErrorClass('provider_failure', recording.lastError),
+          errorClass: recording.hasKnowledgeItem ? '' : 'provider_failure',
           createdAt: createdAt,
           updatedAt: DateTime.now(),
         );
@@ -518,29 +389,28 @@ class NoteProvider extends ChangeNotifier {
         continue;
       }
 
-      if (_processing.contains(local.id) || _uploadQueue.contains(local.id)) {
+      if (_processing.contains(local.id)) {
         continue;
       }
 
       KnowledgeSnapshot? knowledge;
-      if (recording.status == 'ready' && local.knowledgeItemId == null) {
+      if (recording.hasKnowledgeItem && local.knowledgeItemId == null) {
         knowledge = await _backendService.fetchKnowledgeForCapture(
           recording.captureId,
         );
       }
 
-      var updated = local.copyWith(
-        status: _mapServerStatus(recording.status, recording.stage),
-        stage: recording.stage,
-        audioOnServer: local.audioOnServer || recording.hasAudio,
-        errorClass: recording.errorClass,
+      final ready = recording.hasKnowledgeItem;
+      final updated = local.copyWith(
+        status: ready ? ProcessingStatus.ready : local.status,
         knowledgeItemId: local.knowledgeItemId ?? knowledge?.knowledgeItemId,
-        failureReason: recording.status == 'failed'
-            ? _friendlyErrorClass(recording.errorClass, recording.errorMessage)
-            : null,
-        retryCount: recording.status == 'failed'
-            ? local.retryCount
-            : local.retryCount,
+        failureReason: ready
+            ? null
+            : (local.failureReason ??
+                _friendlyErrorClass('provider_failure', recording.lastError)),
+        errorClass: ready ? '' : (local.errorClass.isEmpty
+            ? 'provider_failure'
+            : local.errorClass),
         // Local wins (U3): user-edited fields are preserved as-is across
         // reconciliation; unedited fields keep syncing from the server.
         title:
@@ -558,17 +428,6 @@ class NoteProvider extends ChangeNotifier {
         updatedAt: DateTime.now(),
       );
 
-      // A server-confirmed ready recording means the local file is redundant.
-      if (recording.status == 'ready' && updated.hasLocalAudio) {
-        try {
-          final file = File(updated.audioPath!);
-          if (await file.exists()) await file.delete();
-        } catch (e) {
-          debugPrint('Could not delete reconciled local audio: $e');
-        }
-        updated = updated.copyWith(audioPath: null);
-      }
-
       await _repository.updateNote(updated);
     }
 
@@ -576,6 +435,8 @@ class NoteProvider extends ChangeNotifier {
   }
 
   /// Resumes eligible local captures after app start without duplicating work.
+  /// A note whose transcript is still in memory goes straight to Text-KB;
+  /// otherwise the audio is re-sent to /api/stt.
   Future<void> retryPendingWork() async {
     if (_resumeStarted) return;
     _resumeStarted = true;
@@ -583,60 +444,42 @@ class NoteProvider extends ChangeNotifier {
     await reconcileWithBackend();
 
     final candidates = _notes.where((note) {
-      if (!note.hasLocalAudio) return false;
-      if (note.retryCount >= maxRetryAttempts) return false;
-      return note.status == ProcessingStatus.queued ||
-          note.status == ProcessingStatus.uploading ||
-          note.status == ProcessingStatus.pending ||
+      return _transcripts.containsKey(note.id) ||
+          (note.status == ProcessingStatus.failed &&
+              note.hasLocalAudio) ||
           note.status == ProcessingStatus.transcribing ||
-          note.status == ProcessingStatus.structuring ||
-          note.status == ProcessingStatus.failed;
+          note.status == ProcessingStatus.structuring;
     }).toList();
 
     for (final note in candidates) {
-      unawaited(syncCaptureToBackend(note.id));
+      unawaited(_ingestNote(note.id));
     }
   }
 
-  /// User-triggered retry. Resets the attempt budget for an explicit action.
+  /// User-triggered retry. Re-sends the SAME capture_id for Text-KB
+  /// (idempotent, S4a); STT only re-runs when no transcript is held in
+  /// memory.
   Future<void> retryNote(String noteId) async {
     final note = await _repository.getNoteById(noteId);
     if (note == null) return;
 
-    final reset = note.copyWith(
-      retryCount: 0,
-      failureReason: null,
-      errorClass: null,
-      status: ProcessingStatus.queued,
-      updatedAt: DateTime.now(),
+    final hasTranscript = _transcripts.containsKey(noteId) ||
+        (note.knowledgeItemId != null && note.knowledgeItemId!.isNotEmpty);
+    if (!hasTranscript && !note.hasLocalAudio) {
+      throw Exception('This recording has no audio available for retry.');
+    }
+
+    await _repository.updateNote(
+      note.copyWith(
+        failureReason: null,
+        errorClass: null,
+        status: ProcessingStatus.transcribing,
+        updatedAt: DateTime.now(),
+      ),
     );
-    await _repository.updateNote(reset);
     await loadNotes();
 
-    if (reset.hasLocalAudio) {
-      await syncCaptureToBackend(noteId);
-      return;
-    }
-
-    if (reset.audioOnServer) {
-      try {
-        await _backendService.retryRecording(noteId);
-      } catch (e) {
-        await _save(
-          reset.copyWith(
-            status: ProcessingStatus.failed,
-            failureReason: _friendlyError(e, _errorClassFor(e)),
-            errorClass: _errorClassFor(e),
-            updatedAt: DateTime.now(),
-          ),
-        );
-        rethrow;
-      }
-      await syncCaptureToBackend(noteId);
-      return;
-    }
-
-    throw Exception('This recording has no audio available for retry.');
+    await _ingestNote(noteId);
   }
 
   String _friendlyErrorText(Object error) {
@@ -675,6 +518,12 @@ class NoteProvider extends ChangeNotifier {
     } catch (e) {
       throw Exception('Could not delete from server: ${_friendlyErrorText(e)}');
     }
+    final note = await _repository.getNoteById(id);
+    if (note != null) {
+      // The local audio is the only copy (S4b); delete it with the record.
+      await _deleteLocalAudio(note.audioPath);
+    }
+    _transcripts.remove(id);
     await _repository.deleteNote(id);
     await loadNotes();
   }
@@ -687,6 +536,10 @@ class NoteProvider extends ChangeNotifier {
   /// Clears every locally cached note (and its audio) so nothing user-specific
   /// survives in echo_notes.db after logout.
   Future<void> clearLocalNotes() async {
+    for (final note in _notes) {
+      await _deleteLocalAudio(note.audioPath);
+    }
+    _transcripts.clear();
     await _repository.clearAllNotes();
     await loadNotes();
   }

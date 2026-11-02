@@ -9,6 +9,7 @@ import 'package:mobile/state/note_provider.dart';
 import 'package:mobile/ui/screens/home/home_screen.dart';
 import 'package:mobile/ui/screens/home/widgets/mic_halo_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'support/fakes.dart';
 
 class MockNoteRepository extends NoteRepository {
   final List<Note> inMemory = [];
@@ -89,8 +90,6 @@ class TestableAudioService extends Fake implements AudioService {
 }
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   late MockNoteRepository repo;
   late NoteProvider noteProvider;
   late TestableAudioService audioService;
@@ -98,7 +97,8 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    settingsService = SettingsService();
+    installSecureStorageMock(TestWidgetsFlutterBinding.ensureInitialized());
+settingsService = SettingsService();
     repo = MockNoteRepository();
     final backendService = BackendService(settingsService);
 

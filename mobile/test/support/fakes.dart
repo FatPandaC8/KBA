@@ -1,8 +1,61 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+
 import 'package:mobile/data/models/note.dart';
 import 'package:mobile/data/repositories/note_repository.dart';
 import 'package:mobile/services/backend_service.dart';
+
+/// Mocks the flutter_secure_storage method channel so tests never settle on a
+/// missing platform plugin (a read/write future would otherwise never
+/// complete and the test hangs). Values are held in a memory map.
+///
+/// Returns the map so a test can inspect or change the stored session token.
+Map<String, String> installSecureStorageMock(TestWidgetsFlutterBinding binding) {
+  final store = <String, String>{};
+  const channel = MethodChannel(
+    'plugins.it_nomads.com/flutter_secure_storage',
+  );
+  binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+    call,
+  ) async {
+    switch (call.method) {
+      case 'read':
+      case 'readAll':
+        final arguments = (call.arguments as Map?)?.cast<String, Object?>() ??
+            const <String, Object?>{};
+        final key = arguments['key'] as String?;
+        if (call.method == 'read') {
+          return store[key];
+        }
+        return store;
+      case 'write':
+        final arguments = (call.arguments as Map?)?.cast<String, Object?>() ??
+            const <String, Object?>{};
+        final key = arguments['key'] as String?;
+        final value = arguments['value'] as String?;
+        if (key != null && value != null) store[key] = value;
+        return null;
+      case 'delete':
+        final arguments = (call.arguments as Map?)?.cast<String, Object?>() ??
+            const <String, Object?>{};
+        store.remove(arguments['key'] as String?);
+        return null;
+      case 'deleteAll':
+        store.clear();
+        return null;
+      case 'containsKey':
+        final arguments = (call.arguments as Map?)?.cast<String, Object?>() ??
+            const <String, Object?>{};
+        return store.containsKey(arguments['key'] as String?);
+      default:
+        return null;
+    }
+  });
+  return store;
+}
 
 /// In-memory repository used by widget and provider regression tests.
 class FakeNoteRepository extends NoteRepository {
@@ -53,22 +106,23 @@ class FakeNoteRepository extends NoteRepository {
 
 /// Controllable backend double. No real network calls are made.
 ///
-/// It models the M3 asynchronous pipeline: an upload queues a job, status polls
-/// walk through [stages] and then report `ready`, unless [terminalErrorClass]
-/// makes the job fail with that class.
+/// It models the pipeline split (S1/S2): a successful [transcribe] call
+/// yields a transcript; [ingestText] runs the synchronous text-kb ingest and
+/// is idempotent per capture_id unless [failIn] is set.
 class FakeBackendService extends BackendService {
   FakeBackendService(super.settings);
 
   bool healthy = true;
-  bool failUpload = false;
+  bool failStt = false;
+  bool failIngest = false;
   bool failDelete = false;
   bool failGraph = false;
   bool failSearch = false;
   bool failAuth = false;
   bool hasNewGraphData = false;
 
-  int uploadCalls = 0;
-  int deleteCalls = 0;
+  int transcribeCalls = 0;
+  int ingestCalls = 0;
   int healthCalls = 0;
   int loginCalls = 0;
   int signupCalls = 0;
@@ -77,39 +131,32 @@ class FakeBackendService extends BackendService {
   int deleteAccountCalls = 0;
   int testConnectionCalls = 0;
   int getConsentCalls = 0;
-  int statusCalls = 0;
   int knowledgeCalls = 0;
-  int retryCalls = 0;
   int graphCalls = 0;
+  int deleteCalls = 0;
   int searchCalls = 0;
 
-  /// Capture ids in upload order, used to prove uploads are serialized.
-  final List<String> uploadedCaptureIds = [];
+  /// Capture ids in ingest order.
+  final List<String> ingestedCaptureIds = [];
 
-  /// When set, uploads wait until the completer is completed.
-  Completer<void>? uploadGate;
+  /// When set, ingest waits until the completer is completed.
+  Completer<void>? ingestGate;
 
-  /// Stages reported before the job becomes `ready`. Empty means the first
-  /// status poll already reports `ready`.
-  List<String> stages = const [];
-
-  /// When set, the job fails with this error class.
-  String? terminalErrorClass;
-  String? terminalErrorMessage;
-
-  final Map<String, int> _polls = {};
-
-  BackendSyncResult uploadResult = BackendSyncResult(
-    captureId: 'capture',
-    status: 'queued',
-    title: '',
-    coreIdea: '',
-    concepts: const [],
-    tags: const [],
-    openQuestions: const [],
+  SttResult sttResult = SttResult(
+    transcript: 'I met Anna at the cafe yesterday.',
+    language: 'en',
+    provider: 'fake-whisper',
   );
 
-  /// Knowledge returned once a capture is ready.
+  IngestResultModel ingestResult = IngestResultModel(
+    captureId: '',
+    knowledgeItemId: '',
+    entitiesAdded: 1,
+    relationshipsAdded: 1,
+    provider: 'extraction_local',
+  );
+
+  /// Knowledge returned for ready captures.
   Map<String, KnowledgeSnapshot> knowledgeByCapture = {};
 
   final List<RecordingModel> recordings = [];
@@ -135,73 +182,52 @@ class FakeBackendService extends BackendService {
   }
 
   @override
-  Future<BackendSyncResult> uploadCapture({
-    required String captureId,
-    required String idempotencyKey,
+  Future<SttResult> transcribe({
     required String audioPath,
     required int durationMs,
   }) async {
-    uploadCalls++;
-    if (uploadGate != null) {
-      await uploadGate!.future;
-    }
-    if (failAuth) {
+    transcribeCalls++;
+    if (failStt) {
       throw BackendException(
-        'AI provider consent is required before recording.',
-        statusCode: 403,
+        'Audio is too small or corrupted (<100 bytes)',
+        statusCode: 400,
+        errorClass: 'invalid_input',
       );
     }
-    if (failUpload) {
-      throw BackendException('upload failed', statusCode: 500);
-    }
-    uploadedCaptureIds.add(captureId);
-    _polls[captureId] = 0;
-    return BackendSyncResult(
-      captureId: captureId,
-      status: 'queued',
-      title: uploadResult.title,
-      coreIdea: uploadResult.coreIdea,
-      concepts: uploadResult.concepts,
-      tags: uploadResult.tags,
-      openQuestions: uploadResult.openQuestions,
-    );
+    return sttResult;
   }
 
   @override
-  Future<RecordingStatusModel> fetchRecordingStatus(String captureId) async {
-    statusCalls++;
-    if (terminalErrorClass != null) {
-      return RecordingStatusModel(
-        captureId: captureId,
-        stage: 'transcribe',
-        status: 'failed',
-        attempt: 1,
-        errorClass: terminalErrorClass!,
-        errorMessage: terminalErrorMessage,
+  Future<IngestResultModel> ingestText({
+    required String captureId,
+    required String text,
+  }) async {
+    ingestCalls++;
+    if (ingestGate != null) {
+      await ingestGate!.future;
+    }
+    if (failAuth) {
+      throw BackendException(
+        'AI processing consent is required before recording.',
+        statusCode: 403,
+        errorClass: 'consent_required',
       );
     }
-
-    final poll = (_polls[captureId] ?? 0) + 1;
-    _polls[captureId] = poll;
-
-    if (poll <= stages.length) {
-      return RecordingStatusModel(
-        captureId: captureId,
-        stage: stages[poll - 1],
-        status: 'processing',
-        attempt: 0,
-        errorClass: '',
-        errorMessage: null,
+    if (failIngest) {
+      throw BackendException(
+        'Text-KB ingest failed.',
+        statusCode: 500,
+        errorClass: 'server_error',
       );
     }
-
-    return RecordingStatusModel(
+    ingestedCaptureIds.add(captureId);
+    return IngestResultModel(
       captureId: captureId,
-      stage: 'completed',
-      status: 'ready',
-      attempt: 0,
-      errorClass: '',
-      errorMessage: null,
+      knowledgeItemId: 'knowledge-$captureId',
+      entitiesAdded: ingestResult.entitiesAdded,
+      relationshipsAdded: ingestResult.relationshipsAdded,
+      provider: ingestResult.provider,
+      elapsedMs: ingestResult.elapsedMs,
     );
   }
 
@@ -211,26 +237,17 @@ class FakeBackendService extends BackendService {
     return knowledgeByCapture[captureId] ??
         KnowledgeSnapshot(
           knowledgeItemId: 'knowledge-$captureId',
-          title: uploadResult.title.isEmpty
-              ? 'Voice Thought'
-              : uploadResult.title,
-          coreIdea: uploadResult.coreIdea,
-          concepts: uploadResult.concepts,
-          tags: uploadResult.tags,
-          openQuestions: uploadResult.openQuestions,
+          title: 'Voice Thought',
+          coreIdea: 'Organized knowledge',
+          concepts: const ['Echo'],
+          tags: const ['concept'],
+          openQuestions: const [],
         );
   }
 
   @override
   Future<List<RecordingModel>> fetchRecordings() async {
     return List.unmodifiable(recordings);
-  }
-
-  @override
-  Future<void> retryRecording(String captureId) async {
-    retryCalls++;
-    _polls[captureId] = 0;
-    terminalErrorClass = null;
   }
 
   @override

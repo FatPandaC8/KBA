@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -264,26 +264,80 @@ class ProviderInfoModel {
   }
 }
 
-/// Client-facing capture result. Transcripts are deliberately absent: the
-/// server never returns transcripts to ordinary users (PRD C3/D5).
-class BackendSyncResult {
-  final String captureId;
-  final String status;
-  final String title;
-  final String coreIdea;
-  final List<String> concepts;
-  final List<String> tags;
-  final List<String> openQuestions;
+/// STT result (pipeline split, S1): one audio blob in, one transcript out.
+/// The server persists NOTHING; the client keeps or discards the audio.
+class SttResult {
+  final String transcript;
+  final String? language;
+  final String provider;
 
-  BackendSyncResult({
+  SttResult({required this.transcript, this.language, required this.provider});
+
+  factory SttResult.fromJson(Map<String, dynamic> json) {
+    return SttResult(
+      transcript: (json['transcript'] as String?) ?? '',
+      language: json['language'] as String?,
+      provider: (json['provider'] as String?) ?? '',
+    );
+  }
+}
+
+/// Knowledge-ingest result (pipeline split, S1): POST /api/text-kb ran the
+/// one-UoW ingest for capture_id. Retries re-send the SAME capture_id.
+class IngestResultModel {
+  final String captureId;
+  final String knowledgeItemId;
+  final int entitiesAdded;
+  final int relationshipsAdded;
+  final String provider;
+  final int elapsedMs;
+
+  IngestResultModel({
     required this.captureId,
-    required this.status,
-    required this.title,
-    required this.coreIdea,
-    required this.concepts,
-    required this.tags,
-    required this.openQuestions,
+    required this.knowledgeItemId,
+    required this.entitiesAdded,
+    required this.relationshipsAdded,
+    required this.provider,
+    this.elapsedMs = 0,
   });
+
+  factory IngestResultModel.fromJson(Map<String, dynamic> json) {
+    return IngestResultModel(
+      captureId: (json['capture_id'] as String?) ?? '',
+      knowledgeItemId: (json['knowledge_item_id'] as String?) ?? '',
+      entitiesAdded: (json['entities_added'] as num?)?.toInt() ?? 0,
+      relationshipsAdded:
+          (json['relationships_added'] as num?)?.toInt() ?? 0,
+      provider: (json['provider'] as String?) ?? '',
+      elapsedMs: (json['elapsed_ms'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+/// Capture journal row (pipeline split, S2): capture truth only — created_at,
+/// whether the knowledge item exists, and the last ingest error if one is
+/// stored. There is no stage/status/attempt any more.
+class RecordingModel {
+  final String captureId;
+  final String createdAt;
+  final bool hasKnowledgeItem;
+  final String? lastError;
+
+  RecordingModel({
+    required this.captureId,
+    required this.createdAt,
+    required this.hasKnowledgeItem,
+    required this.lastError,
+  });
+
+  factory RecordingModel.fromJson(Map<String, dynamic> json) {
+    return RecordingModel(
+      captureId: json['capture_id'] as String,
+      createdAt: (json['created_at'] as String?) ?? '',
+      hasKnowledgeItem: (json['has_knowledge_item'] as bool?) ?? false,
+      lastError: json['last_error'] as String?,
+    );
+  }
 }
 
 /// Knowledge derived from one recording. This is the only text the client is
@@ -306,78 +360,6 @@ class KnowledgeSnapshot {
   });
 }
 
-class RecordingStatusModel {
-  final String captureId;
-  final String stage;
-  final String status;
-  final int attempt;
-  final String errorClass;
-  final String? errorMessage;
-
-  RecordingStatusModel({
-    required this.captureId,
-    required this.stage,
-    required this.status,
-    required this.attempt,
-    required this.errorClass,
-    required this.errorMessage,
-  });
-
-  factory RecordingStatusModel.fromJson(Map<String, dynamic> json) {
-    return RecordingStatusModel(
-      captureId: (json['capture_id'] as String?) ?? '',
-      stage: (json['stage'] as String?) ?? 'upload',
-      status: (json['status'] as String?) ?? 'queued',
-      attempt: (json['attempt'] as num?)?.toInt() ?? 0,
-      errorClass: (json['error_class'] as String?) ?? '',
-      errorMessage: json['error_message'] as String?,
-    );
-  }
-
-  bool get isTerminal => status == 'ready' || status == 'failed';
-}
-
-class RecordingModel {
-  final String captureId;
-  final String createdAt;
-  final int durationMs;
-  final String status;
-  final String stage;
-  final bool hasAudio;
-  final String? knowledgeItemId;
-  final String? errorMessage;
-  final String errorClass;
-  final bool retryable;
-
-  RecordingModel({
-    required this.captureId,
-    required this.createdAt,
-    required this.durationMs,
-    required this.status,
-    required this.stage,
-    required this.hasAudio,
-    required this.knowledgeItemId,
-    required this.errorMessage,
-    required this.errorClass,
-    required this.retryable,
-  });
-
-  factory RecordingModel.fromJson(Map<String, dynamic> json) {
-    return RecordingModel(
-      captureId: json['capture_id'] as String,
-      createdAt: (json['created_at'] as String?) ?? '',
-      durationMs: (json['duration_ms'] as num?)?.toInt() ?? 0,
-      status: (json['status'] as String?) ?? 'queued',
-      stage: (json['stage'] as String?) ?? 'upload',
-      hasAudio: (json['has_audio'] as bool?) ?? false,
-      knowledgeItemId: json['knowledge_item_id'] as String?,
-      errorMessage: json['error_message'] as String?,
-      errorClass: (json['error_class'] as String?) ?? '',
-      retryable: (json['retryable'] as bool?) ?? false,
-    );
-  }
-}
-
 class BackendConnectionResult {
   final bool ok;
   final String message;
@@ -388,8 +370,12 @@ class BackendConnectionResult {
 class BackendException implements Exception {
   final int? statusCode;
   final String message;
+  /// Typed error class from the split endpoints ({class, message} bodies):
+  /// invalid_input, unsupported_language, conflict, quota_exhausted,
+  /// timeout, network_error, provider_failure, server_error...
+  final String errorClass;
 
-  BackendException(this.message, {this.statusCode});
+  BackendException(this.message, {this.statusCode, this.errorClass = ''});
 
   @override
   String toString() => message;
@@ -397,7 +383,14 @@ class BackendException implements Exception {
 
 class BackendService {
   static const Duration _readTimeout = Duration(seconds: 45);
-  static const Duration _uploadTimeout = Duration(seconds: 120);
+  // Pipeline split (S2): both endpoints run work inside the request, so the
+  // client timeout must cover the full server-side work:
+  //  - /api/stt  : local faster-whisper decode+transcribe (measured ~0.5-2 s
+  //    for a short capture on the dev machine; 120 s covers a full 120 s note).
+  //  - /api/text-kb : extraction + graph commit (measured ~0.5-3 s; 90 s
+  //    covers long texts near the 20k-char limit and provider hiccups).
+  static const Duration _sttTimeout = Duration(seconds: 120);
+  static const Duration _textKbTimeout = Duration(seconds: 90);
 
   final SettingsService _settings;
   final http.Client _client;
@@ -605,69 +598,62 @@ class BackendService {
     return text.length > 160 ? '${text.substring(0, 160)}…' : text;
   }
 
-  // ---------------------------------------------------------------- capture
-  /// Uploads audio and queues server-side processing (HTTP 202). The caller must
-  /// poll [fetchRecordingStatus] until a terminal state; HTTP 200 only confirms
-  /// that the bytes were stored, never that knowledge was produced.
-  Future<BackendSyncResult> uploadCapture({
-    required String captureId,
-    required String idempotencyKey,
+  // --------------------------------------------------------------- capture
+  /// POST /api/stt (auth only): a stateless transcription. The server persists
+  /// NOTHING, so the local audio remains the only copy; the caller decides
+  /// whether to keep it for playback or delete it (S2/S4b).
+  Future<SttResult> transcribe({
     required String audioPath,
     required int durationMs,
   }) async {
-    await ensureConsent();
-    final uri = Uri.parse('$baseUrl/api/captures/upload');
-    final request = http.MultipartRequest('POST', uri)
-      ..headers.addAll(_authHeaders)
-      ..fields['capture_id'] = captureId
-      ..fields['idempotency_key'] = idempotencyKey
-      ..fields['duration_ms'] = durationMs.toString()
-      ..files.add(await http.MultipartFile.fromPath('file', audioPath));
-
-    final streamedRes = await _client.send(request).timeout(_uploadTimeout);
-    final res = await http.Response.fromStream(streamedRes)
-        .timeout(_uploadTimeout);
-
-    if (res.statusCode >= 200 && res.statusCode < 300) {
-      final data = jsonDecode(utf8.decode(res.bodyBytes));
-      final item = data['knowledge_item'] as Map<String, dynamic>? ?? {};
-      return BackendSyncResult(
-        captureId: data['capture_id'] ?? captureId,
-        status: data['status'] ?? 'queued',
-        title: item['title'] ?? '',
-        coreIdea: item['core_idea'] ?? '',
-        concepts:
-            (item['concepts'] as List?)?.map((e) => e.toString()).toList() ??
-            [],
-        tags: (item['tags'] as List?)?.map((e) => e.toString()).toList() ?? [],
-        openQuestions:
-            (item['open_questions'] as List?)
-                ?.map((e) => e.toString())
-                .toList() ??
-            [],
-      );
-    }
-    throw BackendException(
-      _serverMessage(res, 'Server upload failed'),
-      statusCode: res.statusCode,
-    );
-  }
-
-  Future<RecordingStatusModel> fetchRecordingStatus(String captureId) async {
+    final bytes = await File(audioPath).readAsBytes();
     final res = await _client
-        .get(
-          Uri.parse('$baseUrl/api/recordings/$captureId/status'),
-          headers: _authHeaders,
+        .post(
+          Uri.parse('$baseUrl/api/stt'),
+          headers: {
+            ..._authHeaders,
+            'Content-Type': 'audio/mp4',
+            'Content-Length': '${bytes.length}',
+          },
+          body: bytes,
         )
-        .timeout(_readTimeout);
-    if (res.statusCode == 200) {
-      return RecordingStatusModel.fromJson(
+        .timeout(_sttTimeout);
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return SttResult.fromJson(
         jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>,
       );
     }
     throw BackendException(
-      _serverMessage(res, 'Failed to read recording status'),
+      _typedMessage(res, 'Transcription failed'),
       statusCode: res.statusCode,
+      errorClass: _typedClass(res),
+    );
+  }
+
+  /// POST /api/text-kb (auth + consent): one synchronous ingest of `text`
+  /// under `captureId`. Idempotent on capture_id — a retry re-sends the SAME
+  /// id and the server returns the existing result without creating anything.
+  Future<IngestResultModel> ingestText({
+    required String captureId,
+    required String text,
+  }) async {
+    await ensureConsent();
+    final res = await _client
+        .post(
+          Uri.parse('$baseUrl/api/text-kb'),
+          headers: _jsonHeaders,
+          body: jsonEncode({'capture_id': captureId, 'text': text}),
+        )
+        .timeout(_textKbTimeout);
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return IngestResultModel.fromJson(
+        jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>,
+      );
+    }
+    throw BackendException(
+      _typedMessage(res, 'Knowledge processing failed'),
+      statusCode: res.statusCode,
+      errorClass: _typedClass(res),
     );
   }
 
@@ -685,21 +671,6 @@ class BackendService {
     return list
         .map((e) => RecordingModel.fromJson(e as Map<String, dynamic>))
         .toList();
-  }
-
-  Future<void> retryRecording(String captureId) async {
-    final res = await _client
-        .post(
-          Uri.parse('$baseUrl/api/recordings/$captureId/retry'),
-          headers: _authHeaders,
-        )
-        .timeout(_readTimeout);
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw BackendException(
-        _serverMessage(res, 'Recording could not be retried'),
-        statusCode: res.statusCode,
-      );
-    }
   }
 
   /// Returns the knowledge produced for one recording, or null when the
@@ -729,23 +700,6 @@ class BackendService {
       );
     }
     return null;
-  }
-
-  /// Owner-only authenticated audio bytes for playback (VR-02).
-  Future<Uint8List> fetchAudioBytes(String captureId) async {
-    final res = await _client
-        .get(
-          Uri.parse('$baseUrl/api/recordings/$captureId/audio'),
-          headers: _authHeaders,
-        )
-        .timeout(_readTimeout);
-    if (res.statusCode == 200) {
-      return res.bodyBytes;
-    }
-    throw BackendException(
-      _serverMessage(res, 'Audio is not available'),
-      statusCode: res.statusCode,
-    );
   }
 
   // ---------------------------------------------------------------- search
@@ -967,12 +921,34 @@ class BackendService {
   }
 
   String _serverMessage(http.Response res, String fallback) {
+    return _typedMessage(res, fallback);
+  }
+
+  /// Reads the typed error body of the split endpoints:
+  /// `{"detail": {"class": "...", "message": "..."}}`. Plain `detail` strings
+  /// (legacy routes) still work.
+  String _typedMessage(http.Response res, String fallback) {
     try {
       final decoded = jsonDecode(utf8.decode(res.bodyBytes));
-      if (decoded is Map && decoded['detail'] is String) {
-        return decoded['detail'] as String;
+      if (decoded is Map) {
+        final detail = decoded['detail'];
+        if (detail is Map) {
+          final message = (detail['message'] as String?) ?? '';
+          if (message.isNotEmpty) return message;
+        }
+        if (detail is String && detail.isNotEmpty) return detail;
       }
     } catch (_) {}
     return '$fallback (HTTP ${res.statusCode}).';
+  }
+
+  String _typedClass(http.Response res) {
+    try {
+      final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+      if (decoded is Map && decoded['detail'] is Map) {
+        return ((decoded['detail'] as Map)['class'] as String?) ?? '';
+      }
+    } catch (_) {}
+    return '';
   }
 }

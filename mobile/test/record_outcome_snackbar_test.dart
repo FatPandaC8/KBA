@@ -40,8 +40,6 @@ class _RecordingAudioService extends Fake implements AudioService {
 /// job. When processing fails, the user is told so instead of being left with
 /// a spinner-style message that never resolves.
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   late SettingsService settings;
   late FakeNoteRepository repo;
   late FakeBackendService backend;
@@ -49,22 +47,18 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
+    installSecureStorageMock(TestWidgetsFlutterBinding.ensureInitialized());
     settings = SettingsService();
     repo = FakeNoteRepository();
     backend = FakeBackendService(settings);
-    NoteProvider.statusPollInterval = Duration.zero;
     provider = NoteProvider(repo, backend, settings);
     await provider.loadNotes();
-  });
-
-  tearDown(() {
-    NoteProvider.statusPollInterval = const Duration(milliseconds: 600);
   });
 
   testWidgets('a failed capture replaces the organizing banner', (
     tester,
   ) async {
-    backend.terminalErrorClass = 'invalid_input';
+    backend.failStt = true;
 
     await tester.pumpWidget(
       MaterialApp(

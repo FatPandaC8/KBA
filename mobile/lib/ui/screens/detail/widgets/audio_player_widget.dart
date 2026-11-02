@@ -1,28 +1,26 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 
 import 'package:mobile/core/theme/echo_colors.dart';
 
-/// Plays either a local file or authenticated server bytes.
+/// Plays a local audio file.
 ///
-/// Server audio is fetched through the owner-scoped API on demand; no public
-/// URL is ever constructed (VR-02).
+/// The pipeline split (S4b) stores no audio server-side, so playback only
+/// reads this device's copy (VR-02 owner-scoped playback is preserved by
+/// keeping the file on the recording device).
 class AudioPlayerWidget extends StatefulWidget {
   final String? audioPath;
   final int? durationMs;
-  final Future<Uint8List> Function()? remoteAudioLoader;
 
   const AudioPlayerWidget({
     super.key,
     this.audioPath,
     this.durationMs,
-    this.remoteAudioLoader,
   }) : assert(
-         audioPath != null || remoteAudioLoader != null,
-         'Provide audioPath or remoteAudioLoader',
+         audioPath != null,
+         'Provide audioPath',
        );
 
   @override
@@ -79,12 +77,7 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
     });
     try {
       final path = widget.audioPath;
-      if (path != null && path.isNotEmpty) {
-        await _player.play(DeviceFileSource(path));
-      } else {
-        final bytes = await widget.remoteAudioLoader!();
-        await _player.play(BytesSource(bytes));
-      }
+      await _player.play(DeviceFileSource(path!));
     } catch (e) {
       if (mounted) {
         setState(() => _error = 'Audio could not be played.');

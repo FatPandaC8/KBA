@@ -30,8 +30,6 @@ Note _note({
 }
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   late SettingsService settings;
   late FakeNoteRepository repo;
   late FakeBackendService backend;
@@ -39,15 +37,11 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
+    installSecureStorageMock(TestWidgetsFlutterBinding.ensureInitialized());
     settings = SettingsService();
     repo = FakeNoteRepository();
     backend = FakeBackendService(settings);
-    NoteProvider.statusPollInterval = Duration.zero;
     provider = NoteProvider(repo, backend, settings);
-  });
-
-  tearDown(() {
-    NoteProvider.statusPollInterval = const Duration(milliseconds: 600);
   });
 
   test(
@@ -71,66 +65,100 @@ void main() {
     },
   );
 
-  test('concurrent retries upload a capture only once', () async {
+  test('concurrent retries run the ingest only once', () async {
     final note = _note();
     repo.inMemory.add(note);
     await provider.loadNotes();
 
-    backend.uploadGate = Completer<void>();
-    final first = provider.syncCaptureToBackend(note.id);
-    final second = provider.syncCaptureToBackend(note.id);
-    backend.uploadGate!.complete();
+    backend.ingestGate = Completer<void>();
+    final first = provider.retryNote(note.id);
+    final second = provider.retryNote(note.id);
+    backend.ingestGate!.complete();
     await Future.wait([first, second]);
     await pumpEventQueue();
 
-    expect(backend.uploadCalls, 1);
+    expect(backend.ingestCalls, 1);
     final saved = await repo.getNoteById(note.id);
     expect(saved!.status, ProcessingStatus.ready);
-    expect(saved.retryCount, 0);
   });
 
-  test('restart resumes eligible failed work', () async {
-    final note = _note(retryCount: 1);
+  test('restart resumes eligible failed work through the split pipeline',
+      () async {
+    final note = _note();
     repo.inMemory.add(note);
     await provider.loadNotes();
 
     await provider.retryPendingWork();
     await pumpEventQueue();
 
-    expect(backend.uploadCalls, 1);
+    expect(backend.transcribeCalls, 1);
+    expect(backend.ingestCalls, 1);
     final saved = await repo.getNoteById(note.id);
     expect(saved!.status, ProcessingStatus.ready);
   });
 
-  test('restart does not exceed the bounded retry budget', () async {
-    final note = _note(retryCount: NoteProvider.maxRetryAttempts);
+  test('restart never re-ingests a failed note without audio or transcript',
+      () async {
+    final note = _note(audioPath: null);
     repo.inMemory.add(note);
     await provider.loadNotes();
 
     await provider.retryPendingWork();
     await pumpEventQueue();
 
-    expect(backend.uploadCalls, 0);
+    expect(backend.transcribeCalls, 0);
+    expect(backend.ingestCalls, 0);
     final saved = await repo.getNoteById(note.id);
     expect(saved!.status, ProcessingStatus.failed);
-    expect(saved.retryCount, NoteProvider.maxRetryAttempts);
   });
 
   test(
-    'failed upload records a visible failure and increments retryCount',
+    'a Text-KB failure keeps the transcript: Retry re-sends the SAME '
+    'capture_id without running STT again',
     () async {
-      final note = _note(retryCount: 0);
-      repo.inMemory.add(note);
-      await provider.loadNotes();
-      backend.failUpload = true;
+      backend.failIngest = true;
+      final note = await provider.createAudioNote(
+        audioPath: '/tmp/echo-test.m4a',
+        durationMs: 1200,
+      );
+      await pumpEventQueue();
 
-      await provider.syncCaptureToBackend(note.id);
+      final failed = await repo.getNoteById(note.id);
+      expect(failed!.status, ProcessingStatus.failed);
+      expect(backend.transcribeCalls, 1);
+      expect(backend.ingestCalls, 1);
+
+      // The user fixes the condition and taps Retry: the transcript is in
+      // memory, so only Text-KB runs again with the same capture_id.
+      backend.failIngest = false;
+      await provider.retryNote(note.id);
+      await pumpEventQueue();
+
+      expect(backend.transcribeCalls, 1,
+          reason: 'STT must NOT run twice for one capture');
+      expect(backend.ingestCalls, 2);
+      expect(backend.ingestedCaptureIds, everyElement(note.id),
+          reason: 'retries re-send the SAME capture_id (idempotent)');
+      final saved = await repo.getNoteById(note.id);
+      expect(saved!.status, ProcessingStatus.ready);
+    },
+  );
+
+  test(
+    'a failed ingest records a typed, visible failure reason',
+    () async {
+      backend.failIngest = true;
+
+      final note = await provider.createAudioNote(
+        audioPath: '/tmp/echo-test.m4a',
+        durationMs: 1200,
+      );
       await pumpEventQueue();
 
       final saved = await repo.getNoteById(note.id);
       expect(saved!.status, ProcessingStatus.failed);
       expect(saved.failureReason, isNotNull);
-      expect(saved.retryCount, 1);
     },
   );
 }
+

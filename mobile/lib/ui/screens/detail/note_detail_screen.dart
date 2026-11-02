@@ -217,32 +217,20 @@ class _NoteDetailScreenState extends State<NoteDetailScreen> {
                               color: EchoColors.ink,
                             ),
                           ),
-                          if (note.retryCount >=
-                              NoteProvider.maxRetryAttempts) ...[
-                            const SizedBox(height: 4),
-                            const Text(
-                              'Automatic retries stopped. Use Retry to try again.',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: EchoColors.muted,
-                              ),
-                            ),
-                          ],
+                          // Pipeline split (S2): retries are always manual
+                          // (no attempt budget), so nothing is shown here.
                         ],
                       ),
                     ),
                     const SizedBox(height: 16),
                   ],
 
-                  // Audio Player if audio is local or stored on the server.
-                  if (note.canPlayAudio) ...[
+                  // Audio Player. The split pipeline (S4b) stores no audio
+                  // server-side, so only the local copy can be played.
+                  if (note.hasLocalAudio) ...[
                     AudioPlayerWidget(
-                      audioPath: note.hasLocalAudio ? note.audioPath : null,
+                      audioPath: note.audioPath,
                       durationMs: note.audioDurationMs,
-                      remoteAudioLoader: note.hasLocalAudio
-                          ? null
-                          : () => widget.noteProvider.backendService
-                                .fetchAudioBytes(note.id),
                     ),
                     const SizedBox(height: 16),
                   ],

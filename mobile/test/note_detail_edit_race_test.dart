@@ -10,8 +10,6 @@ import 'package:mobile/ui/screens/detail/note_detail_screen.dart';
 import 'support/fakes.dart';
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   late SettingsService settings;
   late FakeNoteRepository repo;
   late FakeBackendService backend;
@@ -20,6 +18,7 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
+    installSecureStorageMock(TestWidgetsFlutterBinding.ensureInitialized());
     settings = SettingsService();
     repo = FakeNoteRepository();
     backend = FakeBackendService(settings);

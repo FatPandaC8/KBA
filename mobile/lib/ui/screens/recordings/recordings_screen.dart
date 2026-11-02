@@ -247,17 +247,11 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
                                 ),
                               ),
                             ],
-                            if (expanded && note.canPlayAudio) ...[
+                            if (expanded && note.hasLocalAudio) ...[
                               const SizedBox(height: 10),
                               AudioPlayerWidget(
-                                audioPath: note.hasLocalAudio
-                                    ? note.audioPath
-                                    : null,
+                                audioPath: note.audioPath,
                                 durationMs: note.audioDurationMs,
-                                remoteAudioLoader: note.hasLocalAudio
-                                    ? null
-                                    : () => widget.noteProvider.backendService
-                                          .fetchAudioBytes(note.id),
                               ),
                             ],
                           ],

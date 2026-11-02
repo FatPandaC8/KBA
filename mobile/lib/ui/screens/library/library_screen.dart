@@ -117,6 +117,30 @@ class _LibraryScreenState extends State<LibraryScreen> {
         _graphErrorSubmessage = 'The server returned an invalid response. Please retry when the server is reachable.';
       });
       _scheduleAutoReload();
+    } on BackendException catch (e) {
+      if (!mounted) return;
+      // Bug #4: consent is required before the first graph load. A 403 with a
+      // consent message opens the consent prompt; granting it reloads.
+      if (e.statusCode == 403 &&
+          e.message.toLowerCase().contains('consent')) {
+        setState(() {
+          _loading = false;
+          _graphErrorMessage = 'Processing confirmation needed';
+          _graphErrorSubmessage =
+              'Echo needs your OK to build the knowledge graph. Confirm to continue.';
+        });
+        final granted = await _promptConsent();
+        if (granted && mounted) {
+          await _loadGraph();
+        }
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _graphErrorMessage = 'Could not load graph';
+        _graphErrorSubmessage = e.message;
+      });
+      _scheduleAutoReload();
     } catch (e) {
       if (!mounted) return;
       // Determine error type for user-friendly messaging
@@ -275,6 +299,57 @@ class _LibraryScreenState extends State<LibraryScreen> {
       _reloadTimer = null;
       if (mounted) _loadGraph();
     });
+  }
+
+  /// Bug #4: the consent gate for the first graph request. Shows a visible
+  /// consent prompt (provider/version detail from the server); confirming
+  /// records consent via POST /api/consent and reloads the graph. Returning
+  /// without confirming keeps the error card with its Retry button.
+  Future<bool> _promptConsent() async {
+    if (!mounted) return false;
+    Map<String, dynamic>? status;
+    try {
+      status = await widget.noteProvider.backendService.getConsent();
+    } catch (_) {}
+    final granted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        final version = (status?['version'] as String?) ?? '';
+        return AlertDialog(
+          title: const Text('AI processing consent'),
+          content: Text(
+            'Echo builds your knowledge graph by processing captured text on '
+            'the configured server. Transcripts are never returned to the '
+            'app.${version.isEmpty ? '' : '\n\nConsent version: $version'}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Not now'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Allow'),
+            ),
+          ],
+        );
+      },
+    );
+    if (granted != true) return false;
+    if (!mounted) return false;
+    final backend = widget.noteProvider.backendService;
+    try {
+      await backend.ensureConsent();
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not confirm processing setup: $e')),
+      );
+      return false;
+    }
   }
 
   void _onQueryChanged(String value) {

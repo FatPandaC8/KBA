@@ -42,14 +42,13 @@ class FakeAudioService extends Fake implements AudioService {
 }
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   late NoteProvider provider;
   late FakeAudioService audioService;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    final settings = SettingsService();
+    installSecureStorageMock(TestWidgetsFlutterBinding.ensureInitialized());
+final settings = SettingsService();
     await settings.setSessionToken('test-session-token');
     audioService = FakeAudioService();
     provider = NoteProvider(
@@ -74,7 +73,11 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    // The mic button pulses forever, so pumpAndSettle never returns; pump a
+    // bounded number of frames instead.
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
 
     final gesture = await tester.startGesture(
       tester.getCenter(find.byType(MicHaloButton)),
@@ -90,14 +93,24 @@ void main() {
       ),
     );
     await tester.pump();
+    await tester.pump();
 
-    expect(find.text('Capture what matters.'), findsOneWidget);
+    // The user stays on the Record tab (app_shell keeps both tabs mounted,
+    // so assert on the active index instead of a hero string).
+    final bottomNav = tester.widget<EchoBottomNav>(
+      find.byType(EchoBottomNav),
+    );
+    expect(bottomNav.currentIndex, 0);
     expect(
       find.text('Stop recording before leaving this screen.'),
       findsOneWidget,
     );
 
     await gesture.up();
-    await tester.pumpAndSettle();
+    // Bounded pumps again: the pipeline runs inside the (fake) requests and
+    // the mic animation never settles by itself.
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
   });
 }

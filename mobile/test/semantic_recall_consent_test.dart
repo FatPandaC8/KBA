@@ -5,6 +5,7 @@ import 'package:mobile/services/backend_service.dart';
 import 'package:mobile/services/settings_service.dart';
 import 'package:mobile/state/note_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'support/fakes.dart';
 
 class MockNoteRepository extends NoteRepository {
   final List<Note> inMemory = [];
@@ -54,10 +55,9 @@ class MockNoteRepository extends NoteRepository {
 }
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   test('Semantic recall prioritization and keyword fallback', () async {
     SharedPreferences.setMockInitialValues({});
+    installSecureStorageMock(TestWidgetsFlutterBinding.ensureInitialized());
     final settingsService = SettingsService();
 
     final mockRepo = MockNoteRepository();
