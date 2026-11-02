@@ -1,0 +1,636 @@
+openapi: 3.1.0
+info:
+  title: Gusby API
+  version: 1.0.0
+  description: Gusby Text-to-Knowledge-Graph Platform REST API
+servers:
+  - url: http://127.0.0.1:8080/api
+    description: Local Development Server
+
+paths:
+  /auth/signup:
+    post:
+      summary: Register new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+      responses:
+        '201':
+          description: User registered successfully
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /auth/login:
+    post:
+      summary: Sign in user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Sign in successful
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /auth/logout:
+    post:
+      summary: Sign out current user
+      responses:
+        '200':
+          description: Signed out successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /auth/me:
+    get:
+      summary: Get current authenticated user
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /documents/text:
+    post:
+      summary: Ingest plain text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, content]
+              properties:
+                title:
+                  type: string
+                content:
+                  type: string
+                  maxLength: 50000
+      responses:
+        '202':
+          description: Document accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /documents/url:
+    post:
+      summary: Ingest public web URL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  format: uri
+      responses:
+        '202':
+          description: URL accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /documents/file:
+    post:
+      summary: Ingest document file (TXT, PDF, DOCX)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                title:
+                  type: string
+      responses:
+        '202':
+          description: File accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /documents:
+    get:
+      summary: List user documents
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [uploading, processing, completed, failed]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DocumentSummary'
+                  total:
+                    type: integer
+
+  /documents/{id}:
+    get:
+      summary: Get document details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentDetail'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /graph:
+    get:
+      summary: Get Level-of-Detail graph projection
+      parameters:
+        - name: zoom
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [far, medium, deep]
+        - name: topic_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: concept_ids
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphProjection'
+
+  /graph/concept/{id}:
+    get:
+      summary: Get Concept details and connected propositions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConceptDetail'
+
+  /graph/proposition/{id}:
+    get:
+      summary: Get Proposition details and exact evidence spans
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PropositionDetail'
+
+  /review/proposals:
+    get:
+      summary: List pending integration proposals
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  proposals:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IntegrationProposal'
+
+  /review/proposals/{id}/resolve:
+    post:
+      summary: Approve or reject an integration proposal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [approve, reject]
+                notes:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /review/conflicts:
+    get:
+      summary: List flagged proposition conflicts
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conflicts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PropositionConflict'
+
+  /review/conflicts/{id}/resolve:
+    post:
+      summary: Resolve a proposition conflict
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution_choice, reason]
+              properties:
+                resolution_choice:
+                  type: string
+                  enum: [keep_both, override]
+                reason:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+components:
+  responses:
+    ErrorResponse:
+      description: API Error
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: object
+                required: [code, message]
+                properties:
+                  code:
+                    type: string
+                  message:
+                    type: string
+                  details:
+                    type: object
+
+  schemas:
+    AuthResponse:
+      type: object
+      required: [user]
+      properties:
+        user:
+          type: object
+          required: [id, email]
+          properties:
+            id:
+              type: string
+              format: uuid
+            email:
+              type: string
+
+    IngestResponse:
+      type: object
+      required: [document_id, status, job_id]
+      properties:
+        document_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        title:
+          type: string
+        job_id:
+          type: string
+          format: uuid
+
+    DocumentSummary:
+      type: object
+      required: [id, title, source_type, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        source_type:
+          type: string
+        status:
+          type: string
+        char_count:
+          type: integer
+        concept_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    DocumentDetail:
+      type: object
+      required: [id, title, source_type, status, source_text, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        source_type:
+          type: string
+        status:
+          type: string
+        source_text:
+          type: string
+        char_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    GraphProjection:
+      type: object
+      required: [zoom, nodes, edges]
+      properties:
+        zoom:
+          type: string
+        nodes:
+          type: array
+          items:
+            type: object
+            required: [id, label, type]
+            properties:
+              id:
+                type: string
+              label:
+                type: string
+              type:
+                type: string
+                enum: [topic, concept]
+              x:
+                type: number
+              y:
+                type: number
+              degree:
+                type: integer
+              needs_review:
+                type: boolean
+        edges:
+          type: array
+          items:
+            type: object
+            required: [id, source, target]
+            properties:
+              id:
+                type: string
+              source:
+                type: string
+              target:
+                type: string
+              label:
+                type: string
+              has_conflict:
+                type: boolean
+
+    ConceptDetail:
+      type: object
+      required: [id, name, aliases, degree, propositions]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        degree:
+          type: integer
+        aliases:
+          type: array
+          items:
+            type: string
+        topics:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+        propositions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PropositionDetail'
+
+    PropositionDetail:
+      type: object
+      required: [id, subject, predicate, object, confidences, evidence]
+      properties:
+        id:
+          type: string
+          format: uuid
+        subject:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+        predicate:
+          type: string
+        object:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+        confidences:
+          type: object
+          required: [extraction, evidence_validity, resolution, proposition]
+          properties:
+            extraction:
+              type: number
+            evidence_validity:
+              type: number
+            resolution:
+              type: number
+            proposition:
+              type: number
+        has_conflict:
+          type: boolean
+        evidence:
+          type: array
+          items:
+            type: object
+            required: [id, document_id, quote, char_start, char_end]
+            properties:
+              id:
+                type: string
+              document_id:
+                type: string
+              document_title:
+                type: string
+              quote:
+                type: string
+              char_start:
+                type: integer
+              char_end:
+                type: integer
+
+    IntegrationProposal:
+      type: object
+      required: [id, item_type, status, confidences, payload]
+      properties:
+        id:
+          type: string
+          format: uuid
+        item_type:
+          type: string
+        status:
+          type: string
+        confidences:
+          type: object
+        payload:
+          type: object
+
+    PropositionConflict:
+      type: object
+      required: [id, conflict_type, status, canonical_proposition, conflicting_proposition]
+      properties:
+        id:
+          type: string
+          format: uuid
+        conflict_type:
+          type: string
+        status:
+          type: string
+        canonical_proposition:
+          $ref: '#/components/schemas/PropositionDetail'
+        conflicting_proposition:
+          $ref: '#/components/schemas/PropositionDetail'

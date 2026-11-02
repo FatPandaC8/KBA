@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GusbyConfigSchema",
+  "type": "object",
+  "required": ["database_url", "groq_api_key"],
+  "properties": {
+    "database_url": {
+      "type": "string",
+      "description": "PostgreSQL connection string (e.g. postgresql://echo:echo_dev_password@127.0.0.1:5432/echo_kb)"
+    },
+    "port": {
+      "type": "integer",
+      "default": 8080,
+      "description": "Port on which the Go HTTP backend listens"
+    },
+    "env": {
+      "type": "string",
+      "enum": ["development", "production", "test"],
+      "default": "development"
+    },
+    "groq_api_key": {
+      "type": "string",
+      "description": "API key for Groq Cloud inference"
+    },
+    "groq_model": {
+      "type": "string",
+      "default": "openai/gpt-oss-120b",
+      "description": "Groq model identifier"
+    },
+    "groq_base_url": {
+      "type": "string",
+      "default": "https://api.groq.com/openai/v1",
+      "description": "Base URL for Groq API"
+    },
+    "groq_rpm": {
+      "type": "integer",
+      "default": 30,
+      "description": "Rate limit: requests per minute"
+    },
+    "groq_tpm": {
+      "type": "integer",
+      "default": 8000,
+      "description": "Rate limit: tokens per minute"
+    },
+    "daily_user_token_budget": {
+      "type": "integer",
+      "default": 40000,
+      "description": "Max Groq tokens consumed per user per calendar day"
+    },
+    "session_secret": {
+      "type": "string",
+      "description": "Secret key used to hash session identifiers"
+    }
+  },
+  "additionalProperties": false
+}

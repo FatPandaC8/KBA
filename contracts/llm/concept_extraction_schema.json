@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GusbyConceptExtractionSchema",
+  "type": "object",
+  "required": ["concepts"],
+  "properties": {
+    "concepts": {
+      "type": "array",
+      "description": "List of explicit named concepts and entities extracted from the text chunk",
+      "items": {
+        "type": "object",
+        "required": ["name", "category", "core_idea", "confidence"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Exact canonical noun or entity name as stated in source"
+          },
+          "category": {
+            "type": "string",
+            "description": "High level taxonomy category (e.g. Theory, Technique, Person, Organization, Location, Technology, Law)"
+          },
+          "core_idea": {
+            "type": "string",
+            "description": "A single precise sentence defining the concept based exclusively on this chunk"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Confidence score between 0.0 and 1.0"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

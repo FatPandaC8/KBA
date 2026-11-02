@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GusbyEntityAdjudicationSchema",
+  "type": "object",
+  "required": ["is_same_entity", "confidence", "reasoning"],
+  "properties": {
+    "is_same_entity": {
+      "type": "boolean",
+      "description": "True if candidate entity refers to the exact same canonical real-world concept"
+    },
+    "canonical_name": {
+      "type": "string",
+      "description": "Recommended canonical name if merged"
+    },
+    "alias_to_add": {
+      "type": "string",
+      "description": "The variant name to record as an alias under the canonical entity"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Adjudication confidence score"
+    },
+    "reasoning": {
+      "type": "string",
+      "description": "Concise justification for why these two represent the exact same entity or distinct entities"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GusbyPropositionExtractionSchema",
+  "type": "object",
+  "required": ["propositions"],
+  "properties": {
+    "propositions": {
+      "type": "array",
+      "description": "List of explicit directed propositions supported by exact verbatim quotes",
+      "items": {
+        "type": "object",
+        "required": ["subject", "predicate", "object", "evidence_quote", "confidence"],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Subject entity, must match an extracted concept name"
+          },
+          "predicate": {
+            "type": "string",
+            "description": "Active directed relationship verb or short predicate phrase (e.g. Discovered, Implements, Regulates, Contradicts)"
+          },
+          "object": {
+            "type": "string",
+            "description": "Object entity, must match an extracted concept name"
+          },
+          "evidence_quote": {
+            "type": "string",
+            "description": "Exact verbatim substring from the source text chunk that proves the assertion without a single altered character"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Extraction confidence score"
+          },
+          "qualifiers": {
+            "type": "object",
+            "description": "Optional conditions, temporal scope, or modal qualifiers",
+            "properties": {
+              "time": { "type": "string" },
+              "condition": { "type": "string" },
+              "scope": { "type": "string" },
+              "modality": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
