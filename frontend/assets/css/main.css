@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --canvas-bg: #FFFFFF;
+  --text-primary: #111827;
+  --text-secondary: #4B5563;
+  --text-muted: #9CA3AF;
+  --hairline: #E5E7EB;
+
+  /* Default Palette: Editorial Slate */
+  --palette-accent: #2C3E50;
+  --palette-node-fill: #F1F5F9;
+  --palette-node-stroke: #64748B;
+  --palette-edge: #CBD5E1;
+}
+
+[data-palette="terracotta"] {
+  --palette-accent: #9C4221;
+  --palette-node-fill: #FDF2E9;
+  --palette-node-stroke: #C05621;
+  --palette-edge: #E2D9D2;
+}
+
+[data-palette="moss"] {
+  --palette-accent: #2D3B2D;
+  --palette-node-fill: #F4F7F4;
+  --palette-node-stroke: #5A6B5C;
+  --palette-edge: #D4DDD5;
+}
+
+[data-palette="ochre"] {
+  --palette-accent: #6B4F1D;
+  --palette-node-fill: #FAF6ED;
+  --palette-node-stroke: #9A7B38;
+  --palette-edge: #E8E2D5;
+}
+
+html, body {
+  background-color: #FFFFFF;
+  color: #111827;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Verbatim Evidence Highlight */
+mark.evidence-highlight {
+  background-color: #FEF3C7;
+  color: #111827;
+  border-bottom: 2px solid #D97706;
+  border-radius: 2px;
+  padding: 1px 3px;
+  font-weight: 500;
+}
+
+/* Custom Minimal Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #E5E7EB;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #D1D5DB;
+}

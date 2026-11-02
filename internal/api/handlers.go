@@ -160,6 +160,40 @@ func (s *Server) HandleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+func (s *Server) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		s.renderError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+		return
+	}
+
+	var req changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.renderError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid JSON payload")
+		return
+	}
+
+	if err := s.authService.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword); err != nil {
+		if err == auth.ErrInvalidCredentials {
+			s.renderError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Incorrect current password")
+			return
+		}
+		if err == auth.ErrPasswordTooShort {
+			s.renderError(w, http.StatusBadRequest, "PASSWORD_TOO_SHORT", "New password must be at least 8 characters")
+			return
+		}
+		s.renderError(w, http.StatusInternalServerError, "SERVER_ERROR", err.Error())
+		return
+	}
+
+	s.renderJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
 // -----------------------------------------------------------------------------
 // Ingestion Handlers
 // -----------------------------------------------------------------------------

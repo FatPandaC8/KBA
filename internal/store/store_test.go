@@ -181,6 +181,15 @@ func TestStore_DataFoundation_Integration(t *testing.T) {
 	}
 
 	// 6. Job Queue SKIP LOCKED Claim
+	// Drain any existing queued jobs from prior runs
+	for {
+		oldJob, err := s.ClaimNextJob(ctx, "drain-worker")
+		if err != nil || oldJob == nil {
+			break
+		}
+		_ = s.CompleteJob(ctx, oldJob.ID)
+	}
+
 	job, err := s.EnqueueJob(ctx, user.ID, doc.ID, "queued", 10)
 	if err != nil {
 		t.Fatalf("failed to enqueue job: %v", err)

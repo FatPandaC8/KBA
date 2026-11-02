@@ -126,6 +126,29 @@ func (s *Service) AuthenticateSession(ctx context.Context, token string) (*store
 	return user, nil
 }
 
+func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, oldPassword, newPassword string) error {
+	user, err := s.store.GetUserByID(ctx, userID)
+	if err != nil || user == nil {
+		return errors.New("user not found")
+	}
+
+	valid, err := VerifyPassword(oldPassword, user.PasswordHash)
+	if err != nil || !valid {
+		return ErrInvalidCredentials
+	}
+
+	if len(newPassword) < 8 {
+		return ErrPasswordTooShort
+	}
+
+	newHash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+
+	return s.store.UpdateUserPassword(ctx, userID, newHash)
+}
+
 // -----------------------------------------------------------------------------
 // Rate Limiter
 // -----------------------------------------------------------------------------

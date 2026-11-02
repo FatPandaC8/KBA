@@ -118,6 +118,15 @@ func (s *Store) GetUserByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	return u, nil
 }
 
+func (s *Store) UpdateUserPassword(ctx context.Context, id uuid.UUID, passwordHash string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE gusby.users
+		SET password_hash = $2, updated_at = NOW()
+		WHERE id = $1
+	`, id, passwordHash)
+	return err
+}
+
 func (s *Store) CreateSession(ctx context.Context, userID uuid.UUID, token string, duration time.Duration) (*Session, error) {
 	tokenHash := HashToken(token)
 	expiresAt := time.Now().Add(duration)
@@ -398,9 +407,9 @@ func (s *Store) FindConceptsByTrigram(ctx context.Context, userID uuid.UUID, nam
 	norm := NormalizeString(name)
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, user_id, name, name_normalized, description, degree, needs_review, created_at, updated_at,
-		       similarity(name_normalized, $2) as sim
+		       GREATEST(similarity(name_normalized, $2), word_similarity($2, name_normalized)) as sim
 		FROM gusby.concepts
-		WHERE user_id = $1 AND similarity(name_normalized, $2) >= $3
+		WHERE user_id = $1 AND GREATEST(similarity(name_normalized, $2), word_similarity($2, name_normalized)) >= $3
 		ORDER BY sim DESC
 		LIMIT $4
 	`, userID, norm, minSimilarity, limit)

@@ -41,6 +41,7 @@ func (s *Server) Routes() http.Handler {
 		protected.Use(auth.RequireAuth(s.authService))
 
 		protected.Get("/api/auth/me", s.HandleMe)
+		protected.Post("/api/auth/password", s.HandleChangePassword)
 
 		// Document Ingestion
 		protected.Post("/api/documents/text", s.HandleIngestText)
