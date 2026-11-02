@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from server.app.domain.entities import normalize_key
 from server.app.main import app
 
-from .m3_support import container, ingest
+from .m3_support import container, ingest_text
 
 client = TestClient(app)
 
@@ -86,7 +86,7 @@ def _seed_large_graph(user_id: str, count: int = 2000):
 
 def test_graph_layout_is_clustered_and_deterministic(user_factory, monkeypatch):
     user = user_factory(client)
-    ingest(client, user, "Echo depends on FastAPI. Alice supports Echo.", monkeypatch)
+    ingest_text(client, user, "Echo depends on FastAPI. Alice supports Echo.")
 
     first = client.get("/api/graph", headers=user.headers).json()
     second = client.get("/api/graph", headers=user.headers).json()
@@ -122,7 +122,7 @@ def test_graph_handles_two_thousand_nodes_within_budget(user_factory):
 
 def test_graph_search_finds_entities_by_name_and_prefix(user_factory, monkeypatch):
     user = user_factory(client)
-    ingest(client, user, "Echo depends on FastAPI.", monkeypatch)
+    ingest_text(client, user, "Echo depends on FastAPI.")
 
     result = client.get("/api/graph/search", params={"q": "Fast"}, headers=user.headers)
     assert result.status_code == 200
@@ -139,7 +139,7 @@ def test_graph_search_does_not_match_everything_for_an_unrelated_query(
 ):
     """Semantic similarity alone must not turn search into a "return all" call."""
     user = user_factory(client)
-    ingest(client, user, "Echo depends on FastAPI. Alice supports Echo.", monkeypatch)
+    ingest_text(client, user, "Echo depends on FastAPI. Alice supports Echo.")
 
     unrelated = client.get(
         "/api/graph/search", params={"q": "What is my blood type?"}, headers=user.headers
@@ -202,7 +202,7 @@ def test_entity_detail_accepts_relationship_without_source_capture(user_factory)
 
 def test_entity_detail_update_and_delete(user_factory, monkeypatch):
     user = user_factory(client)
-    ingest(client, user, "Echo depends on FastAPI.", monkeypatch)
+    ingest_text(client, user, "Echo depends on FastAPI.")
     graph = client.get("/api/graph", headers=user.headers).json()
     target = next(node for node in graph["nodes"] if node["title"] == "FastAPI")
 
@@ -227,14 +227,14 @@ def test_entity_detail_update_and_delete(user_factory, monkeypatch):
 
 def test_deleted_entity_is_not_recreated_by_later_captures(user_factory, monkeypatch):
     user = user_factory(client)
-    ingest(client, user, "Alice supports Echo.", monkeypatch)
+    ingest_text(client, user, "Alice supports Echo.")
     graph = client.get("/api/graph", headers=user.headers).json()
     alice = next(node for node in graph["nodes"] if node["title"] == "Alice")
 
     assert client.delete(f"/api/graph/entities/{alice['id']}", headers=user.headers).status_code == 200
     assert container().tombstone_repo.is_tombstoned(user.id, "entity", normalize_key("Alice"))
 
-    ingest(client, user, "Alice supports Echo again.", monkeypatch)
+    ingest_text(client, user, "Alice supports Echo again.")
     names = {node["title"] for node in client.get("/api/graph", headers=user.headers).json()["nodes"]}
     assert "Alice" not in names
 
@@ -242,7 +242,7 @@ def test_deleted_entity_is_not_recreated_by_later_captures(user_factory, monkeyp
 def test_graph_is_scoped_to_the_owner(user_factory, monkeypatch):
     alice = user_factory(client)
     bob = user_factory(client)
-    ingest(client, alice, "Alice supports Echo.", monkeypatch)
+    ingest_text(client, alice, "Alice supports Echo.")
     alice_node = client.get("/api/graph", headers=alice.headers).json()["nodes"][0]
 
     # Bob's graph should only contain his self entity (no other nodes)

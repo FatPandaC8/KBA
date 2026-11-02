@@ -7,11 +7,9 @@ import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from server.app.adapters.inbound.http.schemas import (
-    CaptureUploadResponse,
     EntityDetailResponse,
     EntityResponse,
     EntityUpdateRequest,
@@ -20,8 +18,7 @@ from server.app.adapters.inbound.http.schemas import (
     GraphEdge,
     GraphNode,
     GraphSearchResponse,
-    JobStatusResponse,
-    KnowledgeRelationship,
+KnowledgeRelationship,
     ProviderInfoResponse,
     PublicKnowledgeItem,
     RecordingResponse,
@@ -201,18 +198,6 @@ def _to_public(k) -> PublicKnowledgeItem:
     )
 
 
-def _safe_audio_path(upload_dir: str, audio_path: str) -> Optional[str]:
-    if not audio_path:
-        return None
-    real_path = os.path.realpath(audio_path)
-    allowed = os.path.realpath(upload_dir)
-    if not (real_path == allowed or real_path.startswith(allowed + os.sep)):
-        return None
-    if not os.path.exists(real_path):
-        return None
-    return real_path
-
-
 @router.get("/health")
 def health(container: Container = Depends(get_container)):
     health_dto = container.admin_status_uc.get_health()
@@ -223,198 +208,26 @@ def health(container: Container = Depends(get_container)):
     }
 
 
-@protected_router.post("/captures/upload", response_model=CaptureUploadResponse)
-async def upload_capture(
-    response: Response,
-    file: UploadFile = File(...),
-    capture_id: str = Form(...),
-    idempotency_key: str = Form(...),
-    duration_ms: int = Form(default=0),
-    user: UserEntity = Depends(require_current_consent),
-    container: Container = Depends(get_container),
-):
-    try:
-        parsed_id = uuid.UUID(capture_id)
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=400, detail="capture_id must be a valid UUID")
-    if str(parsed_id) != capture_id:
-        raise HTTPException(status_code=400, detail="capture_id must be a canonical UUID")
-    if not idempotency_key or len(idempotency_key) > 128:
-        raise HTTPException(status_code=400, detail="idempotency_key is invalid")
-    if duration_ms < 0 or duration_ms > (container.settings.max_voice_seconds * 1000) + 2000:
-        raise HTTPException(status_code=400, detail="duration_ms is out of range")
-
-    content_type = (file.content_type or "").lower()
-    if content_type and not (content_type.startswith("audio/") or content_type == "application/octet-stream"):
-        raise HTTPException(status_code=415, detail="Only audio uploads are accepted")
-
-    # Ownership is checked before any path is built. A capture id owned by
-    # another user is treated as a conflict, never as an overwrite target.
-    any_capture = container.capture_repo.get_by_id(capture_id)
-    if any_capture and any_capture.user_id != user.id:
-        raise HTTPException(status_code=409, detail="capture_id is already in use")
-
-    existing = container.capture_repo.get_by_idempotency_key(idempotency_key, user_id=user.id)
-    effective_id = existing.id if existing else capture_id
-    if existing and existing.status == "ready":
-        existing_item = container.knowledge_repo.get_by_capture_id(existing.id, user_id=user.id)
-        if existing_item:
-            return CaptureUploadResponse(
-                capture_id=existing.id,
-                status="ready",
-                knowledge_item=_to_public(existing_item),
-                relationships=[],
-            )
-
-    upload_root = os.path.realpath(container.settings.upload_dir)
-    user_dir = os.path.join(upload_root, user.id)
-    os.makedirs(user_dir, exist_ok=True)
-    audio_path = os.path.join(user_dir, f"{effective_id}.m4a")
-    if not os.path.realpath(audio_path).startswith(user_dir + os.sep):
-        raise HTTPException(status_code=400, detail="Invalid capture identifier")
-
-    total_bytes = 0
-    try:
-        with open(audio_path, "wb") as destination:
-            while True:
-                chunk = await file.read(64 * 1024)
-                if not chunk:
-                    break
-                total_bytes += len(chunk)
-                if total_bytes > container.settings.max_upload_bytes:
-                    destination.close()
-                    os.remove(audio_path)
-                    raise HTTPException(
-                        status_code=413,
-                        detail="Audio upload exceeds the configured size limit",
-                    )
-                destination.write(chunk)
-    except HTTPException:
-        raise
-    except Exception:
-        if os.path.exists(audio_path):
-            os.remove(audio_path)
-        logger.exception("Failed to store uploaded audio for capture %s", effective_id)
-        raise HTTPException(status_code=500, detail="Failed to store audio upload")
-
-    if total_bytes == 0:
-        os.remove(audio_path)
-        raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
-
-    try:
-        capture = existing or CaptureEntity(
-            id=effective_id,
-            idempotency_key=idempotency_key,
-            audio_path=audio_path,
-            user_id=user.id,
-            duration_ms=duration_ms,
-            status=CaptureStatus.RECEIVED,
-        )
-        capture.audio_path = audio_path
-        capture.duration_ms = duration_ms
-        capture.status = CaptureStatus.RECEIVED
-        container.capture_repo.save(capture)
-
-        job = container.job_repo.get_by_capture_id(effective_id, user_id=user.id)
-        if job is None:
-            container.process_capture_uc.create_job(capture)
-        else:
-            # A fresh upload of the same recording is an explicit retry (REC-05).
-            container.process_capture_uc.retry(effective_id, user.id)
-
-        response.status_code = 202
-        return CaptureUploadResponse(
-            capture_id=effective_id,
-            status="queued",
-            knowledge_item=None,
-            relationships=[],
-        )
-    except Exception:
-        logger.exception("Could not queue audio capture %s", effective_id)
-        raise HTTPException(
-            status_code=500,
-            detail="Audio processing could not be queued. The recording was kept for retry.",
-        )
-
-
 @protected_router.get("/recordings", response_model=List[RecordingResponse])
 def list_recordings(
     limit: int = Query(default=50, ge=1, le=200),
     user: UserEntity = Depends(require_current_consent),
     container: Container = Depends(get_container),
 ):
+    """Capture journal (pipeline split): created_at + knowledge-item presence
+    + the last ingest error. There are no job rows/stages (S2)."""
     items = []
     for capture in container.capture_repo.list_recent(limit=limit, user_id=user.id):
-        job = container.job_repo.get_by_capture_id(capture.id, user_id=user.id)
         knowledge = container.knowledge_repo.get_by_capture_id(capture.id, user_id=user.id)
-        has_audio = bool(_safe_audio_path(container.settings.upload_dir, capture.audio_path))
-        status = job.status if job else capture.status
-        stage = job.stage if job else capture.status
         items.append(
             RecordingResponse(
                 capture_id=capture.id,
                 created_at=capture.created_at,
-                duration_ms=capture.duration_ms,
-                status=status,
-                stage=stage,
-                has_audio=has_audio,
-                knowledge_item_id=knowledge.id if knowledge else None,
-                error_message=job.error_message if job else None,
-                error_class=job.error_class if job else "",
-                retryable=status == "failed",
+                has_knowledge_item=knowledge is not None,
+                last_error=capture.last_error,
             )
         )
     return items
-
-
-@protected_router.get("/recordings/{capture_id}/status", response_model=JobStatusResponse)
-def recording_status(
-    capture_id: str,
-    user: UserEntity = Depends(require_current_consent),
-    container: Container = Depends(get_container),
-):
-    capture = container.capture_repo.get_by_id(capture_id, user_id=user.id)
-    if not capture:
-        raise HTTPException(status_code=404, detail="Recording not found")
-    job = container.job_repo.get_by_capture_id(capture_id, user_id=user.id)
-    if not job:
-        return JobStatusResponse(
-            capture_id=capture_id,
-            stage=capture.status,
-            status=capture.status,
-            created_at=capture.created_at,
-            updated_at=capture.created_at,
-        )
-    return JobStatusResponse(
-        capture_id=capture_id,
-        stage=job.stage,
-        status=job.status,
-        attempt=job.attempt,
-        error_class=job.error_class,
-        error_message=job.error_message,
-        created_at=job.created_at,
-        updated_at=job.updated_at,
-    )
-
-
-@protected_router.get("/recordings/{capture_id}/audio")
-def recording_audio(
-    capture_id: str,
-    user: UserEntity = Depends(require_current_consent),
-    container: Container = Depends(get_container),
-):
-    capture = container.capture_repo.get_by_id(capture_id, user_id=user.id)
-    if not capture:
-        raise HTTPException(status_code=404, detail="Recording not found")
-    real_path = _safe_audio_path(container.settings.upload_dir, capture.audio_path)
-    if not real_path:
-        raise HTTPException(status_code=404, detail="Audio recording is not available")
-    return FileResponse(
-        path=real_path,
-        media_type="audio/mp4",
-        filename=f"capture-{capture_id}.m4a",
-        headers={"Cache-Control": "no-store"},
-    )
 
 
 @protected_router.delete("/captures/{capture_id}")
@@ -588,45 +401,6 @@ def delete_entity(
     except EntityNotFoundError:
         raise HTTPException(status_code=404, detail="Entity not found")
     return {"deleted": True, "id": entity_id}
-
-
-@protected_router.post("/recordings/{capture_id}/retry", response_model=JobStatusResponse)
-def retry_recording(
-    capture_id: str,
-    user: UserEntity = Depends(require_current_consent),
-    container: Container = Depends(get_container),
-):
-    capture = container.capture_repo.get_by_id(capture_id, user_id=user.id)
-    if not capture:
-        raise HTTPException(status_code=404, detail="Recording not found")
-    if not capture.audio_path or not os.path.exists(capture.audio_path):
-        raise HTTPException(status_code=409, detail="Recording audio is no longer available")
-    if not container.process_capture_uc.retry(capture_id, user.id):
-        job = container.job_repo.get_by_capture_id(capture_id, user_id=user.id)
-        if job and job.status != "failed":
-            # Already queued or running; report the real status rather than lying.
-            return JobStatusResponse(
-                capture_id=capture_id,
-                stage=job.stage,
-                status=job.status,
-                attempt=job.attempt,
-                error_class=job.error_class,
-                error_message=job.error_message,
-                created_at=job.created_at,
-                updated_at=job.updated_at,
-            )
-        raise HTTPException(status_code=409, detail="Recording cannot be retried")
-    job = container.job_repo.get_by_capture_id(capture_id, user_id=user.id)
-    return JobStatusResponse(
-        capture_id=capture_id,
-        stage=job.stage if job else "upload",
-        status=job.status if job else "queued",
-        attempt=job.attempt if job else 0,
-        error_class=job.error_class if job else "",
-        error_message=job.error_message if job else None,
-        created_at=job.created_at if job else capture.created_at,
-        updated_at=job.updated_at if job else capture.created_at,
-    )
 
 
 @protected_router.get("/providers", response_model=List[ProviderInfoResponse])

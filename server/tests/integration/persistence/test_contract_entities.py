@@ -6,7 +6,7 @@ from server.app.adapters.outbound.persistence.postgres.entities import (
     PostgresEntityRepository,
 )
 
-from ._helpers import make_entity, make_capture, make_item, make_job
+from ._helpers import make_entity, make_capture, make_item
 
 
 def test_get_or_create_self_is_idempotent_and_single(container_, user):

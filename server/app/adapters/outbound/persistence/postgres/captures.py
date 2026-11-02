@@ -22,18 +22,13 @@ class PostgresCaptureRepository:
             conn.execute(
                 """
                 INSERT INTO captures (id, user_id, audio_path, duration_ms, status,
-                    stage, error_class, error_message, retry_count, user_edited_title,
-                    user_edited_summary, knowledge_item_id, has_audio, audio_on_server,
-                    idempotency_key, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    user_edited_title, user_edited_summary, knowledge_item_id,
+                    has_audio, audio_on_server, idempotency_key, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     audio_path = EXCLUDED.audio_path,
                     duration_ms = EXCLUDED.duration_ms,
                     status = EXCLUDED.status,
-                    stage = EXCLUDED.stage,
-                    error_class = EXCLUDED.error_class,
-                    error_message = EXCLUDED.error_message,
-                    retry_count = EXCLUDED.retry_count,
                     user_edited_title = EXCLUDED.user_edited_title,
                     user_edited_summary = EXCLUDED.user_edited_summary,
                     knowledge_item_id = EXCLUDED.knowledge_item_id,
@@ -48,10 +43,6 @@ class PostgresCaptureRepository:
                     capture.audio_path,
                     capture.duration_ms,
                     capture.status,
-                    capture.stage,
-                    capture.error_class,
-                    capture.error_message,
-                    capture.retry_count,
                     capture.user_edited_title,
                     capture.user_edited_summary,
                     uuid.UUID(capture.knowledge_item_id) if capture.knowledge_item_id else None,
@@ -155,6 +146,22 @@ class PostgresCaptureRepository:
             where, params = scoped_where("user_id", user_id)
             row = conn.execute(
                 f"SELECT COUNT(*) AS count FROM captures{where}", tuple(params)
+            ).fetchone()
+            return row["count"] if row else 0
+
+    def count_by_status(self) -> dict:
+        """Capture-truth counts for admin (pipeline split rule 5)."""
+        with transaction(self.db) as conn:
+            rows = conn.execute(
+                "SELECT status, count(*) AS count FROM captures "
+                "GROUP BY status ORDER BY status"
+            ).fetchall()
+            return {r["status"]: r["count"] for r in rows}
+
+    def count_failed(self) -> int:
+        with transaction(self.db) as conn:
+            row = conn.execute(
+                "SELECT count(*) AS count FROM captures WHERE last_error IS NOT NULL"
             ).fetchone()
             return row["count"] if row else 0
 
@@ -264,17 +271,17 @@ def _row_to_eval(r) -> EvalRecordEntity:
     )
 
 
-def _row_to_capture(r) -> CaptureEntity:    return CaptureEntity(
+def _row_to_capture(r) -> CaptureEntity:
+    last_error_at = r["last_error_at"].isoformat() if r.get("last_error_at") else None
+    return CaptureEntity(
         id=str(r["id"]),
         idempotency_key=r["idempotency_key"],
         user_id=str(r["user_id"]),
         audio_path=r["audio_path"],
         duration_ms=r["duration_ms"],
         status=r["status"],
-        stage=r["stage"],
-        error_class=r["error_class"],
-        error_message=r["error_message"],
-        retry_count=r["retry_count"],
+        last_error=r.get("last_error"),
+        last_error_at=last_error_at,
         user_edited_title=r["user_edited_title"],
         user_edited_summary=r["user_edited_summary"],
         knowledge_item_id=str(r["knowledge_item_id"]) if r["knowledge_item_id"] else None,

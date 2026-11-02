@@ -35,13 +35,17 @@ def get_whisper_model():
         _GLOBAL_WHISPER_MODEL_NAME = None
     return _GLOBAL_WHISPER_MODEL
 
-def decode_audio_ffmpeg(file_path: str, sr: int = 16000) -> np.ndarray:
-    """Decodes audio via ffmpeg into normalized 16kHz float32 audio."""
+def decode_audio_from_bytes(audio: bytes, sr: int = 16000):
+    """ffmpeg decode straight from bytes (no server-side file)."""
     cmd = [
-        "ffmpeg", "-nostdin", "-threads", "0", "-i", file_path,
-        "-f", "s16le", "-ac", "1", "-acodec", "pcm_s16le", "-ar", str(sr), "-"
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-i", "pipe:0",
+        "-ac", "1",
+        "-ar", str(sr),
+        "-f", "s16le",
+        "pipe:1",
     ]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.run(cmd, input=audio, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if proc.returncode != 0:
         raise InvalidInputAudioError(
             f"FFmpeg audio decode error ({proc.returncode}): "
@@ -59,7 +63,7 @@ class FasterWhisperSpeechAdapter(AudioTranscriptionPort):
         self.language = language
 
     def _transcribe_array(self, audio_arr, duration_hint=""):
-        """Core whisper decode shared by both call styles (bytes/path)."""
+        """Core whisper decode (bytes in)."""
         whisper_model = get_whisper_model()
         if whisper_model is None:
             raise ProviderError("Local faster-whisper STT engine is not available")
@@ -86,22 +90,7 @@ class FasterWhisperSpeechAdapter(AudioTranscriptionPort):
 
         return transcript, detected
 
-    def transcribe(self, audio_file_path: str) -> str:
-        """Legacy file-path call (kept for existing callers while the pipeline
-        split lands; the HTTP API uses transcribe_bytes())."""
-        if not os.path.exists(audio_file_path):
-            raise InvalidInputAudioError(f"Audio file not found: {audio_file_path}")
-
-        file_size = os.path.getsize(audio_file_path)
-        if file_size < 100:
-            raise InvalidInputAudioError(f"Audio file is too small or corrupted ({file_size} bytes)")
-
-        audio_arr = decode_audio_ffmpeg(audio_file_path, sr=16000)
-        duration_sec = len(audio_arr) / 16000.0
-        transcript, _ = self._transcribe_array(audio_arr, f"{duration_sec:.1f}s")
-        return transcript
-
-    def transcribe_bytes(
+    def transcribe(
         self,
         audio: bytes,
         content_type: str,

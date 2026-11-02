@@ -10,8 +10,11 @@ def test_admin_endpoints_require_authorization():
     resp = client.get("/api/admin/status")
     assert resp.status_code == 401
 
-    resp_jobs = client.get("/api/admin/jobs")
-    assert resp_jobs.status_code == 401
+    resp_captures = client.get("/api/admin/captures")
+    assert resp_captures.status_code == 401
+
+    # The job-list endpoint was removed with the worker (pipeline split).
+    assert client.get("/api/admin/jobs").status_code == 404
 
 def test_admin_status_with_valid_token():
     settings = get_settings()
@@ -45,7 +48,10 @@ def test_admin_config_get_and_update():
     assert "api_key" not in cfg
 
 def test_admin_ui_page_serves():
+    """The dashboard is the built React SPA; the shell is served, content is
+    client-rendered (no inline scripts or secrets in the HTML)."""
     resp = client.get("/admin")
     assert resp.status_code == 200
-    assert "Echo Admin" in resp.text
-    assert "System Overview" in resp.text
+    assert '<div id="root">' in resp.text
+    assert 'src="/admin-app/assets/index' in resp.text
+    assert "echo-admin-secure-key-2026" not in resp.text

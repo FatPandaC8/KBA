@@ -26,7 +26,10 @@ def test_console_lists_paginated_real_data(user_factory):
 
 
 def test_console_does_not_expose_graph_mutation_routes():
+    """Graph mutation stays with the client endpoints; the console's graph
+    entity/relationship routes are read-only, and the worker-era delete
+    routes do not exist at all."""
     headers = admin_headers()
     assert client.post("/api/admin/graph/entities", headers=headers, json={}).status_code == 405
-    assert client.delete("/api/admin/graph/entities/no-such-id", headers=headers).status_code == 405
-    assert client.delete("/api/admin/graph/relationships/no-such-id", headers=headers).status_code == 405
+    assert client.delete("/api/admin/graph/entities/no-such-id", headers=headers).status_code == 404
+    assert client.delete("/api/admin/graph/relationships/no-such-id", headers=headers).status_code == 404

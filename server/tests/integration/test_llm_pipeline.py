@@ -1,6 +1,11 @@
-"""LLM pipeline tests. Every test uses the deterministic fake port.
+"""LLM pipeline tests (pipeline split): every test uses the deterministic
+fake LLM port and drives it through POST /api/text-kb.
 
 No test in this file opens a socket or reads the real GROQ_API_KEY.
+There is no job table any more: a provider failure surfaces as a typed 502 in
+the SAME request, the ingest UoW rolls back, and a retry re-runs extraction
+(the client re-posts the same capture_id). Stage outputs and resume-at-stage
+are worker concepts and are gone.
 """
 
 import json
@@ -19,7 +24,7 @@ from server.app.adapters.outbound.llm.fake import (
 from server.app.domain.entities import KnowledgeItemEntity
 from server.app.main import app
 
-from .m3_support import FakeTranscriber, container, process, upload
+from .m3_support import container, ingest_text, new_capture_id
 
 client = TestClient(app)
 
@@ -54,40 +59,27 @@ def _admin_headers():
     return {"X-Admin-Token": "test-admin-token"}
 
 
-def _install(fake: FakeLLMClient, monkeypatch, transcript="Echo depends on FastAPI. Alice supports Echo."):
-    uc = container().process_capture_uc
-    monkeypatch.setattr(uc, "transcriber", FakeTranscriber(transcript))
-    monkeypatch.setattr(
-        uc,
-        "extractor",
-        GroqExtractionAdapter(fake, pipeline_version="test"),
-    )
-    return uc
+def _install(fake: FakeLLMClient, monkeypatch, capture_id=None):
+    """Wire the fake LLM into the ingest port (provider swap by
+    composition, not per-request — S3)."""
+    container_ = container()
+    adapter = GroqExtractionAdapter(fake, pipeline_version="test")
+    monkeypatch.setattr(container_.ingestor, "extraction", adapter)
+    return container_.ingestor
 
 
-def _job(capture_id, user_id):
-    return container().job_repo.get_by_capture_id(capture_id, user_id=user_id)
-
-
-def test_valid_fake_extraction_persists_graph_and_metadata(user_factory, monkeypatch):
+def test_valid_fake_extraction_persists_graph_provider_and_usage(user_factory, monkeypatch):
     user = user_factory(client)
     fake = FakeLLMClient([FakeScript(content=VALID)])
     _install(fake, monkeypatch)
 
-    capture_id = upload(client, user)
-    job = process(capture_id)
+    capture_id = ingest_text(client, user, "Echo depends on FastAPI. Alice supports Echo.")
 
-    assert job.status == "ready", job
     assert fake.remaining == 0 and len(fake.calls) == 1
     graph = client.get("/api/graph", headers=user.headers).json()
     names = {node["title"] for node in graph["nodes"]}
     assert {"Echo", "FastAPI", "Alice"} <= names
     assert {edge["type"] for edge in graph["edges"]} == {"Depends on", "Supports"}
-
-    outputs = json.loads(_job(capture_id, user.id).stage_outputs)
-    assert outputs["extraction"]["metadata"]["provider"] == "fake"
-    assert outputs["extraction"]["metadata"]["repair_used"] is False
-    assert outputs["extraction"]["metadata"]["total_tokens"] == 200
 
 
 def test_malformed_json_gets_one_bounded_repair(user_factory, monkeypatch):
@@ -95,91 +87,69 @@ def test_malformed_json_gets_one_bounded_repair(user_factory, monkeypatch):
     fake = FakeLLMClient([malformed(), FakeScript(content=VALID)])
     _install(fake, monkeypatch)
 
-    capture_id = upload(client, user)
-    job = process(capture_id)
+    capture_id = ingest_text(client, user, "Echo depends on FastAPI. Alice supports Echo.")
 
-    assert job.status == "ready", job
-    assert len(fake.calls) == 2
-    outputs = json.loads(_job(capture_id, user.id).stage_outputs)
-    assert outputs["extraction"]["metadata"]["repair_used"] is True
+    assert len(fake.calls) == 2, "one attempt plus exactly one repair"
+    graph = client.get("/api/graph", headers=user.headers).json()
+    assert {"Echo", "FastAPI", "Alice"} <= {n["title"] for n in graph["nodes"]}
 
 
-def test_schema_invalid_twice_fails_without_falling_back(user_factory, monkeypatch):
+def test_schema_invalid_twice_fails_typed_without_falling_back(user_factory, monkeypatch):
+    from server.app.domain.errors import ProviderError
+
     user = user_factory(client)
     fake = FakeLLMClient([malformed(), malformed()])
-    _install(fake, monkeypatch)
+    ingestor = _install(fake, monkeypatch)
 
-    capture_id = upload(client, user)
-    job = process(capture_id)
-
-    assert job.status == "failed"
-    assert job.error_class == "schema_invalid"
+    capture_id = new_capture_id()
+    response = client.post(
+        "/api/text-kb",
+        json={"capture_id": capture_id, "text": "Echo depends on FastAPI. Alice supports Echo."},
+        headers=user.headers,
+    )
+    assert response.status_code == 502, response.text
+    body = response.json()["detail"]
+    assert body["class"] == "schema_invalid", body
     assert len(fake.calls) == 2, "one attempt plus exactly one repair"
+    # nothing was created (one UoW rolled back / never started)
     assert [e for e in container().entity_repo.get_all(user_id=user.id) if not e.is_self] == []
+    assert container().capture_repo.get_by_id(capture_id, user_id=user.id) is None
 
 
-def test_timeout_is_retryable_and_never_silently_local(user_factory, monkeypatch):
+def test_timeout_provider_type_is_reported_and_nothing_persists(user_factory, monkeypatch):
     user = user_factory(client)
     fake = FakeLLMClient([timeout()])
     _install(fake, monkeypatch)
 
-    capture_id = upload(client, user)
-    job = process(capture_id)
-
-    assert job.status == "queued"
-    assert job.error_class == "network_error"
-    assert job.attempt == 1
+    capture_id = new_capture_id()
+    response = client.post(
+        "/api/text-kb",
+        json={"capture_id": capture_id, "text": "Echo depends on FastAPI. Alice supports Echo."},
+        headers=user.headers,
+    )
+    assert response.status_code == 502, response.text
+    body = response.json()["detail"]
+    assert body["class"] in ("timeout", "network_error"), body
     assert [e for e in container().entity_repo.get_all(user_id=user.id) if not e.is_self] == []
-    recording = client.get("/api/recordings", headers=user.headers).json()[0]
-    # A recoverable network failure is automatically requeued, so it is not a
-    # manual-retry terminal state.
-    assert recording["status"] == "queued"
-    assert recording["retryable"] is False
+    # No capture row: STT never wrote one and the ingest UoW never started.
+    assert container().capture_repo.get_by_id(capture_id, user_id=user.id) is None
 
 
-def test_quota_error_reports_specific_message_and_allows_manual_retry(user_factory, monkeypatch):
+def test_quota_error_reports_specific_message(user_factory, monkeypatch):
     user = user_factory(client)
     fake = FakeLLMClient([quota_after(42)])
     _install(fake, monkeypatch)
 
-    capture_id = upload(client, user)
-    job = process(capture_id)
-
-    assert job.status == "failed"
-    assert job.error_class == "quota_exhausted"
-    recording = client.get("/api/recordings", headers=user.headers).json()[0]
-    assert "quota" in (recording["error_message"] or "").lower()
-    assert recording["retryable"] is True
-
-
-def test_resume_reuses_persisted_llm_output_without_second_call(user_factory, monkeypatch):
-    user = user_factory(client)
-    fake = FakeLLMClient([FakeScript(content=VALID)])
-    _install(fake, monkeypatch)
-
-    capture_id = upload(client, user)
-    assert process(capture_id).status == "ready"
-    assert len(fake.calls) == 1
-
-    import psycopg
-
-    from server.tests.postgres_testinfra import worker_database_url
-
-    job = _job(capture_id, user.id)
-    outputs = json.loads(job.stage_outputs)
-    outputs.pop("saved", None)
-    with psycopg.connect(worker_database_url(), autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE processing_jobs SET status='queued', stage='save', attempt=0, "
-                "stage_outputs=%s::jsonb, lease_owner='', lease_expires_at=NULL "
-                "WHERE capture_id=%s AND user_id=%s",
-                (json.dumps(outputs), capture_id, user.id),
-            )
-
-    resumed = process(capture_id, worker_id="resumed")
-    assert resumed.status == "ready"
-    assert len(fake.calls) == 1, "a resume must never re-call the LLM"
+    capture_id = new_capture_id()
+    response = client.post(
+        "/api/text-kb",
+        json={"capture_id": capture_id, "text": "Echo depends on FastAPI. Alice supports Echo."},
+        headers=user.headers,
+    )
+    assert response.status_code == 502, response.text
+    body = response.json()["detail"]
+    assert body["class"] == "quota_exhausted", body
+    assert "quota" in body["message"].lower(), body
 
 
 def test_user_edited_knowledge_is_not_overwritten_by_a_later_save(user_factory):
@@ -214,8 +184,7 @@ def test_tombstoned_entity_is_not_recreated(user_factory, monkeypatch):
     fake = FakeLLMClient([FakeScript(content=VALID)])
     _install(fake, monkeypatch)
 
-    capture_id = upload(client, user)
-    assert process(capture_id).status == "ready"
+    ingest_text(client, user, "Echo depends on FastAPI. Alice supports Echo.")
 
     names = {
         entity.normalized_name

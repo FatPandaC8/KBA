@@ -23,7 +23,6 @@ from .bookkeeping import (
 from .captures import PostgresCaptureRepository, PostgresEvalRecordRepository
 from .conn import Database, UnitOfWork, transaction
 from .entities import PostgresEntityRepository
-from .jobs import PostgresJobRepository
 from .knowledge import PostgresEmbeddingRepository, PostgresKnowledgeRepository
 from .relationships import (
     PostgresRelationshipRepository,
@@ -92,7 +91,6 @@ class PostgresContainer:
         self.duplicate_repo = PostgresDuplicateRepository(self.db)
         self.tombstone_repo = PostgresTombstoneRepository(self.db)
         self.support_repo = PostgresSupportRepository(self.db)
-        self.job_repo = PostgresJobRepository(self.db)
         self.embedding_repo = PostgresEmbeddingRepository(self.db)
         self.eval_repo = PostgresEvalRecordRepository(self.db)
         self.audit_repo = PostgresAdminAuditLogRepository(self.db)

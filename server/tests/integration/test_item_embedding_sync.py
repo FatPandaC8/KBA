@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from server.app.main import app
 
-from .m3_support import FakeTranscriber, container, ingest
+from .m3_support import container, ingest_text
 
 client = TestClient(app)
 
@@ -23,7 +23,7 @@ def _embeddings(container_):
 
 def test_pipeline_indexes_the_knowledge_item_immediately(user_factory, monkeypatch):
     user = user_factory(client)
-    capture_id = ingest(client, user, "Echo depends on FastAPI.", monkeypatch)
+    capture_id = ingest_text(client, user, "Echo depends on FastAPI.")
 
     item_id = container().knowledge_repo.get_by_capture_id(capture_id, user_id=user.id).id
     assert item_id in _embeddings(container()), (

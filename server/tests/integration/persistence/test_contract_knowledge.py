@@ -2,7 +2,7 @@
 
 import pytest
 
-from ._helpers import make_capture, make_item, make_job
+from ._helpers import make_capture, make_item
 
 
 def test_knowledge_roundtrip(container_, user):
@@ -47,9 +47,14 @@ def test_capture_idempotency_is_scoped_per_user(container_, user):
     assert repo.get_by_idempotency_key(first.idempotency_key, user_id=None) is not None
 
 
-def test_store_job_stage_outputs_alongside_record(container_, user):
+def test_capture_error_is_stored_on_the_row(container_, user):
+    """Rule 5 (pipeline split): a failed ingest leaves a typed, visible
+    reason on the capture row itself; job rows do not exist any more."""
     capture = make_capture(user.id)
     container_.capture_repo.save(capture)
-    container_.job_repo.record_job(make_job(user.id, capture.id, stage_outputs="{}"))
-    row = container_.job_repo.get_by_capture_id(capture.id, user_id=user.id)
-    assert row is not None
+    container_.capture_repo.mark_error(
+        capture.id, user_id=user.id, error_text="Text-KB ingest failed."
+    )
+    row = container_.capture_repo.get_by_id(capture.id, user_id=user.id)
+    assert row.last_error == "Text-KB ingest failed."
+    assert row.last_error_at

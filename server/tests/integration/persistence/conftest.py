@@ -11,7 +11,6 @@ from server.app.domain.entities import (
     CaptureEntity,
     ExtractedEntity,
     KnowledgeItemEntity,
-    ProcessingJobDTO,
     UserEntity,
 )
 

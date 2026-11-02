@@ -62,8 +62,13 @@ class PostgresAdminRepository:
             failures = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT error_class, count(*) AS count FROM processing_jobs "
-                    "WHERE status = 'failed' GROUP BY error_class ORDER BY count DESC"
+                    "SELECT "
+                    "  CASE WHEN knowledge_items.id IS NOT NULL THEN 'ready' "
+                    "       ELSE 'transcript_missing' END AS failure_bucket, "
+                    "count(*) AS count FROM captures "
+                    "LEFT JOIN knowledge_items ON knowledge_items.capture_id = captures.id "
+                    "WHERE captures.last_error IS NOT NULL "
+                    "GROUP BY 1 ORDER BY count DESC"
                 ).fetchall()
             ]
             recent = [
@@ -73,7 +78,7 @@ class PostgresAdminRepository:
                     "FROM admin_audit_log ORDER BY created_at DESC LIMIT 8"
                 ).fetchall()
             ]
-            return {"capture_statuses": statuses, "processing_failures": failures, "recent_activity": recent}
+            return {"capture_statuses": statuses, "ingest_failures": failures, "recent_activity": recent}
 
     def users_page(self, q: str, limit: int, offset: int) -> Dict[str, Any]:
         term = f"%{q.strip().lower()}%"
@@ -130,14 +135,20 @@ class PostgresAdminRepository:
             clauses.append("c.user_id = %s")
             params.append(uuid.UUID(user_id))
         if status:
-            clauses.append("coalesce(j.status, c.status) = %s")
-            params.append(status)
+            if status == "ready":
+                clauses.append("(k.id IS NOT NULL)")
+            elif status == "transcript_missing":
+                clauses.append("(k.id IS NULL)")
+            else:
+                clauses.append("c.status = %s")
+                params.append(status)
         sql = f"""SELECT c.id::text AS capture_id, c.user_id::text AS user_id, u.email AS owner_email, c.created_at,
-            c.duration_ms, c.status AS capture_status, coalesce(j.stage, c.status) AS stage,
-            coalesce(j.status, c.status) AS status, j.error_class, j.error_message,
-            CASE WHEN c.audio_path IS NOT NULL AND c.audio_path <> '' THEN 1 ELSE 0 END AS has_audio
+            c.duration_ms, c.status AS capture_status,
+            (k.id IS NOT NULL) AS has_knowledge_item,
+            c.last_error, c.last_error_at,
+            c.audio_path IS NOT NULL AND c.audio_path <> '' AS has_audio
             FROM captures c JOIN users u ON u.id = c.user_id
-            LEFT JOIN processing_jobs j ON j.capture_id = c.id
+            LEFT JOIN knowledge_items k ON k.capture_id = c.id
             WHERE {' AND '.join(clauses)} ORDER BY c.created_at DESC"""
         return self._page(sql, params, limit, offset)
 
@@ -145,10 +156,12 @@ class PostgresAdminRepository:
         with transaction(self.db) as conn:
             row = conn.execute(
                 """SELECT c.id::text AS capture_id, c.user_id::text AS user_id, u.email AS owner_email, c.created_at,
-                    c.duration_ms, c.audio_path, c.status AS capture_status, coalesce(j.stage, c.status) AS stage,
-                    coalesce(j.status, c.status) AS status, j.error_class, j.error_message
-                    FROM captures c JOIN users u ON u.id = c.user_id LEFT JOIN processing_jobs j
-                    ON j.capture_id = c.id WHERE c.id = %s""",
+                    c.duration_ms, c.audio_path, c.status AS capture_status,
+                    (k.id IS NOT NULL) AS has_knowledge_item,
+                    c.last_error, c.last_error_at
+                    FROM captures c JOIN users u ON u.id = c.user_id
+                    LEFT JOIN knowledge_items k ON k.capture_id = c.id
+                    WHERE c.id = %s""",
                 (uuid.UUID(capture_id),),
             ).fetchone()
             if not row:

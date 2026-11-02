@@ -14,7 +14,6 @@ from server.app.domain.entities import (
 )
 from ..dto import (
     GraphDataDTO,
-    ProcessingJobDTO,
     ProviderInfoDTO,
     ExtractionResult,
     LLMResponse,
@@ -358,6 +357,14 @@ class CaptureRepositoryPort(ABC):
     def count(self, user_id: Optional[str] = None) -> int:
         pass
 
+    @abstractmethod
+    def count_by_status(self) -> Dict[str, int]:
+        """Pipeline split (rule 5): admin needs capture facts, not job rows."""
+
+    @abstractmethod
+    def count_failed(self) -> int:
+        """Captures whose last ingest attempt failed (last_error present)."""
+
 
 class EvalRecordRepositoryPort(ABC):
     @abstractmethod
@@ -382,12 +389,6 @@ class EvalRecordRepositoryPort(ABC):
 
     @abstractmethod
     def delete_for_user(self, user_id: str) -> int:
-        pass
-
-
-class AudioTranscriptionPort(ABC):
-    @abstractmethod
-    def transcribe(self, audio_file_path: str) -> str:
         pass
 
 
@@ -515,6 +516,11 @@ class AppSettingsRepositoryPort(ABC):
     def all(self) -> Dict[str, str]:
         pass
 
+    @abstractmethod
+    def delete(self, key: str) -> None:
+        """Remove one setting row (used by seed bookkeeping reset)."""
+        pass
+
 
 class EmbeddingProviderPort(ABC):
     @abstractmethod
@@ -587,80 +593,6 @@ class IngestResultDTO:
     relationships_added: int = 0
     provider: str = ""
 
-
-class JobStatusRepositoryPort(ABC):
-    @abstractmethod
-    def record_job(self, job: ProcessingJobDTO) -> None:
-        pass
-
-    @abstractmethod
-    def update_job_status(self, capture_id: str, stage: str, status: str, error_message: Optional[str] = None, user_id: Optional[str] = None) -> None:
-        pass
-
-    @abstractmethod
-    def get_recent_jobs(self, limit: int = 50, user_id: Optional[str] = None) -> List[ProcessingJobDTO]:
-        pass
-
-    @abstractmethod
-    def get_by_capture_id(self, capture_id: str, user_id: Optional[str] = None) -> Optional[ProcessingJobDTO]:
-        pass
-
-    @abstractmethod
-    def delete_by_capture_id(self, capture_id: str, user_id: Optional[str] = None) -> int:
-        pass
-
-    @abstractmethod
-    def claim(self, capture_id: str, lease_owner: str, lease_seconds: int, user_id: Optional[str] = None, retry_limit: int = 3) -> Optional[ProcessingJobDTO]:
-        """Atomically take the job lease. Returns None when already leased."""
-
-    @abstractmethod
-    def claim_next(self, lease_owner: str, lease_seconds: int, retry_limit: int = 3) -> Optional[ProcessingJobDTO]:
-        """Claim the oldest claimable job (FOR UPDATE SKIP LOCKED)."""
-
-    @abstractmethod
-    def reclaim_stale(self, retry_limit: int = 3) -> int:
-        """Requeue jobs whose lease expired; each loss costs one attempt."""
-
-    @abstractmethod
-    def heartbeat(self, job_id: str, lease_owner: str, lease_seconds: int) -> bool:
-        """Renew a live lease without releasing it."""
-
-    @abstractmethod
-    def fail(
-        self,
-        capture_id: str,
-        attempt: int,
-        error_class: str,
-        error_message: Optional[str],
-        retry_limit: int = 3,
-        retry_at: Optional[str] = None,
-        user_id: Optional[str] = None,
-    ) -> bool:
-        """Record one failed attempt: schedule retry or mark failed."""""
-
-    @abstractmethod
-    def renew_lease(self, capture_id: str, lease_owner: str, lease_seconds: int, user_id: Optional[str] = None) -> bool:
-        """Extend a live lease without releasing it (long provider calls)."""
-
-    @abstractmethod
-    def complete(self, capture_id: str, user_id: Optional[str] = None) -> None:
-        """Mark the job ready and release the lease atomically."""
-
-    @abstractmethod
-    def release(self, capture_id: str, lease_owner: str, user_id: Optional[str] = None) -> None:
-        pass
-
-    @abstractmethod
-    def save_stage_output(self, capture_id: str, stage: str, outputs: Dict[str, Any], user_id: Optional[str] = None) -> None:
-        """Persist stage output and advance the stage idempotently."""
-
-    @abstractmethod
-    def record_attempt(self, capture_id: str, attempt: int, error_class: str, error_message: str, user_id: Optional[str] = None, retry_limit: int = 3, retry_at: Optional[str] = None) -> None:
-        pass
-
-    @abstractmethod
-    def list_resumable(self, now_iso: str, limit: int = 20, retry_limit: int = 3) -> List[ProcessingJobDTO]:
-        """Jobs whose lease expired or which failed recoverably."""
 
 
 class ProviderRegistryPort(ABC):

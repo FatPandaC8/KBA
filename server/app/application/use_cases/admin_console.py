@@ -15,14 +15,22 @@ from server.app.domain.errors import ValidationError
 
 
 class AdminConsoleUseCase:
-    def __init__(self, admin_repo, auth_service, user_repo, account_delete, capture_delete, process_capture, worker, upload_dir, password_min_length):  # worker kept for API compatibility; the background loop is a separate process (D8)
+    """Admin surface on capture-truth only (pipeline split): no job table,
+    no worker process. Reads stay in the read port (this module owns NO SQL,
+    ADR R8); rerun-extraction re-points to the Text-KB port (addendum rule 2).
+    """
+
+    def __init__(self, admin_repo, auth_service, user_repo, account_delete,
+                 capture_delete, entity_repo, ingestor, upload_dir,
+                 password_min_length):
         self.admin_repo = admin_repo
         self.auth_service = auth_service
         self.user_repo = user_repo
         self.account_delete = account_delete
         self.capture_delete = capture_delete
-        self.process_capture = process_capture
-        self.worker = worker
+        self.entity_repo = entity_repo
+        # Text-KB port (addendum rule 2): rerun-extraction re-points here.
+        self.ingestor = ingestor
         self.upload_dir = upload_dir
         self.password_min_length = password_min_length
 
@@ -45,7 +53,7 @@ class AdminConsoleUseCase:
         user.email_verified_at = user.created_at
         self.user_repo.save(user)
         # R3: same self-entity gate as signup (atomic upsert in the adapter).
-        self.process_capture.entity_repo.get_or_create_self(user.id)
+        self.entity_repo.get_or_create_self(user.id)
         return self._user(user.id)
 
     def _user(self, user_id: str) -> Dict[str, Any]:
@@ -88,9 +96,11 @@ class AdminConsoleUseCase:
         return self.capture(capture_id) or {}
 
     def rerun_extraction(self, capture_id: str) -> Dict[str, Any]:
-        """Run the existing extractor from the saved transcript, then queue the
-        normal persistence path. The pipeline owns graph mutation; this method
-        never accepts entity or relationship payloads from the admin client.
+        """Re-run Text-KB from the stored transcript (addendum rule 2).
+
+        Synchronous inside the request and idempotent on capture_id — the
+        existing capture/story rows are reused by the ingest port, so a rerun
+        can only change the graph output of that capture, never duplicate it.
         """
         capture = self.capture(capture_id)
         if not capture or not capture.get("knowledge_item"):
@@ -99,11 +109,13 @@ class AdminConsoleUseCase:
         transcript = capture["knowledge_item"].get("transcript") or ""
         if not transcript.strip():
             raise ValidationError("A transcript is required before extraction.")
-        counts = self.process_capture.rerun_extraction_from_transcript(capture_id, user_id, transcript)
-        self.process_capture.job_repo.complete(capture_id, user_id=user_id)
-        result = self.capture(capture_id) or {}
-        result["replacement_counts"] = counts
-        return result
+        result = self.ingestor.ingest(user_id, capture_id, transcript)
+        data = self.capture(capture_id) or {}
+        data["replacement_counts"] = {
+            "entities": result.entities_added,
+            "relationships": result.relationships_added,
+        }
+        return data
 
     def delete_capture(self, capture_id: str) -> Dict[str, Any]:
         capture = self.capture(capture_id)

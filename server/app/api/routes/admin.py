@@ -9,7 +9,6 @@ from server.app.api.dependencies import Container, get_container, verify_admin_a
 from server.app.domain.errors import ValidationError
 from server.app.adapters.inbound.http.schemas import (
     SystemHealthResponse,
-    ProcessingJobResponse,
     BackfillResponse,
     ServerConfigResponse,
     KnowledgeItem,
@@ -74,51 +73,9 @@ def get_system_status(container: Container = Depends(get_container)):
         relationship_count=h.relationship_count,
         embeddings_count=h.embeddings_count,
         audio_storage_bytes=h.audio_storage_bytes,
-        active_jobs_count=h.active_jobs_count,
+        capture_counts=h.capture_counts,
+        failed_captures=h.failed_captures,
     )
-
-@admin_router.get("/jobs", response_model=List[ProcessingJobResponse])
-def get_recent_jobs(
-    limit: int = Query(default=50, ge=1, le=200),
-    container: Container = Depends(get_container),
-):
-    jobs = container.admin_status_uc.get_recent_jobs(limit=limit)
-    return [
-        ProcessingJobResponse(
-            id=j.id,
-            capture_id=j.capture_id,
-            stage=j.stage,
-            status=j.status,
-            duration_ms=j.duration_ms,
-            error_message=j.error_message,
-            created_at=j.created_at,
-            updated_at=j.updated_at,
-        )
-        for j in jobs
-    ]
-
-@admin_router.post("/jobs/{capture_id}/retry", response_model=Dict[str, Any])
-def retry_job(
-    capture_id: str,
-    request: Request,
-    container: Container = Depends(get_container),
-):
-    capture = container.capture_repo.get_by_id(capture_id)
-    if not capture:
-        _audit(request, container, "jobs.retry", "capture", capture_id, outcome="not_found")
-        raise HTTPException(status_code=404, detail="Capture not found")
-    if not capture.audio_path or not os.path.exists(capture.audio_path):
-        _audit(request, container, "jobs.retry", "capture", capture_id, outcome="rejected", detail="audio purged")
-        raise HTTPException(status_code=400, detail="Cannot retry: Audio was purged per privacy consent policy.")
-
-    if not container.process_capture_uc.retry(capture.id, capture.user_id):
-        job = container.job_repo.get_by_capture_id(capture.id, user_id=capture.user_id)
-        _audit(request, container, "jobs.retry", "capture", capture_id, outcome="rejected", detail="job not retryable")
-        if not job or job.status != "failed":
-            raise HTTPException(status_code=409, detail="Job is already queued or running")
-        raise HTTPException(status_code=409, detail="Job cannot be retried")
-    _audit(request, container, "jobs.retry", "capture", capture_id, user_id=capture.user_id)
-    return {"status": "queued", "capture_id": capture.id}
 
 @admin_router.get("/captures", response_model=List[DetailedCaptureResponse])
 def list_detailed_captures(
@@ -152,7 +109,6 @@ def list_detailed_captures(
             has_audio=d.has_audio,
             audio_url=d.audio_url,
             original_transcript=d.original_transcript,
-            stage=d.stage,
             status=d.status,
             error_message=d.error_message,
             resolved_item=resolved,
@@ -191,7 +147,6 @@ def get_detailed_capture(
         has_audio=d.has_audio,
         audio_url=d.audio_url,
         original_transcript=d.original_transcript,
-        stage=d.stage,
         status=d.status,
         error_message=d.error_message,
         resolved_item=resolved,

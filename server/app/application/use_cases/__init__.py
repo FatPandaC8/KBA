@@ -20,7 +20,6 @@ from ..ports import (
     EmbeddingRepositoryPort,
     CaptureRepositoryPort,
     EvalRecordRepositoryPort,
-    JobStatusRepositoryPort,
     KnowledgeExtractionPort,
     EmbeddingProviderPort,
     UserRepositoryPort,
@@ -38,7 +37,6 @@ from ..dto import (
     GraphDataDTO,
     ScoredKnowledgeItemDTO,
     SystemHealthDTO,
-    ProcessingJobDTO,
     DetailedCaptureViewDTO,
 )
 
@@ -288,7 +286,6 @@ class DeleteCaptureUseCase:
         rel_repo: RelationshipRepositoryPort,
         duplicate_repo: DuplicateCandidateRepositoryPort,
         embedding_repo: EmbeddingRepositoryPort,
-        job_repo: JobStatusRepositoryPort,
         eval_repo: EvalRecordRepositoryPort,
         support_repo: RecordSupportRepositoryPort,
         upload_dir: str,
@@ -299,7 +296,6 @@ class DeleteCaptureUseCase:
         self.rel_repo = rel_repo
         self.duplicate_repo = duplicate_repo
         self.embedding_repo = embedding_repo
-        self.job_repo = job_repo
         self.eval_repo = eval_repo
         self.support_repo = support_repo
         self.upload_dir = upload_dir
@@ -357,7 +353,6 @@ class DeleteCaptureUseCase:
             relationships_removed += 1
 
         self.knowledge_repo.delete_by_capture_id(capture_id, user_id=user_id)
-        jobs_deleted = self.job_repo.delete_by_capture_id(capture_id, user_id=user_id)
         eval_deleted = self.eval_repo.delete_by_capture_id(capture_id, user_id=user_id)
         if capture:
             self.capture_repo.delete(capture_id, user_id=user_id)
@@ -370,7 +365,6 @@ class DeleteCaptureUseCase:
             "audio_removed": audio_removed,
             "entities_removed": entities_removed,
             "relationships_removed": relationships_removed,
-            "jobs_deleted": jobs_deleted,
             "eval_records_deleted": eval_deleted,
             "supports_removed": supports_removed,
         }
@@ -414,7 +408,6 @@ class AccountDeletionUseCase:
         rel_repo: RelationshipRepositoryPort,
         duplicate_repo: DuplicateCandidateRepositoryPort,
         embedding_repo: EmbeddingRepositoryPort,
-        job_repo: JobStatusRepositoryPort,
         eval_repo: EvalRecordRepositoryPort,
         tombstone_repo: TombstoneRepositoryPort,
         support_repo: RecordSupportRepositoryPort,
@@ -431,7 +424,6 @@ class AccountDeletionUseCase:
         self.rel_repo = rel_repo
         self.duplicate_repo = duplicate_repo
         self.embedding_repo = embedding_repo
-        self.job_repo = job_repo
         self.eval_repo = eval_repo
         self.tombstone_repo = tombstone_repo
         self.support_repo = support_repo
@@ -465,7 +457,6 @@ class AccountDeletionUseCase:
             self.embedding_repo.delete(item_id, user_id=user_id)
 
         for capture in self.capture_repo.list_all(user_id=user_id):
-            self.job_repo.delete_by_capture_id(capture.id, user_id=user_id)
             self.capture_repo.delete(capture.id, user_id=user_id)
 
         self.eval_repo.delete_for_user(user_id)
@@ -500,7 +491,6 @@ class AdminSystemStatusUseCase:
         rel_repo: RelationshipRepositoryPort,
         embedding_repo: EmbeddingRepositoryPort,
         capture_repo: CaptureRepositoryPort,
-        job_repo: JobStatusRepositoryPort,
         pipeline_version: str,
         upload_dir: str = "server/uploads",
     ):
@@ -508,7 +498,6 @@ class AdminSystemStatusUseCase:
         self.rel_repo = rel_repo
         self.embedding_repo = embedding_repo
         self.capture_repo = capture_repo
-        self.job_repo = job_repo
         self.pipeline_version = pipeline_version
         self.upload_dir = upload_dir
 
@@ -525,8 +514,7 @@ class AdminSystemStatusUseCase:
                     if os.path.isfile(fp):
                         audio_bytes += os.path.getsize(fp)
 
-        recent_jobs = self.job_repo.get_recent_jobs(limit=10)
-        active_jobs = sum(1 for j in recent_jobs if j.status == "processing")
+        capture_counts = self.capture_repo.count_by_status()
 
         return SystemHealthDTO(
             status="ok",
@@ -537,11 +525,9 @@ class AdminSystemStatusUseCase:
             relationship_count=r_count,
             embeddings_count=e_count,
             audio_storage_bytes=audio_bytes,
-            active_jobs_count=active_jobs,
+            capture_counts=capture_counts,
+            failed_captures=self.capture_repo.count_failed(),
         )
-
-    def get_recent_jobs(self, limit: int = 50) -> List[ProcessingJobDTO]:
-        return self.job_repo.get_recent_jobs(limit=limit)
 
     def get_detailed_captures(self, limit: int = 50) -> List[DetailedCaptureViewDTO]:
         captures = self.capture_repo.list_recent(limit=limit)
@@ -554,10 +540,8 @@ class AdminSystemStatusUseCase:
             if not k_item:
                 k_item = self.knowledge_repo.get_by_id(c.id)
 
-            job = self.job_repo.get_by_capture_id(c.id)
-            stage = job.stage if job else ("ready" if k_item else c.status)
-            status = job.status if job else ("ready" if k_item else c.status)
-            error_message = job.error_message if job else None
+            status = c.status if k_item else "transcript_missing"
+            error_message = c.last_error
             original_transcript = k_item.transcript if k_item else None
 
             results.append(DetailedCaptureViewDTO(
@@ -567,7 +551,6 @@ class AdminSystemStatusUseCase:
                 has_audio=has_audio,
                 audio_url=audio_url,
                 original_transcript=original_transcript,
-                stage=stage,
                 status=status,
                 error_message=error_message,
                 resolved_item=entity_to_dto(k_item) if k_item else None,
@@ -585,10 +568,8 @@ class AdminSystemStatusUseCase:
         if not k_item:
             k_item = self.knowledge_repo.get_by_id(c.id)
 
-        job = self.job_repo.get_by_capture_id(c.id)
-        stage = job.stage if job else ("ready" if k_item else c.status)
-        status = job.status if job else ("ready" if k_item else c.status)
-        error_message = job.error_message if job else None
+        status = c.status if k_item else "transcript_missing"
+        error_message = c.last_error
         original_transcript = k_item.transcript if k_item else None
 
         return DetailedCaptureViewDTO(
@@ -598,7 +579,6 @@ class AdminSystemStatusUseCase:
             has_audio=has_audio,
             audio_url=audio_url,
             original_transcript=original_transcript,
-            stage=stage,
             status=status,
             error_message=error_message,
             resolved_item=entity_to_dto(k_item) if k_item else None,
@@ -606,6 +586,6 @@ class AdminSystemStatusUseCase:
 
 
 # M3 use cases live in focused modules; re-exported for container wiring.
-from .jobs import ProcessCaptureUseCase, name_similarity  # noqa: E402,F401
+from .text_kb import TextKBUseCase  # noqa: E402,F401
 from .graph import GraphQueryUseCase  # noqa: E402,F401
 from .admin_console import AdminConsoleUseCase  # noqa: E402,F401

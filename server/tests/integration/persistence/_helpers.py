@@ -2,7 +2,6 @@ from server.app.domain.entities import (
     CaptureEntity,
     ExtractedEntity,
     KnowledgeItemEntity,
-    ProcessingJobDTO,
 )
 
 
@@ -52,31 +51,6 @@ def make_item(user_id: str, item_id: str = None, **kwargs) -> KnowledgeItemEntit
     return KnowledgeItemEntity(**defaults)
 
 
-def make_job(user_id: str, capture_id: str, **kwargs) -> ProcessingJobDTO:
-    import uuid
-
-    now = "2026-01-01T00:00:00+00:00"
-    defaults = dict(
-        id=str(uuid.uuid4()),
-        capture_id=capture_id,
-        stage="queued",
-        status="queued",
-        duration_ms=1,
-        error_message=None,
-        created_at=now,
-        updated_at=now,
-        user_id=user_id,
-        attempt=0,
-        error_class="",
-        lease_owner="",
-        lease_expires_at="",
-        stage_outputs="{}",
-        next_attempt_at="",
-    )
-    defaults.update(kwargs)
-    return ProcessingJobDTO(**defaults)
-
-
 def make_capture(user_id: str, **kwargs) -> CaptureEntity:
     import uuid
 
@@ -88,37 +62,6 @@ def make_capture(user_id: str, **kwargs) -> CaptureEntity:
         audio_path=None,
         duration_ms=1,
         status="received",
-        stage="uploaded",
-        error_class="",
-        error_message="",
-        retry_count=0,
-        user_edited_title=False,
-        user_edited_summary=False,
-        knowledge_item_id=None,
-        has_audio=False,
-        audio_on_server=False,
-        created_at=now,
-        updated_at=now,
-    )
-    defaults.update(kwargs)
-    return CaptureEntity(**defaults)
-
-
-def make_capture(user_id: str, **kwargs) -> CaptureEntity:
-    import uuid
-
-    now = "2026-01-01T00:00:00+00:00"
-    defaults = dict(
-        id=str(uuid.uuid4()),
-        idempotency_key=str(uuid.uuid4()),
-        user_id=user_id,
-        audio_path=None,
-        duration_ms=1,
-        status="received",
-        stage="uploaded",
-        error_class="",
-        error_message="",
-        retry_count=0,
         user_edited_title=False,
         user_edited_summary=False,
         knowledge_item_id=None,

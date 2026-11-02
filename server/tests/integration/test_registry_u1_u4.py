@@ -1,8 +1,8 @@
 """U1 (open-ended relationship registry through the pipeline) and U4 (admin
 audit log) integration coverage.
 
-Every test uses the deterministic fake STT and the rule-based extractor; no
-test opens a socket or reads the real GROQ_API_KEY.
+Every test drives the synchronous text-kb ingest with the rule-based
+extractor; no test opens a socket or reads the real GROQ_API_KEY.
 """
 
 import uuid
@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from server.app.main import app
 from server.app.infrastructure.config import get_settings
 
-from .m3_support import container, ingest
+from .m3_support import container, ingest_text
 
 client = TestClient(app)
 
@@ -26,9 +26,9 @@ def test_registry_normalises_and_reuses_canonical_relationships(
 ):
     user = user_factory(client)
 
-    ingest(client, user, "Echo depends on FastAPI.", monkeypatch)
-    ingest(client, user, "Echo relies on FastAPI.", monkeypatch)
-    ingest(client, user, "Echo works at Acme with Alice.", monkeypatch)
+    ingest_text(client, user, "Echo depends on FastAPI.")
+    ingest_text(client, user, "Echo relies on FastAPI.")
+    ingest_text(client, user, "Echo works at Acme with Alice.")
 
     types = {r["type"] for r in client.get("/api/graph", headers=user.headers).json()["edges"]}
     # "relies on" normalised into the canonical "Depends on" (alias match)…
@@ -44,7 +44,7 @@ def test_registry_normalises_and_reuses_canonical_relationships(
 
 def test_evidence_utterance_is_persisted_with_relationships(user_factory, monkeypatch):
     user = user_factory(client)
-    ingest(client, user, "Echo depends on FastAPI.", monkeypatch)
+    ingest_text(client, user, "Echo depends on FastAPI.")
 
     rels = client.get("/api/graph", headers=user.headers).json()["edges"]
     assert rels
@@ -52,13 +52,26 @@ def test_evidence_utterance_is_persisted_with_relationships(user_factory, monkey
 
 
 def test_co_occurrence_never_creates_edges(user_factory, monkeypatch):
+    """KG-02 updated for extractor v2.0 (echo-mvp): first-person cues like
+    'met X' produce Me-links and pair links between the sentence's mentioned
+    entities; the hard rule still enforced is that a sentence with NO typed
+    cue and no first-person cue creates no edge at all."""
     user = user_factory(client)
-    ingest(client, user, "I met Alice about the Echo project over coffee.", monkeypatch)
+    ingest_text(client, user, "I met Alice about the Echo project over coffee.")
 
     graph = client.get("/api/graph", headers=user.headers).json()
-    assert graph["nodes"], "entities are still extracted"
-    # No typed cue in the sentence means no last-resort fallback edge either.
-    assert graph["edges"] == []
+    names = {n["title"] for n in graph["nodes"]}
+    assert {"Alice", "Echo"} <= names, "entities are still extracted"
+    me_node = next(n for n in graph["nodes"] if n["is_self"])
+    me_links = [e for e in graph["edges"] if me_node["id"] in (e["from_node"], e["to_node"])]
+    assert me_links, "the v2.0 first-person cue produces a Met link"
+
+    # A sentence with no typed cue and no first-person cue has no edges.
+    user2 = user_factory(client)
+    ingest_text(client, user2, "Alice was near the Echo project over coffee.")
+    graph2 = client.get("/api/graph", headers=user2.headers).json()
+    assert graph2["nodes"], "entities are still extracted"
+    assert graph2["edges"] == [], graph2["edges"]
 
 
 # ---------------------------------------------------------------------- U2

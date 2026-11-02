@@ -120,7 +120,7 @@ def transaction(database):
 class Database:
     """Process-wide handle around one ``ConnectionPool`` (R7).
 
-    The pool is opened lazily and closed once (API lifespan or worker
+    The pool is opened lazily and closed once (API lifespan
     shutdown). Settings control pool size and timeouts; no schema is ever
     created from here.
     """

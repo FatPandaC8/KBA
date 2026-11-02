@@ -2,8 +2,8 @@
 
 One Settings object, one persistence backend (PostgreSQL), no factory
 branching. Repositories come from ``persistence.postgres.PostgresContainer``
-(one process-wide pool per process). The FastAPI lifespan opens and closes the
-pool; the worker process (``python -m app.worker``) owns its own pool.
+(one process-wide pool per process). The FastAPI lifespan opens and closes
+the pool; the API process is the only server process (pipeline split, S2).
 """
 
 import logging
@@ -34,7 +34,6 @@ from server.app.application.use_cases import (
     GraphQueryUseCase,
     ManageKnowledgeUseCase,
     ManageRelationshipsUseCase,
-    ProcessCaptureUseCase,
     PurgeRetainedAudioUseCase,
     SemanticRecallUseCase,
 )
@@ -65,7 +64,6 @@ class Container:
         self.embedding_repo = persistence.embedding_repo
         self.capture_repo = persistence.capture_repo
         self.eval_repo = persistence.eval_repo
-        self.job_repo = persistence.job_repo
         self.user_repo = persistence.user_repo
         self.session_repo = persistence.session_repo
         self.email_token_repo = persistence.email_token_repo
@@ -112,26 +110,6 @@ class Container:
         self.consent_service = ConsentService(self.consent_repo, settings)
 
         # Use cases
-        self.process_capture_uc = ProcessCaptureUseCase(
-            capture_repo=self.capture_repo,
-            knowledge_repo=self.knowledge_repo,
-            entity_repo=self.entity_repo,
-            rel_repo=self.rel_repo,
-            duplicate_repo=self.duplicate_repo,
-            embedding_repo=self.embedding_repo,
-            job_repo=self.job_repo,
-            support_repo=self.support_repo,
-            tombstone_repo=self.tombstone_repo,
-            transcriber=self.transcriber,
-            extractor=self.extractor,
-            embedder=self.embedder,
-            upload_dir=settings.upload_dir,
-            auto_link_threshold=settings.duplicate_auto_link_threshold,
-            flag_threshold=settings.duplicate_flag_threshold,
-            retry_limit=settings.job_retry_limit,
-            lease_seconds=settings.job_lease_seconds,
-            relationship_type_repo=self.rel_type_repo,
-        )
         self.graph_query_uc = GraphQueryUseCase(
             entity_repo=self.entity_repo,
             rel_repo=self.rel_repo,
@@ -199,7 +177,6 @@ class Container:
             rel_repo=self.rel_repo,
             duplicate_repo=self.duplicate_repo,
             embedding_repo=self.embedding_repo,
-            job_repo=self.job_repo,
             eval_repo=self.eval_repo,
             support_repo=self.support_repo,
             upload_dir=settings.upload_dir,
@@ -219,7 +196,6 @@ class Container:
             rel_repo=self.rel_repo,
             duplicate_repo=self.duplicate_repo,
             embedding_repo=self.embedding_repo,
-            job_repo=self.job_repo,
             eval_repo=self.eval_repo,
             tombstone_repo=self.tombstone_repo,
             support_repo=self.support_repo,
@@ -231,7 +207,6 @@ class Container:
             rel_repo=self.rel_repo,
             embedding_repo=self.embedding_repo,
             capture_repo=self.capture_repo,
-            job_repo=self.job_repo,
             pipeline_version=settings.pipeline_version,
             upload_dir=settings.upload_dir,
         )
@@ -242,14 +217,14 @@ class Container:
             user_repo=self.user_repo,
             account_delete=self.delete_account_uc,
             capture_delete=self.delete_capture_uc,
-            process_capture=self.process_capture_uc,
-            worker=None,
+            entity_repo=self.entity_repo,
+            ingestor=self.ingestor,
             upload_dir=settings.upload_dir,
             password_min_length=settings.password_min_length,
         )
 
     def open_database(self) -> None:
-        """Open the pool explicitly (FastAPI lifespan / worker startup)."""
+        """Open the pool explicitly (FastAPI lifespan startup)."""
         self.persistence.open_pool()
 
     def close_database(self) -> None:
@@ -344,8 +319,8 @@ class Container:
             )
         )
         # Use cases hold references; swap the adapters in place so a running
-        # worker picks up the new provider without a restart.
-        self.process_capture_uc.extractor = self.extractor
+        # instance picks up the new provider without a restart.
+        self.ingestor.extraction = self.extractor
         self.manage_knowledge_uc.extractor = self.extractor
         self.provider_registry.settings = self.settings
 

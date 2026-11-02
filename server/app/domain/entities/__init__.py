@@ -373,14 +373,14 @@ DEFAULT_RELATIONSHIP_TYPES: List[RelationshipTypeRegistryEntry] = [
 class CaptureEntity:
     id: str
     idempotency_key: str
+    # Pipeline split (S2): capture truth only — status, knowledge-item link
+    # and the last ingest failure. Worker stage/retry fields are gone.
     audio_path: str
     user_id: str = ""
     duration_ms: int = 0
     status: str = CaptureStatus.RECEIVED
-    stage: str = "uploaded"
-    error_class: str = ""
-    error_message: str = ""
-    retry_count: int = 0
+    last_error: Optional[str] = None
+    last_error_at: Optional[str] = None
     user_edited_title: bool = False
     user_edited_summary: bool = False
     knowledge_item_id: Optional[str] = None
@@ -409,25 +409,6 @@ class SessionEntity:
     created_at: str
     last_used_at: Optional[str] = None
     revoked_at: Optional[str] = None
-
-
-@dataclass
-class ProcessingJobDTO:
-    id: str
-    user_id: str
-    capture_id: Optional[str]
-    stage: str
-    status: str
-    attempt: int
-    error_class: str
-    lease_owner: str
-    lease_expires_at: Optional[str]
-    stage_outputs: Dict[str, Any]
-    duration_ms: Optional[int]
-    error_message: Optional[str]
-    created_at: str
-    updated_at: str
-    next_attempt_at: Optional[str] = None
 
 
 @dataclass

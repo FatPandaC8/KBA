@@ -272,28 +272,13 @@ class ConsentUpdateRequest(BaseModel):
 
 
 # ------------------------------------------------------------ recordings
+# Pipeline split (S2): no job rows. Capture truth only — created_at, whether
+# the knowledge item was built, and the last ingest error (captures row).
 class RecordingResponse(BaseModel):
     capture_id: str
     created_at: str
-    duration_ms: int
-    status: str
-    stage: str
-    has_audio: bool
-    knowledge_item_id: Optional[str] = None
-    error_message: Optional[str] = None
-    error_class: str = ""
-    retryable: bool = False
-
-
-class JobStatusResponse(BaseModel):
-    capture_id: str
-    stage: str
-    status: str
-    attempt: int = 0
-    error_class: str = ""
-    error_message: Optional[str] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    has_knowledge_item: bool
+    last_error: Optional[str] = None
 
 
 # Admin Schemas
@@ -306,18 +291,8 @@ class SystemHealthResponse(BaseModel):
     relationship_count: int
     embeddings_count: int
     audio_storage_bytes: int
-    active_jobs_count: int
-
-
-class ProcessingJobResponse(BaseModel):
-    id: str
-    capture_id: str
-    stage: str
-    status: str
-    duration_ms: int
-    error_message: Optional[str] = None
-    created_at: str
-    updated_at: str
+    capture_counts: Dict[str, int] = Field(default_factory=dict)
+    failed_captures: int = 0
 
 
 class BackfillResponse(BaseModel):
@@ -377,7 +352,6 @@ class DetailedCaptureResponse(BaseModel):
     has_audio: bool
     audio_url: Optional[str] = None
     original_transcript: Optional[str] = None
-    stage: str
     status: str
     error_message: Optional[str] = None
     resolved_item: Optional[KnowledgeItem] = None

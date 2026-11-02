@@ -4,7 +4,7 @@ import uuid
 
 from server.app.domain.entities import RelationshipTypeRegistryEntry
 
-from ._helpers import make_entity, make_capture, make_item, make_job
+from ._helpers import make_entity, make_capture, make_item
 
 
 def test_user_upsert_roundtrip_and_delete(container_):

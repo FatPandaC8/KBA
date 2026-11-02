@@ -132,27 +132,10 @@ class SystemHealthDTO:
     relationship_count: int
     embeddings_count: int
     audio_storage_bytes: int
-    active_jobs_count: int
+    # Pipeline split (S2): capture truth replaces the job counters.
+    capture_counts: Dict[str, int] = field(default_factory=dict)
+    failed_captures: int = 0
     entity_count: int = 0
-
-
-@dataclass
-class ProcessingJobDTO:
-    id: str
-    capture_id: str
-    stage: str
-    status: str
-    duration_ms: int
-    error_message: Optional[str]
-    created_at: str
-    updated_at: str
-    user_id: str = ""
-    attempt: int = 0
-    error_class: str = ""
-    lease_owner: str = ""
-    lease_expires_at: str = ""
-    stage_outputs: str = "{}"
-    next_attempt_at: str = ""
 
 
 @dataclass
@@ -163,7 +146,6 @@ class DetailedCaptureViewDTO:
     has_audio: bool
     audio_url: Optional[str]
     original_transcript: Optional[str]
-    stage: str
     status: str
     error_message: Optional[str]
     resolved_item: Optional[KnowledgeItemDTO]

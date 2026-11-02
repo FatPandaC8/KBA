@@ -72,52 +72,16 @@ class EntityType:
 
 @dataclass(frozen=True)
 class CaptureStatus:
+    """Capture truth (pipeline split, S2): the two synchronous APIs persist a
+    capture only in one UoW (received -> ready). Worker stage names are gone."""
     RECEIVED: str = "received"
-    TRANSCRIBING: str = "transcribing"
-    EXTRACTING: str = "extracting"
-    INDEXING: str = "indexing"
     READY: str = "ready"
     FAILED: str = "failed"
-
-
-@dataclass(frozen=True)
-class JobStage:
-    """Ordered pipeline stages. Persisted, so a restart resumes at the stage."""
-
-    UPLOAD: str = "upload"
-    TRANSCRIBE: str = "transcribe"
-    EXTRACT: str = "extract"
-    SAVE: str = "save"
-    COMPLETED: str = "completed"
-
-    ORDER: tuple = ("upload", "transcribe", "extract", "save", "completed")
-
-    @classmethod
-    def rank(cls, stage: str) -> int:
-        try:
-            return cls.ORDER.index(stage)
-        except ValueError:
-            return -1
-
-
-@dataclass(frozen=True)
-class JobStatus:
-    QUEUED: str = "queued"
-    RUNNING: str = "running"
-    PROCESSING: str = "processing"
-    READY: str = "ready"
-    COMPLETED: str = "completed"
-    FAILED: str = "failed"
-
-    @classmethod
-    def is_terminal(cls, value: str) -> bool:
-        return value in {cls.READY, cls.COMPLETED, cls.FAILED}
 
 
 @dataclass(frozen=True)
 class ErrorClass:
-    """Label constants for failure classes (classification lives in
-    ``server.app.domain.job_state`` — RETRYABLE_CLASSES/TERMINAL_CLASSES)."""
+    """Label constants for failure classes reported by the STT/Text-KB ports."""
 
     QUOTA_EXHAUSTED: str = "quota_exhausted"
     NETWORK: str = "network_error"
@@ -127,10 +91,3 @@ class ErrorClass:
     UNKNOWN: str = "unknown"
     TIMEOUT: str = "timeout"
     UNSUPPORTED_LANGUAGE: str = "unsupported_language"
-
-    @classmethod
-    def is_recoverable(cls, value: str) -> bool:
-        # Delegate to the single domain table (no duplicated policy here).
-        from server.app.domain.job_state import is_retryable
-
-        return is_retryable(value)

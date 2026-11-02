@@ -37,8 +37,9 @@ setup_logging()
 async def lifespan(app: FastAPI):
     container = get_container()
     container.open_database()
-    # D8: the worker is a separate process (`python -m app.worker`); the API
-    # process owns only its pool. Graceful shutdown closes the pool.
+    # Pipeline split (S2): the API process is the only server process; the two
+    # synchronous endpoints run inside the request. Graceful shutdown closes
+    # the pool.
     try:
         yield
     finally:
@@ -49,10 +50,10 @@ settings = get_settings()
 
 _logging = __import__("logging")
 _logging.getLogger("echo").info(
-    "DATABASE_URL configured | ECHO_ENV: %s | consent_version: %s | worker_enabled: %s",
+    "DATABASE_URL configured | ECHO_ENV: %s | consent_version: %s | pipeline: %s",
     settings.app_env,
     settings.consent_version,
-    settings.worker_enabled,
+    "sync-stt+text-kb",
 )
 
 app = FastAPI(

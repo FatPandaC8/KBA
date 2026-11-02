@@ -37,6 +37,7 @@ from server.app.application.ports import (
 from server.app.domain.entities import (
     CaptureEntity,
     KnowledgeItemEntity,
+    canonical_relation_name,
     current_utc_iso,
 )
 from server.app.domain.errors import ConflictError, ValidationError
@@ -109,11 +110,15 @@ class TextKBUseCase(KnowledgeIngestorPort):
                 f"({len(text)} > {self.settings.max_text_chars} characters)."
             )
 
-        existing = self.capture_repo.get_by_id(capture_id, user_id=user_id)
+        existing = self.capture_repo.get_by_id(capture_id, user_id=None)
         if existing is not None:
             if existing.user_id != user_id:
                 raise ConflictError("capture_id is already in use by another account.")
-            return self._existing_result(user_id, capture_id, existing)
+            # Idempotent replay (S4a) only when the ingest output exists; a
+            # capture row without a knowledge item (legacy/failed) still
+            # needs its extraction run.
+            if self.knowledge_repo.get_by_capture_id(capture_id, user_id=user_id):
+                return self._existing_result(user_id, capture_id, existing)
 
         result = self.extraction.extract_graph(
             text,
@@ -223,7 +228,20 @@ class TextKBUseCase(KnowledgeIngestorPort):
 
         )
 
-        # stage 3: link planning
+        # stage 3: link planning; relation types flow through the open-ended
+        # registry first (U1, same as the pre-split pipeline): equivalent
+        # proposals reuse the canonical entry, new meanings gain one.
+        if self.settings.relationship_registry is not None:
+            for rel in result.relationships:
+                proposal = canonical_relation_name(rel.relation_type) or canonical_relation_name(
+                    "Related to"
+                )
+                entry = self.settings.relationship_registry.ensure(
+                    user_id,
+                    canonical_name=proposal,
+                    provenance="extraction-proposal",
+                )
+                rel.relation_type = entry.canonical_name
         links = plan_links(result.relationships, id_map, user_id, capture_id)
 
         entity_by_id = {e.id: e for e in existing}

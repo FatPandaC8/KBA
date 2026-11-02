@@ -205,11 +205,16 @@ class PostgresEntityRepository:
             return True
 
     def cleanup_orphans(self, user_id: str) -> int:
-        """Delete non-self entities with no relationship endpoints (R4).
+        """Delete non-self entities with no relationship endpoints, no
+        duplicate-candidate record and no capture support row (R4).
 
         Runs at the end of the ingest stage order inside the same transaction.
         The self entity is explicitly excluded (``is_self = FALSE``): a user's
         self node survives dedup and orphan pruning by rule, not by accident.
+
+        The support-row exclusion (pipeline split keeps DEL-01 intact) means a
+        tombstoned neighbour does not drag its co-mention entities away: they
+        were captured and stay visible until their own capture is deleted.
         """
         with transaction(self.db) as conn:
             cur = conn.execute(
@@ -224,6 +229,11 @@ class PostgresEntityRepository:
                        WHERE dc.user_id = entities.user_id
                          AND (dc.source_entity_id = entities.id
                               OR dc.target_entity_id = entities.id))
+                  AND NOT EXISTS
+                      (SELECT 1 FROM record_supports rs
+                       WHERE rs.user_id = entities.user_id
+                         AND rs.target_kind = 'entity'
+                         AND rs.target_id = entities.id)
                 """,
                 (uuid.UUID(user_id),),
             )
