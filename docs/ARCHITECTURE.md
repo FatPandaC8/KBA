@@ -1,323 +1,124 @@
-# Architecture Reference
+# Echo Architecture (current implementation)
 
-This document describes the technical architecture, data flows, database schemas, API contracts, and component responsibilities for Echo.
+This document describes the repository as it is implemented now. Older
+milestone reports are historical; the former upload/job/worker design is not
+the current runtime.
 
-*Updated 2026-10-30 to reflect the M3 implementation and voice-first knowledge management direction. See `docs/PRODUCT_DIRECTION.md` for the authoritative product scope.*
+## Components
 
----
-
-## 1. System Components & Responsibilities
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                    Flutter Client (Android)                    │
-│                                                                │
-│  [RecordScreen]  [GraphScreen]  [RecordingsScreen]  [Settings] │
-│         │              │               │                       │
-│         ▼              ▼               ▼                       │
-│     ┌───────────────────────────────────────────────────┐      │
-│     │            NoteProvider (State / SSOT)            │      │
-│     └───────────────────────────────────────────────────┘      │
-│            │                                   │               │
-│            ▼                                   ▼               │
-│     ┌──────────────┐                  ┌──────────────────┐     │
-│     │NoteRepository│                  │  BackendService  │     │
-│     │(Local SQLite)│                  │  (HTTP Client)   │     │
-│     └──────────────┘                  └──────────────────┘     │
-└────────────────────────────────────────────────────────────────┘
-                                              │ REST / Multipart HTTP
-                                              ▼
-┌────────────────────────────────────────────────────────────────┐
-│                     FastAPI Backend Service                    │
-│                                                                │
-│  [POST /api/captures/upload]  [GET /api/graph]                 │
-│  [GET/PATCH/DELETE /api/entities]                              │
-│  [GET/PATCH/DELETE /api/relationships]                         │
-│  [GET /api/knowledge/search]  [GET /api/captures/{id}/audio]   │
-│                                                                │
-│  ┌──────────────────────────────────────────────────────┐      │
-│  │                 Processing Pipeline                  │      │
-│  │  STT (faster-whisper) → Entity/Relationship          │      │
-│  │  Extraction → Entity Resolution → Graph Update       │      │
-│  └──────────────────────────────────────────────────────┘      │
-│                                 │                              │
-│                                 ▼                              │
-│                      ┌──────────────────┐                      │
-│                      │  SQLite Storage  │                      │
-│                      │(echo_backend.db) │                      │
-│                      └──────────────────┘                      │
-└────────────────────────────────────────────────────────────────┘
+```text
+┌───────────────────┐       session-authenticated HTTP        ┌────────────────────┐
+│ Flutter Android   │ ───────────────────────────────────────► │ FastAPI server      │
+│ Record + Graph UI │   POST /api/stt, then POST /api/text-kb  │ ports + use cases   │
+│ local SQLite      │ ◄─────────────────────────────────────── │                    │
+└───────────────────┘     transcript / ingest result           └─────────┬──────────┘
+                                                                          │ UoW/repos
+                                                                          ▼
+                                                               ┌────────────────────┐
+                                                               │ PostgreSQL 16      │
+                                                               │ Alembic schema     │
+                                                               └────────────────────┘
 ```
 
-### Component Breakdown
+- **Mobile**: Flutter Android app, on-device note/audio storage, session auth,
+  audio recording, graph view/search. Local audio stays on device.
+- **API**: FastAPI. The app calls STT, then Text-KB. There is no async job or
+  separate worker process.
+- **Server storage**: PostgreSQL 16 only. Alembic migrations own the schema.
+- **Providers**: local faster-whisper STT; local rule-based or explicitly
+  configured Groq extraction; local FastEmbed vectors. Selection is server
+  configuration, not a request parameter.
+- **Admin**: React + TypeScript dashboard in `admin/`; the API serves the built
+  `admin/dist` bundle at `/admin`.
 
-1. **`AudioService` (`mobile/lib/services/audio_service.dart`)**:
-   - Manages Android microphone permissions via `permission_handler`.
-   - Records audio using the `record` package with AAC-LC compression at 64 kbps, 44.1 kHz, saved to local `.m4a` files.
-   - Provides duration measurement and audio playback controls via `audioplayers`.
+## Ingest data flow
 
-2. **`NoteProvider` (`mobile/lib/state/note_provider.dart`)**:
-   - Single Source of Truth (SSOT) via `ChangeNotifier`.
-   - Coordinates local persistence (`NoteRepository`), backend communication (`BackendService`), and state propagation to all dependent UI widgets.
-   - Ensures Graph and Recordings views observe identical data.
-
-3. **`NoteRepository` (`mobile/lib/data/repositories/note_repository.dart`)**:
-   - CRUD operations against local SQLite (`echo_notes.db`).
-   - Caches processing status and recording metadata for offline display.
-
-4. **`BackendService` (`mobile/lib/services/backend_service.dart`)**:
-   - HTTP communication with the FastAPI backend.
-   - Manages idempotent multipart audio uploads, knowledge graph polling, and entity/relationship operations.
-
-5. **`FastAPI Backend` (`server/app/main.py`)**:
-   - Exposes REST endpoints for audio upload, knowledge graph retrieval, entity/relationship management, search, and evaluation exports.
-   - Enforces ownership authorization on every user resource endpoint.
-
-6. **`Processing Pipeline` (`server/app/pipeline.py` and `server/app/application/use_cases/`)**:
-   - Decodes audio to 16 kHz mono PCM using `ffmpeg`.
-   - Transcribes audio via faster-whisper (local) or Groq (hosted).
-   - Extracts entities and relationships from the transcript using the configured LLM provider or the deterministic rule-based extractor.
-   - Applies entity resolution: matches extracted entities against existing graph entities using embedding similarity.
-   - Updates the knowledge graph incrementally: adds new entities, links resolved entities, flags duplicates, records contradictions, preserves tombstones and `user_edited` records.
-   - Generates and stores embeddings for knowledge search.
-
-> [!NOTE]
-> Extraction and graph construction are distinct responsibilities. The extraction step produces candidate entities and relationships. The resolution and graph update step applies deterministic application logic — thresholds, tombstone checks, `user_edited` protection — to decide what enters the knowledge graph. This is not AI inference; it is data management.
-
----
-
-## 2. Voice Capture & Processing Data Flow
-
-> [!IMPORTANT]
-> Voice recordings are the only ingestion channel for new knowledge in the MVP. Text note capture is not supported. Entity name/description editing and entity/relationship deletion are knowledge-management operations on extracted data. Transcripts are internal pipeline artifacts — they are not exposed to end users and must not be served through any user-facing endpoint.
-
-```
-1. User presses-and-holds mic (RecordScreen)
-   └── AudioService.startRecording() saves to app-private .m4a
-
-2. User releases mic
-   └── NoteProvider.uploadRecording() queues upload
-   └── Local record created (status: queued)
-
-3. Upload — POST /api/captures/upload
-   └── Idempotency key prevents duplicate records on retry
-   └── Backend saves audio; inserts job row (status: upload)
-
-4. Processing pipeline (async job worker)
-   ├── transcribe    faster-whisper → transcript + segment timestamps
-   ├── extract       LLM (groq) or rule_based → entities + relationships JSON
-   │                 Validated against schema; one repair attempt on failure
-   ├── resolve       Match extracted entities to existing graph entities
-   │                 ≥ 0.90 similarity → auto-link; 0.75–0.90 → flag duplicate
-   ├── save          Update knowledge graph (tombstones, user_edited respected)
-   └── embed         fastembed BAAI/bge-small-en-v1.5, local
-
-5. Processing complete (status: ready)
-   └── Client polls job status and refreshes knowledge graph
+```text
+phone audio
+  │ POST /api/stt (raw bytes; auth; no consent required; no writes)
+  ▼
+transcript response ── kept in app memory
+  │ POST /api/text-kb {capture_id: UUID, text} (auth + consent)
+  ▼
+extract → first-person normalize → entity resolve → link → deduplicate
+       → item embedding → prune unsupported orphans → commit one Postgres UoW
 ```
 
----
+`capture_id` is generated by the client. A same-user successful replay returns
+the existing ingest result; reusing an ID owned by another user returns `409`.
+Failure rolls back the complete Text-KB UoW. A separate small transaction
+stores `last_error`/`last_error_at` on an existing capture for admin diagnosis.
+The app retries explicitly; it does not poll.
 
-## 3. Database Schemas
+## Layers and ports
 
-The backend uses a single SQLite database with WAL mode. Schema is managed by explicit migration scripts in `server/app/infrastructure/database/`.
-
-Key tables (conceptual summary — authoritative schema is in migration files):
-
-```sql
--- Recordings and their processing state
-captures (
-  id TEXT PRIMARY KEY,
-  user_id TEXT,
-  idempotency_key TEXT UNIQUE,
-  audio_path TEXT,
-  duration_ms INTEGER,
-  status TEXT,               -- queued | transcribing | extracting | saving | ready | failed
-  failure_reason TEXT,
-  failure_class TEXT,
-  retry_count INTEGER,
-  created_at TEXT
-)
-
--- Async processing jobs with lease-based fault recovery
-processing_jobs (
-  id TEXT PRIMARY KEY,
-  capture_id TEXT,
-  status TEXT,
-  stage_outputs TEXT,        -- JSON: stores transcript, extraction output per stage
-  lease_expires_at TEXT,
-  retry_count INTEGER,
-  error_class TEXT
-)
-
--- Transcripts (admin-only internal processing artifact; never served to end users)
-transcripts (
-  id TEXT PRIMARY KEY,
-  capture_id TEXT,
-  text TEXT,
-  segments TEXT,             -- JSON: [{text, start, end}]
-  user_edited INTEGER DEFAULT 0,
-  created_at TEXT
-)
-
--- Extracted and resolved knowledge graph entities
-entities (
-  id TEXT PRIMARY KEY,       -- uuid5(user_id, type, normalized_name)
-  user_id TEXT,
-  name TEXT,
-  entity_type TEXT,          -- person | project | organization | place | concept | tool | idea
-  description TEXT,
-  confidence REAL,
-  certainty_status TEXT,     -- certain | uncertain | conflicted | tombstoned
-  user_edited INTEGER DEFAULT 0,
-  provenance_capture_id TEXT,
-  created_at TEXT,
-  updated_at TEXT
-)
-
--- Relationships between entities
-relationships (
-  id TEXT PRIMARY KEY,
-  user_id TEXT,
-  source_entity_id TEXT,
-  target_entity_id TEXT,
-  relation_type TEXT,        -- Supports | Example of | Related to | Depends on | Constrained by | Contradicts
-  confidence REAL,
-  certainty_status TEXT,
-  provenance_capture_id TEXT,
-  created_at TEXT
-)
-
--- Evidence: links entities/relationships back to transcript segments
-entity_mentions (
-  id TEXT PRIMARY KEY,
-  entity_id TEXT,
-  capture_id TEXT,
-  transcript_segment TEXT,
-  confidence REAL
-)
-
-relationship_evidence (
-  id TEXT PRIMARY KEY,
-  relationship_id TEXT,
-  capture_id TEXT,
-  transcript_segment TEXT
-)
-
--- Embeddings for knowledge search
-entity_embeddings (
-  entity_id TEXT PRIMARY KEY,
-  embedding BLOB,
-  model_id TEXT
-)
+```text
+HTTP routes / schemas
+        │
+application use cases + ports (no SQL, no FastAPI types in ports)
+        │
+domain entities / errors / pure graph layout
+        ▲
+Postgres repository adapters + provider adapters (composition root)
 ```
 
----
+Key files:
 
-## 4. API Contracts & Authorization Boundaries
+- `server/app/api/routes/client.py` — auth, STT and Text-KB HTTP endpoints.
+- `server/app/api/dependencies.py` — composition root, configuration-based
+  adapter selection and UoW factory.
+- `server/app/application/ports/__init__.py` — repository/provider ports,
+  including `AudioTranscriptionPort` and `KnowledgeIngestorPort`.
+- `server/app/application/use_cases/text_kb.py` — synchronous all-or-nothing
+  text ingest and idempotency.
+- `server/app/application/use_cases/admin_console.py` — admin operations via
+  ports only; no SQL or psycopg imports.
+- `server/app/domain/graph_layout.py` — deterministic pure domain layout.
+- `server/app/adapters/outbound/persistence/postgres/` — Postgres repositories,
+  UoW and admin read/aggregate ports.
 
-> [!IMPORTANT]
-> **Authorization boundaries are enforced on the backend, not by hiding UI elements.** Three distinct access tiers apply:
-> - **Public (unauthenticated):** Nothing. All endpoints require authentication.
-> - **User-authenticated:** Recordings metadata, audio playback (own only), extracted entities and relationships (own only), knowledge search.
-> - **Admin-authenticated:** All of the above, plus transcripts, pipeline job details, all users' data (with mandatory audit log entry).
->
-> Transcripts must never appear in any user-tier API response, whether accidentally included in response bodies, error messages, or debug fields.
+Architecture tests enforce: Postgres/SQL stays in adapters/migrations/test
+bootstrap; SQLite server persistence is absent; Text-KB cannot import speech
+code and speech cannot import the Text-KB use case; the admin use case cannot
+contain SQL or import psycopg.
 
-### Voice ingestion
+## Persistence and migrations
 
-| Endpoint | Method | Auth | Purpose |
-|---|---|---|---|
-| `/api/captures/upload` | POST | User | Idempotent multipart audio upload; enqueues processing job |
-| `/api/captures/{id}` | GET | User | Recording metadata and processing status (no transcript) |
-| `/api/captures/{id}/audio` | GET | User (owner) | Audio playback — owner-only; returns 403 for any other user |
-| `/api/captures/{id}` | DELETE | User (owner) | Deletes recording, transcript, and withdraws evidential support |
+Local Postgres is the only service in `docker-compose.yml`. The migration chain
+is baseline `0001`, add capture error fields `0002`, drop worker job table
+`0003`, and drop worker-era capture columns `0004`. Do not edit the baseline to
+represent later schema changes. Apply with `(cd server && alembic upgrade head)`.
 
-### Knowledge graph
+The Flutter app has a separate local SQLite database for device notes. That
+does not imply SQLite persistence in the server.
 
-| Endpoint | Method | Auth | Purpose |
-|---|---|---|---|
-| `/api/graph` | GET | User | Full entity/relationship graph for the authenticated user |
-| `/api/entities/{id}` | GET | User | Entity detail with provenance |
-| `/api/entities/{id}` | PATCH | User (owner) | Edit entity name/description (sets `user_edited`) |
-| `/api/entities/{id}` | DELETE | User (owner) | Soft-deletes entity (tombstone); removes orphaned relationships |
-| `/api/relationships/{id}` | GET | User | Relationship detail |
-| `/api/relationships/{id}` | DELETE | User (owner) | Remove a relationship |
+More detail and exact run commands: [persistence and UoW](architecture/persistence.md)
+and [root README](../README.md).
 
-### Search
+## Authentication, consent and privacy
 
-| Endpoint | Method | Auth | Purpose |
-|---|---|---|---|
-| `/api/knowledge/search` | GET | User | Hybrid entity/relationship search (embedding + lexical) — no transcript content in results |
+- User APIs require a bearer session. Text-KB additionally requires current
+  consent; the app handles a consent-required response before retrying.
+- Admin routes use `verify_admin_auth` and `X-Admin-Token`; empty or incorrect
+  tokens fail closed. Admin auth was not weakened by the pipeline change.
+- Audio is sent to the configured local STT server but is not persisted there.
+  The transcript is stored with the knowledge item and only exposed to admin
+  routes. Hosted extraction, if configured, receives text only.
+- The admin dashboard is same-origin at `/admin`; local Vite development uses
+  `http://127.0.0.1:5174` and proxies `/api` to the backend.
 
-### Admin (requires the configured admin token; mutations are audited)
+## Current public contracts
 
-| Endpoint | Method | Auth | Purpose |
-|---|---|---|---|
-| `/api/admin/overview` | GET | Admin | Counts, processing statuses, failures, and recent activity |
-| `/api/admin/users` | GET / POST | Admin | Paginated user list and user creation |
-| `/api/admin/users/{id}` | GET / PATCH / DELETE | Admin | User detail, email update, and hard delete |
-| `/api/admin/captures-page` | GET | Admin | Paginated capture list with search and status/user filters |
-| `/api/admin/captures/{id}/console` | GET | Admin | Capture detail, transcript, audio metadata, and extraction results |
-| `/api/admin/captures/{id}/transcript` | PATCH | Admin | Save transcript without starting extraction |
-| `/api/admin/captures/{id}/rerun-extraction` | POST | Admin | Replace extraction output after successful re-run |
-| `/api/admin/captures/{id}` | DELETE | Admin | Hard delete capture, audio, and capture-exclusive graph data |
-| `/api/admin/graph/entities` | GET | Admin | Paginated read-only entity list |
-| `/api/admin/graph/relationships` | GET | Admin | Paginated read-only relationship list |
-| `/api/admin/audit-log/page` | GET | Admin | Paginated mutation audit log |
+- `POST /api/stt` — raw audio request body; response transcript/language/
+  provider/latency; stateless.
+- `POST /api/text-kb` — JSON capture UUID + transcript; synchronous ingest
+  result; auth + consent; idempotent capture ID.
+- Removed: `POST /api/captures/upload`, recording status/poll endpoint, retry
+  endpoint, and admin job endpoints/fields.
+- `GET /api/recordings` — capture journal facts only (`capture_id`, creation
+  time, knowledge-item presence, last error); not a work-status API.
+- Admin capture responses now use `capture_status`, `has_knowledge_item`,
+  transcript/knowledge detail and `last_error`/`last_error_at`; no job stage,
+  attempts, queue depth or job status fields.
 
----
-
-## 5. Knowledge Graph Layout
-
-The mobile graph visualization uses `DeterministicGraphLayout` (`mobile/lib/ui/screens/graph/widgets/graph_layout_engine.dart`):
-
-1. **Partitioning:** Identifies connected components using Breadth-First Search (BFS).
-2. **Determinism:** Nodes are sorted by UUID so identical data always produces the same layout.
-3. **Collision avoidance:** Singletons and pairs use explicit placement. Components ≥ 3 nodes use circular initialization followed by 40 iterations of force-directed relaxation.
-4. **Level of detail:** Clusters collapse when zoomed out. Layout computation runs off the UI thread.
-5. **State synchronization:** Both Graph and Recordings views subscribe to `NoteProvider`. Any edit (entity name change, deletion, new recording) immediately propagates without a manual refresh.
-
----
-
-## 6. Architectural Principles
-
-1. **Knowledge-first, not AI-first.** The product's value comes from capturing, organizing, connecting, and retrieving knowledge. The knowledge layer must be independently useful without an LLM reasoning engine.
-
-2. **Voice as the primary ingestion interface.** All new knowledge originates from voice recordings in the MVP.
-
-3. **Knowledge Layer independence.** Knowledge storage, graph traversal, and search work without a running LLM. Embedding-based search is a retrieval mechanism, not AI reasoning.
-
-4. **Evidence-grounded knowledge.** Every extracted entity and relationship must trace to a source recording and transcript segment. Provenance is not optional.
-
-5. **Separation of extraction and graph construction.** AI models extract candidate entities and relationships from transcripts. Deterministic application logic resolves, deduplicates, and updates the knowledge graph.
-
-6. **Incremental updates.** New recordings extend the knowledge graph — they do not rebuild it from scratch.
-
-7. **Data integrity and user trust.** Silent incorrect merges, duplicate graph updates, and loss of user corrections are defects, not acceptable tradeoffs.
-
-8. **Model independence.** ASR and extraction models must be replaceable by swapping provider configuration without redesigning the Knowledge Layer.
-
-9. **Pragmatic engineering.** SQLite with WAL is the persistence layer. Avoid unnecessary microservices, graph databases, and orchestration platforms unless measurements demonstrate a specific need.
-
-10. **No premature expansion.** Do not introduce semantic reasoning, multi-modal ingestion, or conversational AI without a demonstrated MVP requirement.
-
----
-
-## 7. Implementation & Gap Status (as of M3, 2026-10-30)
-
-| Area | Implementation Status |
-| :--- | :--- |
-| Voice recording & upload | Implemented and verified |
-| STT (faster-whisper) | Implemented and verified |
-| Entity/relationship extraction | Implemented and verified |
-| Entity resolution | Implemented and verified |
-| Knowledge graph persistence | Implemented and verified |
-| Knowledge search (hybrid) | Implemented and verified |
-| My Recordings with status | Implemented and verified |
-| Authentication & authorization | Implemented and verified |
-| Evaluation opt-in & audio retention | Implemented and verified |
-| Processing reliability (retry, lease recovery) | Implemented and verified |
-| Admin transcript inspection & correction | Implemented |
-| Admin dashboard | Implemented; System Operations and Monitoring are TODO |
-| Evaluation pipeline (WER, F1 measurement) | **Gap — extraction benchmark only** |
+Breaking changes are also listed in `CHANGELOG.md`.

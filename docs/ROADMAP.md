@@ -1,76 +1,55 @@
-# Project Roadmap
+# Project status and roadmap
 
-This document provides the feature implementation status, remaining milestones, and explicit scope boundaries for Echo.
+Updated 2026-11-02 to match the checked-in Postgres + two-API implementation.
+For exact setup, see `README.md`; historical milestone reports retain their
+original state and are not the current runbook.
 
-*Updated 2026-10-31 to reflect the current mobile and Admin Dashboard implementation. See `docs/PRODUCT_DIRECTION.md` for the authoritative product scope.*
+## Current implementation status
 
----
+| Capability | Current state |
+|---|---|
+| Android voice capture | Implemented; records locally, maximum duration configurable (default 120 s). |
+| STT | `POST /api/stt`, raw audio body, synchronous, local faster-whisper; persists nothing. |
+| Text-to-knowledge | `POST /api/text-kb`, synchronous; same-user `capture_id` replay is idempotent; capture/item/graph commit in one Postgres UoW. |
+| Error handling | Typed request errors; retries are explicit user actions. Capture failure details may be stored as `last_error` for admin. |
+| Knowledge extraction | Startup-selected local rule-based provider or Groq; no per-request provider selection and no silent fallback. |
+| Graph persistence/search | PostgreSQL 16; entity resolution, relationship registry, tombstones, embeddings and lexical fallback. |
+| Graph layout | Deterministic server layout; community spacing tested; client paints graph edges and nodes. |
+| Authentication/consent | Email/password, verification, revocable sessions, per-user isolation, versioned provider consent. |
+| Mobile graph | Record and Graph tabs; graph refresh is a client read, not job polling. |
+| Admin | React dashboard: Overview, Users, Captures, Knowledge Graph (read-only), Audit Logs. Capture status/error from capture truth; transcript correction and synchronous Text-KB call. **Gap:** completed captures return the existing idempotent result, so a transcript edit does not currently rebuild that capture's graph. |
+| Server persistence | PostgreSQL 16 only, Alembic migrations, ports/UoW. Flutter's on-device note store remains SQLite. |
+| Legacy Playwright suite | Not migrated: it still targets the removed SQLite/worker/upload/status contracts. See `e2e/README.md`. |
 
-## 1. Feature Status Matrix (as of 2026-10-31)
+## Next work
 
-| Subsystem / Capability | Status |
-| :--- | :--- |
-| **Voice recording & upload** | Implemented and verified — press-and-hold; up to 2 minutes; idempotent upload; serialized queue. |
-| **STT pipeline** | Implemented and verified — faster-whisper (tiny int8 CPU), ffmpeg decode, English-only enforcement. |
-| **Entity & relationship extraction** | Implemented and verified — rule-based (local) and Groq (hosted); schema-constrained output; one repair attempt; idempotent (stable UUIDs). |
-| **Entity resolution** | Implemented and verified — similarity ≥ 0.90 auto-links; 0.75–0.90 flagged; tombstones; `user_edited` protection. |
-| **Knowledge graph persistence** | Implemented and verified — entities, relationships, confidence, certainty, provenance, contradictions flagged. |
-| **Knowledge search (hybrid)** | Implemented and verified — fastembed BAAI/bge-small-en-v1.5 + lexical ranking; 350 ms debounced; per-user scoped. |
-| **My Recordings list** | Implemented and verified — date, duration, status, playback, delete, manual retry. |
-| **Authentication & multi-user** | Implemented and verified — email/password, Google Sign-In, email verification, password reset, revocable sessions, rate limiting, per-user isolation. |
-| **Evaluation opt-in & consent** | Implemented and verified — provider consent screen; evaluation opt-in (default off); withdrawal purges retained audio. |
-| **Processing reliability** | Implemented and verified — async job worker; lease-based fault recovery; up to 3 retries; permanent errors fail cleanly. |
-| **Record + Graph navigation** | Implemented — two workspaces; Graph state is preserved across tab changes. |
-| **Admin transcript inspection & correction** | Implemented — admin-only capture detail supports transcript update and extraction re-run. |
-| **Admin dashboard** | Implemented — React app with Overview, Users, Captures, Knowledge Graph, and Audit Logs. System Operations and Monitoring remain intentional TODO entries. |
-| **Evaluation measurement** | **Gap — extraction benchmark only.** WER, entity resolution F1, graph correctness, and provenance coverage not yet measured. |
+1. **Finish documentation/runbook validation** — keep README, env example,
+   persistence architecture, admin guide and changelog aligned with current
+   routes and setup commands.
+2. **Migrate Playwright E2E suite** — replace SQLite/job fixtures and upload /
+   status polling with Postgres fixtures and the `/api/stt` → `/api/text-kb`
+   flow. Until then, use `python -m pytest server/tests -q` and the manual
+   device steps in the root README.
+3. **Resolve bounded Groq transport retry behavior** — `GroqChatClient`
+    currently retries provider transport errors inside a request. Decide and
+    implement alignment with the owner-approved no-retry/backoff requirement.
+4. **Make admin re-extraction replace completed output** — add an explicit
+   rebuild/update contract that can reprocess a corrected transcript without
+   violating normal Text-KB idempotency or creating duplicate graph data.
+5. **Provider/quality evaluation** — measure STT quality, extraction precision
+    and graph correctness before making quality claims.
+6. **Production readiness** — production secrets, HTTPS, backups, privacy/data
+   retention policy, account deletion verification and deployment automation.
 
----
+## Explicit exclusions
 
-## 2. Remaining Milestones
-
-### Completed: Admin Console Foundations
-
-The Admin Dashboard now provides the admin-only transcript and capture detail
-flow, user management, read-only graph inspection, pagination, audit views, and
-hard-delete/re-run operations through the existing backend. System Operations
-and Monitoring are intentionally deferred TODO entries.
-
-### M4: Evaluation & Quality Measurement
-
-- **Problem:** No evaluation pipeline exists beyond the extraction benchmark. Release thresholds (PRD §7) cannot be confirmed without measurement.
-- **Scope of work:**
-  1. Build a gold set for WER measurement on the STT pipeline.
-  2. Extend `server/eval.score` to measure entity resolution F1.
-  3. Add graph construction correctness measurement (duplicate update rate, provenance coverage).
-  4. Record and publish baseline results against PRD §7 thresholds.
-  5. Do not claim any threshold is met until actual measurements are recorded.
-
-### M7: Production Deployment
-
-- **Scope of work:**
-  1. Privacy policy, Data Safety declaration, account-deletion URL (DEL-04).
-  2. Production environment configuration (separate from dev).
-  3. Google Play submission (internal track → production).
-  4. Verify production deployment end-to-end: recording → STT → extraction → knowledge graph → search.
-
----
-
-## 3. Explicit Scope Boundaries & Non-Goals
-
-| Feature | Decision | Rationale |
-| :--- | :--- | :--- |
-| **AI chatbot / conversational assistant** | **Removed from scope** | Echo is a knowledge management system, not an AI assistant. The knowledge layer must be independently useful without LLM reasoning. |
-| **LLM question answering (GraphRAG)** | **Removed from scope** | Knowledge retrieval is deterministic search over explicitly stored entities and relationships. No LLM Q&A engine is required or planned for MVP. |
-| **Multi-hop AI reasoning** | **Removed from scope** | Graph traversal is a deterministic lookup, not AI inference. |
-| **Knowledge inference (new fact generation)** | **Removed from scope** | Echo stores extracted facts. It does not generate new facts from existing ones. |
-| **Proactive insights / AI recommendations** | **Removed from scope** | Users explicitly search and browse. No unsolicited AI suggestions. |
-| **User-visible transcript access** | **Out of scope** | Transcripts are admin-only internal artifacts. End users interact with recordings and extracted knowledge only. |
-| **User transcript editing** | **Out of scope** | Transcript correction is an admin quality-control operation. It is not available to end users. |
-| **Transcript full-text search (user-facing)** | **Out of scope** | User search operates over entities and relationships only. |
-| **Document / PDF / image ingestion** | **Out of scope** | Voice is the only ingestion channel in the MVP. |
-| **External knowledge imports** | **Out of scope** | No web extraction, database imports, or external API knowledge sources. |
-| **Offline sync (CRDTs, vector clocks)** | **Out of scope** | Online backend required for processing. Local persistence retains recordings pending upload. |
-| **Multi-user collaboration** | **Out of scope** | Single-user personal knowledge management. |
-| **Semantic vector database as primary store** | **Out of scope** | SQLite with WAL is sufficient. Embeddings stored as serialized arrays. |
-| **Autonomous agents** | **Out of scope** | No autonomous background agents in the MVP. |
+- No worker process, durable job queue, poll/status API or automatic capture
+  retry schedule.
+- No request-level provider selector or silent local fallback from a selected
+  hosted provider.
+- No user-visible transcript API, chatbot/GraphRAG, multi-hop inference, or
+  document ingestion in the current MVP.
+- No migration of old SQLite **server** data. Server persistence is Postgres;
+  the mobile app's private on-device SQLite store is separate.
+- No production deployment claim until the production readiness work above is
+  completed and verified.

@@ -160,7 +160,7 @@ The following are **out of scope for the MVP**. Do not design for them, do not i
 
 8. **Model independence.** ASR and extraction models must be replaceable (by swapping provider configuration) without redesigning the Knowledge Layer.
 
-9. **Pragmatic engineering.** Avoid unnecessary infrastructure, microservices, graph databases, and AI orchestration platforms. SQLite with WAL is the persistence layer unless measurements demonstrate a specific need to change.
+9. **Pragmatic engineering.** Avoid unnecessary infrastructure, microservices, graph databases, and AI orchestration platforms. The server uses PostgreSQL 16 with ports and a unit-of-work boundary; the Flutter client keeps its own on-device SQLite store. There is no server-side worker or job queue.
 
 10. **No premature expansion.** Do not introduce semantic reasoning, multi-modal ingestion, or autonomous agents without a demonstrated MVP requirement.
 

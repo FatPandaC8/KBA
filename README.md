@@ -1,218 +1,236 @@
-# Echo — Voice-First Personal Knowledge Management System
+# Echo — voice-first personal knowledge graph
 
-Echo is a voice-first personal knowledge management system that transforms natural speech into structured, connected, and searchable knowledge. It automatically transcribes recordings, extracts entities and relationships, resolves references across recordings, and maintains a persistent knowledge graph with traceable evidence. Users can explore, search, verify, and manage their knowledge without relying on an AI reasoning or conversational assistant.
+Echo is a Flutter app and FastAPI service that turns a voice recording into a
+transcript and then into knowledge-graph data. **The app calls two independent
+synchronous APIs:** `POST /api/stt`, then `POST /api/text-kb`. There is no worker,
+job queue, capture-status poll, or capture-level retry schedule. The app keeps
+the transcript in memory between calls; retrying Text-KB reuses the same
+`capture_id`.
 
----
+Current implementation note: when Groq is selected, its HTTP client still has
+bounded provider-transport retries/backoff inside the Text-KB request (plus an
+optional schema repair call). This is not a persisted job retry; it is a known
+deviation from a literal “no retry/backoff” interpretation and is detailed in
+[`docs/AI_PIPELINE.md`](docs/AI_PIPELINE.md).
 
-## 1. Product Purpose & Voice-First Workflow
+## Current architecture
 
-Echo is **not** a long-form audio transcription tool, meeting assistant, generic note-taking application, or AI conversational assistant. Its core value is transforming unstructured voice recordings into structured, connected, and retrievable personal knowledge:
-
-```
-[ Voice Recording ]
-             │
-             ▼
-   [ Audio Storage & Lifecycle Management ]
-             │
-             ▼
-   [ Speech-to-Text (faster-whisper) ]
-             │
-             ▼
-   [ Knowledge Extraction (Entities & Relationships) ]
-             │
-             ▼
-   [ Entity Resolution & Knowledge Graph Update ]
-             │
-             ▼
-   [ Knowledge Retrieval (Search, Browse, Explore) ]
-```
-
-### Approved Product Decisions
-
-1. **Voice Capture:** Voice recordings are the primary and only ingestion channel for new knowledge in the MVP. Up to 2 minutes per recording (configurable via `ECHO_MAX_VOICE_SECONDS`).
-2. **Raw Input Preservation:** The original audio file and transcript are preserved verbatim as internal artifacts; extracted entities, relationships, and user corrections to knowledge are editable but protected from AI overwrite.
-3. **Two-workspace mobile UI:** Navigation has exactly two workspaces, Record and Graph. Recording stays in Record; graph search and exploration stay in Graph. There is no shared FAB or sidebar.
-4. **Knowledge Retrieval:** Entity and relationship search uses hybrid embedding similarity and lexical ranking. Knowledge retrieval does not require an LLM reasoning engine.
-5. **Privacy & Consent-Gated Retention:** Audio retention on the server is gated strictly behind explicit, opt-in evaluation consent.
-6. **No Offline Sync:** Offline synchronization is explicitly removed from product scope. The app operates with local persistence and online backend processing.
-7. **Transcript Access:** Transcripts are internal processing artifacts. Access is restricted to admin-only endpoints (with mandatory audit logging). Transcript text is never served through any user-facing API response. Users interact with recordings (audio playback) and extracted knowledge (entities, relationships), not raw transcripts.
-
----
-
-## 2. Implementation Status & Gap Analysis
-
-Based on M3 implementation (2026-10-29, branch `mvp_v2_prd`). See `docs/M3_REPORT.md` for detailed evidence.
-
-| Capability | Status | Notes |
-| :--- | :--- | :--- |
-| **Voice Recording & Upload** | **Implemented and verified** | Press-and-hold; up to 2 minutes; idempotent upload; serialized queue; local audio preserved until server confirms durable storage. |
-| **STT Pipeline** | **Implemented and verified** | `faster-whisper` (tiny int8 CPU) via FFmpeg (16 kHz mono PCM). English-only; non-English fails with a typed error. |
-| **Entity & Relationship Extraction** | **Implemented and verified** | Deterministic local rule-based extractor with Groq-hosted LLM option. Schema-constrained output, validation, one repair attempt. Idempotent (stable UUIDs). |
-| **Entity Resolution** | **Implemented and verified** | Similarity ≥ 0.90 auto-links; 0.75–0.90 flagged as candidate duplicate; tombstones for deleted entities; `user_edited` protects corrections. |
-| **Knowledge Graph** | **Implemented and verified** | Persistent entities and relationships with confidence, certainty, provenance. Contradictions kept and flagged. Server-side community detection layout. |
-| **Knowledge Search** | **Implemented and verified** | Hybrid fastembed + lexical ranking over entities and relationships. 350 ms debounced; scoped to authenticated owner. |
-| **My Recordings** | **Implemented and verified** | Date, duration, status, playback, delete, manual retry. Processing status polled from real backend job state. |
-| **Authentication & Multi-user** | **Implemented and verified** | Email/password, Google Sign-In, email verification, password reset, revocable sessions, rate limiting, per-user data isolation. |
-| **Consent & Privacy** | **Implemented and verified** | Provider consent screen; evaluation opt-in (default off); withdrawal purges retained audio. |
-| **Processing Reliability** | **Implemented and verified** | Async job worker; lease-based fault recovery; up to 3 retries for recoverable errors; permanent errors fail cleanly with typed error class. |
-| **Record + Graph navigation** | **Implemented** | Record is a minimal voice-ingestion workspace. Graph starts empty, searches unique entities, loads one-hop connections, and preserves its state when switching tabs. |
-| **Admin Dashboard** | **Implemented** | React + TypeScript app in `admin/`, served at `/admin` after a production build. System Operations and Monitoring remain intentional TODO entries. |
-
-> Historical milestone documents retain their original implementation notes; they are not the current navigation specification.
-
-
----
-
-## 3. High-Level Repository Structure
-
-```
-.
-├── README.md                          # Repository root entrypoint & status overview
-├── docs/
-│   ├── PRODUCT_DIRECTION.md           # Authoritative product scope & architectural principles
-│   ├── ARCHITECTURE.md                # System components, data flows, schemas, contracts
-│   ├── AI_PIPELINE.md                 # Audio constraints, STT, extraction, entity resolution
-│   ├── ROADMAP.md                     # Feature status matrix and implementation milestones
-│   ├── PRD_MVP.md                     # Product requirements (updated for current direction)
-│   ├── ADMIN.md                       # Admin dashboard run, seed, reset, and test commands
-│   ├── M3_REPORT.md                   # M3 milestone report (historical)
-│   └── M1_AUDIT.md                    # M1 pre-auth audit report (historical)
-├── mobile/                            # Flutter Android application
-│   ├── lib/
-│   │   ├── core/theme/                # Colors and typography
-│   │   ├── data/                      # SQLite DatabaseHelper, Note model, NoteRepository
-│   │   ├── services/                  # AudioService, BackendService, SettingsService
-│   │   ├── state/                     # NoteProvider (SSOT ChangeNotifier)
-│   │   └── ui/                        # AppShell, screens (Record, Graph, Recordings, Settings)
-│   ├── test/                          # Unit, widget, migration, and security regression tests
-│   └── pubspec.yaml                   # Flutter dependencies
-└── server/                            # Python FastAPI backend & processing pipeline
-    ├── app/
-    │   ├── main.py                    # FastAPI app wiring
-    │   ├── api/                       # Routes (client, admin), auth dependencies
-    │   ├── application/               # Use cases and ports
-    │   ├── adapters/                  # SQLite repositories, HTTP schemas
-    │   ├── domain/                    # Entities and domain errors
-    │   ├── infrastructure/            # Configuration
-    │   ├── pipeline.py                # faster-whisper STT + entity/relationship extraction
-    │   └── static/                    # Legacy fallback dashboard when admin/dist is absent
-    └── uploads/                       # Consent-gated audio retention (purged on withdrawal)
-├── admin/                             # React + TypeScript Admin Dashboard
-└── e2e/                               # Playwright API and browser tests
+```text
+Flutter recorder
+    │ audio bytes (authenticated)
+    ▼
+POST /api/stt ── local faster-whisper ──► transcript (response only; not stored)
+    │
+    │ transcript + client-generated UUID (authenticated + consent)
+    ▼
+POST /api/text-kb ── extract / resolve / link / deduplicate / embed / prune
+    │                     one Postgres unit of work
+    ▼
+knowledge item + graph changes committed together
 ```
 
----
+The database is PostgreSQL 16 only. Alembic owns the schema. The audio remains
+on the phone; it is not uploaded or persisted by the server. Transcripts are
+stored with the knowledge item and are available only through admin routes.
+See [persistence architecture](docs/architecture/persistence.md) and
+[AI pipeline](docs/AI_PIPELINE.md).
 
-## 4. Prerequisites & Environment Configuration
+`server/tools/migrate_self_entities.py` is a retained SQLite-era maintenance
+script, not part of this setup. Do not run it against the current Postgres
+server; use the repository migration chain and Postgres seed tools instead.
 
-### Prerequisites
-- **Mobile:** Flutter SDK $\ge 3.13.7$, Android SDK (API 29+), connected physical device or emulator.
-- **Backend:** Python 3.10+, `ffmpeg` installed and available on system `$PATH`.
+## Run locally (manual)
 
-### Required Environment Variables & Settings
-- `ECHO_ADMIN_TOKEN` (**Required for the admin dashboard**): Admin token. There is no default. If it is empty, admin endpoints fail closed with HTTP 503.
-- `ECHO_CORS_ORIGINS` (Optional): Comma-separated browser origins. CORS is disabled unless this is set; the Android client does not need CORS.
-- `ECHO_DB_PATH` (Optional): Backend database path (defaults to `server/echo_backend.db`).
-- `ECHO_UPLOAD_DIR` (Optional): Audio upload directory (defaults to `server/uploads`).
-- `ECHO_MAX_UPLOAD_BYTES` (Optional): Upload size limit (defaults to 25 MiB).
-- `ECHO_LLM_PROVIDER` (Optional): `groq` or `rule_based`; production defaults to `groq` and fails closed without `GROQ_API_KEY`.
-- `GROQ_API_KEY` (Required when `ECHO_LLM_PROVIDER=groq`): Server-side hosted extraction key; never put it in the mobile or admin client.
+These commands are for a local development machine. Run them from the repository
+root unless a command says otherwise.
 
-### Platform Scope
+### 1. Start PostgreSQL 16 and configure the server
 
-Android is the only actively supported build and verification target in this phase. The `ios/` Flutter scaffold is intentionally preserved for future work but is not built, tested, or released here. Debug Android builds allow cleartext HTTP for local development; release builds keep Android's secure default and require HTTPS.
+Prerequisites: Docker Compose, Python 3.11+ (3.12 recommended), `ffmpeg`,
+Flutter + Android SDK, and Node.js/npm if using the admin dashboard.
 
-### Android signing
-
-Debug builds are signed with the Flutter debug key and are **not** production artifacts. Release builds use a release keystore only when `mobile/android/key.properties` and the referenced keystore exist. If they are absent, release builds fall back to the debug key and must not be published. The application ID `dev.echo.notes.dev` is provisional until the owner provides a permanent publishing identity.
-
----
-
-## 5. How to Run the Backend and Mobile App
-
-### 1. Run the Backend Server
 ```bash
-# From repository root (or use `bash scripts/dev_server.sh`):
+docker compose up -d postgres
+cp .env.example .env
+```
+
+Edit `.env` before starting the server:
+
+- Keep the local `DATABASE_URL` aligned with `docker-compose.yml` for a local
+  database. The example credentials are development-only.
+- Set `ECHO_ADMIN_TOKEN` to a private random value. Generate one with
+  `python -c 'import secrets; print(secrets.token_urlsafe(32))'`.
+- For the no-network local extractor, set `ECHO_LLM_PROVIDER=rule_based` and
+  `ECHO_KB_EXTRACTOR=local`. For Groq extraction, set `ECHO_LLM_PROVIDER=groq`,
+  `ECHO_KB_EXTRACTOR=groq`, and a server-side `GROQ_API_KEY`. Mobile API calls
+  cannot select a provider; the admin AI-config API can change the server's
+  persisted runtime provider configuration.
+- `ECHO_STT_PROVIDER=faster_whisper` is the supported STT provider.
+
+Export the `.env` values for Alembic; Alembic does not source `.env` itself:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+Install Python packages and apply migrations once:
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install fastapi uvicorn faster-whisper numpy pydantic python-multipart
-export ECHO_ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-python3 -m uvicorn server.app.main:app --host 0.0.0.0 --port 8000
+python -m pip install --upgrade pip
+python -m pip install -r server/requirements.txt
+(cd server && alembic upgrade head)
 ```
 
-Store the generated client token for entry in the app's Settings screen. Do not commit tokens or paste them into logs.
+Start the API in a second terminal from the repository root:
 
-Verify backend health:
 ```bash
-curl -s http://localhost:8000/api/health
-# Response: {"status":"ok","service":"Echo Knowledge Backend","pipeline_version":"v1.2-echo-real"}
+source .venv/bin/activate
+bash scripts/dev_server.sh
 ```
 
-The mobile app uses its authenticated session token. Admin requests use `X-Admin-Token: <ECHO_ADMIN_TOKEN>`.
+The script reads `.env` and serves `127.0.0.1:8000`. It does not run
+migrations: `alembic upgrade head` is an explicit setup step. Check it with:
 
-### 4. Run the Admin Dashboard
+```bash
+curl -i http://127.0.0.1:8000/api/health
+```
+
+### 2. Run the Android app
+
+For an emulator, use the host address supported by that emulator (commonly
+`http://10.0.2.2:8000`). For a USB-connected physical Android device, run:
+
+```bash
+adb devices
+adb reverse tcp:8000 tcp:8000
+cd mobile
+flutter pub get
+flutter run -d <device-id> --dart-define=BACKEND_URL=http://127.0.0.1:8000
+```
+
+`adb reverse` is lost when the device disconnects or the adb server restarts;
+run it again in that case. The app URL is a build-time `BACKEND_URL`, not an
+editable Settings value. Sign in or create an account in the app. The app
+obtains and stores its own session token; do not paste the admin token into the
+app.
+
+For a repeatable device setup, `bash scripts/dev_device_up.sh` starts the dev
+server if needed and installs the reverse mapping. It requires a working local
+`.env` and exactly one authorized Android device.
+
+### 3. Run the admin dashboard
+
+The API serves the committed `admin/dist` bundle at `/admin`. To develop the
+React UI with hot reload:
+
 ```bash
 cd admin
 npm install
-npm run dev                 # http://127.0.0.1:5174, proxies /api to :8000
-npm run build               # backend serves generated admin/dist at /admin
+npm run dev
 ```
 
-See [Admin Dashboard](docs/ADMIN.md) for seed, reset, and end-to-end commands.
+Open `http://127.0.0.1:5174/`; Vite proxies `/api` to port 8000. Sign in using
+the `ECHO_ADMIN_TOKEN` configured on the server. To rebuild the API-served UI:
 
-### 2. Forward ADB Port for Android
-When running on a physical Android phone over USB:
 ```bash
-adb reverse tcp:8000 tcp:8000
+npm run build
 ```
-The app's default server URL is `http://127.0.0.1:8000`, which only works while `adb reverse` is active. This is a development-only workaround, not a production networking solution. For a LAN server, enter a reachable `http://<host>:<port>` URL in Settings; use HTTPS for release builds. `adb reverse` is cleared when the device reconnects, so re-run it as needed.
 
-### 3. Run the Flutter Mobile App
+See [Admin Dashboard](docs/ADMIN.md) for the feature list, API, seed/reset and
+verification commands.
+
+## API workflow and manual smoke test
+
+`POST /api/stt` accepts a **raw audio request body** (not multipart), requires a
+user session, and persists nothing. The server enforces a 25 MiB audio-byte cap
+and a 120-second decoded-duration cap by default. `POST /api/text-kb` accepts
+JSON `{ "capture_id": "<UUID>", "text": "..." }`, requires a session and
+current consent, and is capped at 20,000 characters by default. Repeating the
+same request with the same `capture_id` for the same user returns the existing
+result; reusing another user's ID returns `409`.
+
+For a local manual API test, create and verify a development user, log in, and
+grant consent. The development server exposes a verification token in the
+signup response:
+
 ```bash
-cd mobile
-flutter pub get
-flutter run -d <android-device-id>
+EMAIL="you@example.test"
+read -r -s -p 'Password: ' PASSWORD; echo
+SIGNUP="$(curl -fsS http://127.0.0.1:8000/api/auth/signup \
+  -H 'Content-Type: application/json' \
+  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}")"
+VERIFY_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["dev_verification_token"])' <<< "$SIGNUP")"
+curl -fsS http://127.0.0.1:8000/api/auth/verify-email \
+  -H 'Content-Type: application/json' -d "{\"token\":\"$VERIFY_TOKEN\"}"
+LOGIN="$(curl -fsS http://127.0.0.1:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}")"
+TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin)["token"])' <<< "$LOGIN")"
+curl -fsS http://127.0.0.1:8000/api/consent \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"granted":true}'
 ```
-After launch, open Settings, enter the backend URL and the client token, then use **Test connection**.
 
----
+Then run these calls with that user session token:
 
-## 6. How to Run Existing Tests
-
-Execute Flutter test suite and static analysis:
 ```bash
-cd mobile
-flutter test
-flutter analyze
+curl -i -X POST http://127.0.0.1:8000/api/stt \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: audio/wav' \
+  --data-binary @/path/to/short-recording.wav
+
+curl -i -X POST http://127.0.0.1:8000/api/text-kb \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"capture_id":"00000000-0000-4000-8000-000000000001","text":"I met Anna at the cafe yesterday."}'
+
+curl -i http://127.0.0.1:8000/api/graph \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-Run backend tests against a temporary database and upload directory (never the production database). The root `conftest.py` forces isolated test paths and non-production tokens, so a plain invocation is safe:
+The sample UUID is illustrative; generate a new UUID for a new capture. A
+validation or size error returns a typed `detail` body. Network/provider
+failures are returned in the request; the user retries in the app.
+
+## Tests and builds
+
+The repository-root pytest configuration provisions an isolated PostgreSQL
+test database. Docker Compose's `postgres` service must be available:
+
 ```bash
 python -m pytest server/tests -q
-```
-The explicit environment variables below still work if you prefer to choose the temporary location:
-```bash
-ECHO_DB_PATH=/tmp/echo-test/echo.db \
-ECHO_UPLOAD_DIR=/tmp/echo-test/uploads \
-ECHO_ADMIN_TOKEN=test-admin-token \
-python -m pytest server/tests -q
+cd mobile && flutter analyze lib test && flutter test
+cd ../admin && npm run build
 ```
 
-Build the debug APK for Android:
-```bash
-cd mobile
-flutter build apk --debug
-```
+`e2e/README.md` documents the current status of the checked-in Playwright
+suite: its tests still target the removed worker/SQLite API and must be
+migrated before they are a valid current-pipeline test gate. Do not point any
+test command at production data.
 
----
+## Provider and environment settings
 
-## 7. Documentation Index
+See `.env.example` for the runnable local configuration. Important settings:
 
-- [Product Direction](docs/PRODUCT_DIRECTION.md): Canonical product definition, MVP scope, excluded features, architectural principles, and evaluation strategy. **Start here.**
-- [Architecture Reference](docs/ARCHITECTURE.md): Component diagrams, data flows, knowledge pipeline stages, SQLite schemas, and API contracts.
-- [AI Pipeline Reference](docs/AI_PIPELINE.md): Audio decoding, STT models, entity/relationship extraction, entity resolution, knowledge search, and extraction benchmark.
-- [Product Requirements (PRD)](docs/PRD_MVP.md): Functional requirements, acceptance criteria, and confirmed product decisions.
-- [Project Roadmap](docs/ROADMAP.md): Feature status matrix, remaining milestones, and explicit scope boundaries.
-- [Admin Dashboard](docs/ADMIN.md): Run, seed, reset, and test the React admin app.
-- [M3 Milestone Report](docs/M3_REPORT.md): Historical report of the M3 implementation. Preserved as a record; it is not the current navigation specification.
-- [M1 Audit Report](docs/M1_AUDIT.md): Historical audit of the pre-M2 codebase. Preserved for reference.
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | required | PostgreSQL 16 connection URL |
+| `ECHO_ADMIN_TOKEN` | empty (fails closed) | Admin API authentication |
+| `ECHO_STT_PROVIDER` | `faster_whisper` | STT adapter selected at startup |
+| `ECHO_KB_EXTRACTOR` | follows `ECHO_LLM_PROVIDER` | `local` or `groq`; server config, also editable by the admin AI-config endpoint |
+| `ECHO_LLM_PROVIDER` | `groq` outside tests | LLM provider configuration; no silent fallback |
+| `GROQ_API_KEY` | unset | Server-only credential when Groq is enabled |
+| `ECHO_MAX_VOICE_SECONDS` | `120` | Decoded audio duration limit |
+| `ECHO_MAX_UPLOAD_BYTES` | `26214400` | Raw STT request-body limit |
+| `ECHO_MAX_TEXT_KB_CHARS` | `20000` | Text-KB transcript length limit |
+| `ECHO_UPLOAD_DIR` | `server/uploads` | Legacy/admin audio storage path; new client captures do not upload audio |
+
+## Historical docs
+
+`docs/M3_REPORT.md` and `docs/M1_AUDIT.md` describe earlier milestones. They
+are historical and may refer to the former asynchronous pipeline; use the
+current architecture and API docs for behavior now.

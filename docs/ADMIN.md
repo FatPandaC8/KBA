@@ -1,19 +1,30 @@
 # Echo Admin Dashboard
 
-The Admin Dashboard is a React + TypeScript app in `admin/`. It uses the
-existing FastAPI admin API; it does not create a second database or bypass the
-server authorization boundary.
+The React + TypeScript dashboard in `admin/` uses the FastAPI admin API and
+PostgreSQL-backed read/write ports. It does not connect to the database
+directly. Admin authentication uses the server's `ECHO_ADMIN_TOKEN` through the
+`X-Admin-Token` header; missing, empty or wrong tokens fail closed.
 
-## Run locally
+The current pages are Overview, Users, Captures, Knowledge Graph (read-only)
+and Audit Logs. System Operations and Monitoring are explicitly TODO. There
+are no job/queue/worker views.
 
-From the repository root, configure `.env` from `.env.example`, including a
-non-empty `ECHO_ADMIN_TOKEN`. Start the backend first:
+## Manual local setup
+
+From the repository root:
 
 ```bash
-bash scripts/dev_server.sh
+docker compose up -d postgres
+cp .env.example .env                 # edit ECHO_ADMIN_TOKEN before use
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r server/requirements.txt
+set -a; source .env; set +a
+(cd server && alembic upgrade head)
+bash scripts/dev_server.sh           # API at http://127.0.0.1:8000
 ```
 
-In another terminal:
+In another terminal, from the repository root:
 
 ```bash
 cd admin
@@ -21,39 +32,84 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5174/`. Vite proxies `/api` to the backend on port
-8000. For the backend-served dashboard, run `npm run build` in `admin/` and
-open `http://127.0.0.1:8000/admin`.
-
-The dashboard covers Overview, Users, Captures, Knowledge Graph, and Audit
-Logs. System Operations and Monitoring are intentionally marked TODO. Entities
-and Relationships are read-only; graph changes come from the capture pipeline.
-
-## Seed and reset development data
-
-The seed is opt-in, idempotent, and tracks only records it owns. It refuses to
-run in production. Credentials come from the environment; do not hardcode or
-print them.
+Open `http://127.0.0.1:5174/` and enter the `ECHO_ADMIN_TOKEN` value configured
+in `.env`. Vite proxies `/api` requests to the backend on port 8000. To serve
+the React bundle from FastAPI instead:
 
 ```bash
-E2E_SEED_ENABLED=true python -m server.tools.seed_admin seed
+cd admin
+npm run build
+```
+
+Then open `http://127.0.0.1:8000/admin`. The built `admin/dist` assets are
+committed because the backend serves that directory.
+
+## Seed development data (optional)
+
+The seed requires explicit opt-in, refuses production, uses only repositories,
+and stores its ownership registry in `app_settings`. It creates users,
+captures, knowledge items and graph facts; it creates no job fixtures. A
+failed sample capture stores `last_error` on the capture row.
+
+The seed command itself does not source `.env`. Either uncomment/configure the
+`E2E_*` values in `.env` before sourcing it, or export development-only values
+in the current shell. Example:
+
+```bash
+export E2E_SEED_ENABLED=true
+export E2E_ADMIN_EMAIL=admin@example.test
+export E2E_ADMIN_PASSWORD='LocalDevOnly123!'
+export E2E_USER_1_EMAIL=user1@example.test
+export E2E_USER_1_PASSWORD='LocalDevOnly123!'
+export E2E_USER_2_EMAIL=user2@example.test
+export E2E_USER_2_PASSWORD='LocalDevOnly123!'
+export E2E_USER_3_EMAIL=user3@example.test
+export E2E_USER_3_PASSWORD='LocalDevOnly123!'
+python -m server.tools.seed_admin seed
+```
+
+The seed does not create or change the shared admin token;
+`ECHO_ADMIN_TOKEN` remains authoritative.
+
+To remove only data owned by this seed:
+
+```bash
 E2E_RESET_CONFIRM=DELETE_ECHO_ADMIN_SEED \
   python -m server.tools.seed_admin reset --confirm-reset
 ```
 
-Set `E2E_ADMIN_EMAIL/PASSWORD` and `E2E_USER_{1,2,3}_EMAIL/PASSWORD` before
-seeding. The seed stores only users, captures and knowledge items the admin
-console needs (there is no job table since the pipeline split; the failed
-capture carries `last_error` on the row). `DATABASE_URL` selects the Postgres
-database (Postgres 16 is the only backend).
+## Current admin API shape
 
-## Verification
+- Overview returns flat `users`, `captures`, `entities`, `relationships`
+  counts, `capture_statuses`, `ingest_failures` aggregated from
+  `captures.last_error`, and recent audit activity.
+- Capture lists/details expose capture status/truth, whether a knowledge item
+  exists, transcript/knowledge detail for admins, and `last_error`/
+  `last_error_at` when present. There are no `stage`, `attempt`, queue or job
+  fields.
+- PATCH transcript edits the stored knowledge-item transcript.
+- POST rerun-extraction calls the Text-KB `KnowledgeIngestorPort`
+  synchronously with the stored transcript and existing `capture_id`.
+  Successful replays do not create another capture. **Current limitation:**
+  `TextKBUseCase.ingest()` returns the existing result as soon as it finds a
+  capture that already has a knowledge item. Therefore PATCHing an already-
+  ingested transcript and then calling rerun-extraction does not recompute its
+  graph. Captures without a knowledge item can be ingested from their stored
+  transcript; completed-capture re-extraction needs a separate explicit
+  replace/rebuild operation before it can be described as working.
+- `/api/admin/jobs` and worker-era retry routes are removed.
+
+## Verify
 
 ```bash
-python -m pytest server/tests -q
+# From repository root; Docker Postgres must be available.
+python -m pytest server/tests/integration/test_admin_api.py \
+  server/tests/integration/test_admin_console.py \
+  server/tests/integration/test_admin_dashboard.py -q
+
 cd admin && npm run build
-cd ../e2e && npm install && npm test
 ```
 
-The Playwright configuration builds the admin app before starting its isolated
-backend, so browser coverage exercises the current React dashboard.
+To verify auth manually, omit `X-Admin-Token` from a GET (for example
+`curl -i http://127.0.0.1:8000/api/admin/overview`): it should return `401`.
+For authenticated calls, send `-H "X-Admin-Token: $ECHO_ADMIN_TOKEN"`.

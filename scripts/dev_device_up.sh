@@ -3,7 +3,7 @@
 #
 # Usage:
 #   bash scripts/dev_device_up.sh
-#   ECHO_DB_PATH=/path/to/dev.db bash scripts/dev_device_up.sh
+#   DATABASE_URL=postgresql://... bash scripts/dev_device_up.sh
 #
 # Prerequisites:
 #   - An Android device/emulator is visible to `adb devices`
@@ -29,7 +29,11 @@ if [ -f "$ROOT/.env" ]; then
 fi
 
 export ECHO_ENV=development
-export ECHO_DB_PATH="${ECHO_DB_PATH:-$ROOT/server/echo_backend.db}"
+
+if [ -z "${DATABASE_URL:-}" ]; then
+  echo "ERROR: DATABASE_URL is not set. Copy .env.example to .env and configure PostgreSQL." >&2
+  exit 1
+fi
 
 if ! command -v adb >/dev/null 2>&1; then
   echo "ERROR: adb is not on PATH (Android platform-tools)" >&2

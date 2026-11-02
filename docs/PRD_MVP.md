@@ -1,9 +1,11 @@
 # Echo MVP — PRD (Voice-First Knowledge Management)
 
-*Reflects the current product direction as of 2026-10-30. See `docs/PRODUCT_DIRECTION.md` for the authoritative scope definition. Earlier decisions tagged **\[Default\]** are the author's proposals confirmed during implementation.*
+*Original product requirements (2026-10-30), with implementation-contract updates noted below as of 2026-11-02. See `docs/PRODUCT_DIRECTION.md` and `docs/architecture/persistence.md` for current architecture.*
 
 > [!NOTE]
 > This document has been updated to align with the voice-first personal knowledge management direction. Conversational AI ("Ask AI") is removed from scope. Transcripts are internal processing artifacts accessible to admins only; end users interact with recordings and extracted knowledge (entities and relationships), not raw transcripts.
+
+> **Current pipeline decision (2026-11-02):** the earlier upload/job/worker and retry requirements below are superseded. The app calls `POST /api/stt` then `POST /api/text-kb`; both execute synchronously. The server has no job table, queue, worker, status polling or capture retry/backoff. The client retries explicitly. STT is stateless and persists no audio/transcript; Text-KB accepts a client UUID `capture_id` and commits capture + knowledge + graph in one Postgres UoW. See `CHANGELOG.md` for the complete contract changes. The client keeps audio locally.
 
 ## 1. Overview
 
@@ -17,9 +19,9 @@ Echo is a personal knowledge management tool. It is not a conversational AI assi
 
 | # | Topic | Decision |
 | --- | --- | --- |
-| D1 | Reprocessing | Only *resume* unfinished stages. Entities the user deleted get a tombstone and are never recreated. Names/descriptions the user edited get a `user_edited` flag and are never overwritten by AI. |
+| D1 | Reprocessing | There are no persisted stages to resume. Text-KB is atomic and idempotent by `capture_id`; deleted entities stay tombstoned and user edits are protected from overwrite. |
 | D2 | Free providers that may train on data | Allowed, but only with clear notice and explicit user consent. |
-| D3 | Mic denied / offline | Block the whole app, except logout, account deletion and policy pages. |
+| D3 | Mic denied / offline | Explain microphone denial and keep the user in control. Offline request failures are visible; locally recorded audio remains available for a manual retry. |
 | D4 | Admin authentication | Separate admin access using the existing server admin token mechanism. No extra admin management UI or 2FA in the MVP. |
 | D5 | Voice records | Users can play back their own audio. Transcripts are internal processing artifacts; access is restricted to admins. |
 | D6 | Recording | Press-and-hold only; release to send. No tap-to-toggle mode. |
@@ -63,29 +65,29 @@ Priority: **P0** required for release, **P1** should have, **P2** post-MVP. AC =
 | GATE-01 | P0 | Consent screen listing each AI provider, what data it receives (audio, knowledge text) and that it may use data for training. Store consent version and timestamp. | No consent means no recording. Changing the provider list re-prompts. |
 | GATE-02 | P0 | Declining or withdrawing consent means the app cannot be used (STT is mandatory); say so plainly. | Withdrawal returns the user to the blocking screen; existing data is deleted only if the user deletes the account. |
 | GATE-03 | P0 | Mic denied or revoked: block the whole app, explain why, link to system settings. | The blocking screen always offers logout, account deletion and policy pages. |
-| GATE-04 | P0 | Offline: block the whole app, explain that internet is required, resume automatically when back online. The blocking screen shows the number of recordings waiting to upload. **\[Default\]** | No new records offline; pending recordings upload on reconnect. |
+| GATE-04 | P0 | Network requests require connectivity. Recording may be retained locally when a request fails; the user explicitly retries. No background upload queue or automatic resume. | Offline failure is visible; the local audio remains available for manual retry. |
 
-### 4.3 Recording and upload (REC)
+### 4.3 Recording and synchronous processing (REC)
 
 | ID | Pri | Requirement | AC |
 | --- | --- | --- | --- |
-| REC-01 | P0 | Press and hold to record; release to upload immediately, with no confirmation screen. | Early release is processed normally. |
+| REC-01 | P0 | Press and hold to record; release starts the synchronous STT → Text-KB request flow without a confirmation screen. | Early release is processed normally. |
 | REC-02 | P0 | Show recording state, elapsed and remaining time. Maximum 2 minutes; auto-stop and submit at the limit. | A 120-second recording ends and submits without interaction. |
 | REC-03 | P0 | Recordings under 1 second are discarded with a gentle notice. No cancel gesture. **\[Default\]** | An accidental tap creates no record. |
-| REC-04 | P0 | No new recording until the previous one has finished uploading (background processing may continue). **\[Default\]** | Two parallel uploads are impossible. |
-| REC-05 | P0 | Handle calls, backgrounding, network loss, empty/invalid audio. Never discard audio that has not been safely uploaded. | Simulating each case leaves the audio locally for retry. |
-| REC-06 | P0 | Local audio is stored in an app-private directory and deleted only after the backend confirms receipt and storage. **\[Default\]** | Failed upload keeps the file; confirmed upload removes it. |
-| REC-07 | P0 | Uploads are idempotent via a client-generated key; retries never create duplicate records. | Sending the same request twice yields one record. |
+| REC-04 | P0 | A new recording may begin while another capture request is in flight; each capture has its own client UUID. | Each request retains its own capture ID and local audio. |
+| REC-05 | P0 | Handle calls, backgrounding, network loss, empty/invalid audio. Keep local audio for a user-triggered retry when STT fails. | Failed STT leaves the audio locally available; no automatic upload retry. |
+| REC-06 | P0 | Audio stays in the app-private directory; the server does not persist recording audio. | Playback and STT retry use the local file. |
+| REC-07 | P0 | Text-KB is idempotent via the client-generated `capture_id`; retries never create duplicate captures or graph rows. | Repeating Text-KB with the same user and capture ID returns the existing result. |
 
 ### 4.4 Processing pipeline (PRC)
 
 | ID | Pri | Requirement | AC |
 | --- | --- | --- | --- |
-| PRC-01 | P0 | Stages: upload, transcribe, extract, save, completed/failed. The UI shows real backend status; no fake percentages. | UI status matches the job table. |
-| PRC-02 | P0 | Job state persists in the database (a job table with leases; no message broker). Cap concurrent heavy jobs. | Restarting the backend loses no jobs. |
-| PRC-03 | P0 | The backend detects stuck jobs (expired lease) and resumes them. **Reopening the app is not a trigger.** | Two consecutive app opens create no duplicate jobs. |
-| PRC-04 | P0 | Every stage is idempotent and reuses valid outputs from completed stages. Never restart a completed record from scratch. | Re-running extraction creates no duplicate entities or relationships. |
-| PRC-05 | P0 | Up to 3 automatic retries for recoverable errors; permanent errors are not retried. Distinguish quota exhaustion, network error, provider failure and invalid input. Then report and allow manual retry. | Each error type shows a different message for the correct stage. |
+| PRC-01 | P0 | Two calls run in order: stateless `POST /api/stt`, followed by synchronous `POST /api/text-kb`; app shows progress and errors. | UI reflects the in-flight request and final response; no status polling. |
+| PRC-02 | P0 | Text-KB writes capture, knowledge item and graph changes in one Postgres UoW; no job table or worker. | Injected mid-ingest failure leaves no partial graph/capture data. |
+| PRC-03 | P0 | Failures/slowness return to the client; user taps Retry. There is no server capture retry schedule. | Retry action reuses the same capture ID; after STT success, it reuses the in-memory transcript. |
+| PRC-04 | P0 | Text-KB idempotency is keyed by the client UUID `capture_id`; repeated successful requests return the existing result. | Re-running extraction creates no duplicate capture/item/entities/relationships. |
+| PRC-05 | P0 | Distinguish quota exhaustion, network error, provider failure and invalid input; return typed errors and allow explicit user retry. | Client error message is actionable; no job retry/backoff state. |
 | PRC-06 | P0 | Tombstones for deleted entities; `user_edited` protects edited names/descriptions on reprocessing. | Delete an entity, then resume: it does not return. |
 | PRC-07 | P0 | On success, return to Record with a success notification. Do not force a result screen. | — |
 | PRC-08 | P0 | English audio only. Unreliable audio yields a clear error and no fabricated knowledge. | Non-English audio creates no entities. |
@@ -133,7 +135,7 @@ Priority: **P0** required for release, **P1** should have, **P2** post-MVP. AC =
 | ID | Pri | Requirement | AC |
 | --- | --- | --- | --- |
 | DEL-01 | P0 | Deleting a recording deletes its audio and transcript; deletes only entities/relationships with no remaining supporting recording; keeps shared knowledge; removes embeddings and index entries. | With an entity shared by two recordings, deleting one recording keeps the entity. |
-| DEL-02 | P0 | Self-service account deletion takes effect immediately, revokes access, and hard-deletes all data (audio, transcripts, graph, embeddings, jobs, sessions) via a reliable workflow. | After deletion every query returns 401 or no data. |
+| DEL-02 | P0 | Self-service account deletion takes effect immediately, revokes access, and hard-deletes all user data (local audio is removed by the app; server transcripts/graph/embeddings/sessions by the API). | After deletion every query returns 401 or no data. |
 | DEL-03 | P0 | Be accurate about backups and third-party copies; never claim permanent deletion that has not been verified. | Retention is documented. |
 | DEL-04 | P0 | Google Play minimum: privacy policy, Data Safety declaration, web URL for account deletion. | — |
 
@@ -146,21 +148,21 @@ Priority: **P0** required for release, **P1** should have, **P2** post-MVP. AC =
 
 | ID | Pri | Requirement |
 | --- | --- | --- |
-| ADM-01 | P0 | **Authentication:** email in the environment allowlist, separate admin login (isolated from the app), short sessions, rate limiting. No 2FA in the MVP; 2FA is P1 post-MVP. |
-| ADM-02 | P0 | **Access audit:** before returning audio, transcripts or detailed knowledge, the admin must enter a reason; the backend logs admin, resource, timestamp and reason *before* returning data. Audio playback is logged too. The privacy policy discloses that admins may listen to audio for debugging. |
-| ADM-03 | P0 | **A. Monitoring:** user count and activity, API errors, backend health, job status, failed jobs, **quota-error counts per provider**. |
-| ADM-04 | P0 | **B. Pipeline debugging:** original audio, transcript, extracted entities/relationships, outcome, per-stage duration, errors (no secrets). Transcripts are accessible only through this admin view, not through any end-user endpoint. Admins may correct transcript text for evaluation and debugging purposes; corrections are persisted with `user_edited = 1` to protect them from reprocessing. |
-| ADM-05 | P0 | **C. Accounts:** search users, view status, lock/unlock, track account-deletion progress (deletion is self-service; no admin approval). |
+| ADM-01 | P0 | **Authentication:** existing admin authentication is a server-configured `ECHO_ADMIN_TOKEN`, sent as `X-Admin-Token`; it fails closed if missing or wrong. This implementation contract is unchanged by the pipeline split. |
+| ADM-02 | P0 | **Access audit:** admin mutations are audited with actor, resource, timestamp and outcome. **Current gap:** transcript/detail reads do not ask for a reason or create a read-access audit entry; the current app flow does not persist server audio for new captures. |
+| ADM-03 | P0 | **A. Monitoring:** user/capture/entity/relationship counts, capture status counts, recent admin activity, and failure counts from capture `last_error`. There are no jobs or queue-depth metrics. |
+| ADM-04 | P0 | **B. Pipeline debugging:** capture creation time, stored transcript and knowledge item, extracted entities/relationships, and `last_error`/`last_error_at`. Transcripts are accessible only through admin-authenticated routes. Admins may PATCH transcript text and invoke the Text-KB port with the existing capture ID. **Implementation gap:** completed captures currently return the idempotent existing result, so PATCH + rerun does not rebuild completed graph output. |
+| ADM-05 | P0 | **C. Accounts:** search, view, create, update and delete users. **Current gap:** admin lock/unlock controls and account-deletion progress UI are not implemented. |
 | ADM-06 | P0 | **D. Knowledge inspection:** view graphs to investigate wrong entities/relationships and inconsistencies; read-only by default. |
-| ADM-07 | P0 | **E. AI configuration:** choose provider and model for STT, entity extraction, relationship extraction, and embeddings; verify the configuration works. API keys live only in server environment variables, never in the frontend. No paid fallback. |
+| ADM-07 | P0 | **E. AI configuration:** provider selection is server configuration only (`ECHO_STT_PROVIDER`, `ECHO_KB_EXTRACTOR`); requests cannot select providers. API keys live only in server environment variables, never in the frontend. No silent fallback. |
 | ADM-08 | P0 | XSS protection and sanitization of user-generated content; no general bypass of tenant isolation. |
 
 ## 5. Non-functional requirements
 
-- **Scale:** 100–1,000 users, up to 2,000 nodes each. Keep SQLite with WAL and limited concurrent write jobs unless measurements show a real need to change.
+- **Scale:** 100–1,000 users, up to 2,000 nodes each. The server uses PostgreSQL 16; the mobile app's local store uses SQLite. Do not introduce a queue or worker absent a measured requirement and owner decision.
 - **Expected bottleneck:** Whisper on CPU, not the database. Verify actual resources before choosing models; do not assume a GPU.
 - **Upload security:** validate file type and size, use safe paths, never trust user filenames, never expose filesystem paths.
-- **Performance:** bounded queries, no redundant provider calls, temp-file cleanup. Add caches, queues or microservices only with measured need.
+- **Performance:** bounded queries, synchronous request timeouts, and no redundant provider calls. Add caching or services only with measured need; processing remains in the request and retry is user-triggered.
 - **Configuration:** separate dev and production. Physical devices use a LAN IP or `adb reverse`, never `localhost`.
 
 ## 6. AI providers and privacy

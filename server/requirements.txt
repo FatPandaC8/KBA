@@ -1,0 +1,13 @@
+# Backend runtime and test dependencies. Install from repository root with:
+#   python -m pip install -r server/requirements.txt
+alembic
+bcrypt
+fastapi
+fastembed
+faster-whisper
+httpx
+numpy
+psycopg[binary,pool]
+pytest
+sqlalchemy
+uvicorn[standard]
