@@ -11,6 +11,7 @@ from .api.dependencies import get_container
 from .api.routes.admin import admin_router
 from .api.routes.auth import account_router, consent_router, router as auth_router
 from .api.routes.client import protected_router as protected_client_router
+from .api.routes.client import stt_router
 from .api.routes.client import router as client_router
 from .domain.errors import (
     AudioProcessingError,
@@ -151,6 +152,7 @@ app.include_router(auth_router)
 app.include_router(consent_router)
 app.include_router(account_router)
 app.include_router(client_router)
+app.include_router(stt_router)
 app.include_router(protected_client_router)
 app.include_router(admin_router)
 

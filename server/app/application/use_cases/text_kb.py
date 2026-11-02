@@ -267,7 +267,7 @@ class TextKBUseCase(KnowledgeIngestorPort):
                     break
             self.support_repo.add(user_id, capture_id, "relationship", persisted_id)
 
-        for conflict_entity in conflicts_to_flag(links, existing_between):
+        for conflict_entity in conflicts_to_flag(links, _between):
             self.rel_repo.save(conflict_entity)
 
         # stage 6: orphans go last; the self entity is excluded by rule
@@ -322,11 +322,11 @@ class TextKBUseCase(KnowledgeIngestorPort):
             return None
         return [
             {
-                "relation_type": e.get("relation_type", ""),
-                "certainty": e.get("certainty", ""),
-                "user_edited": e.get("user_edited", False),
+                "canonical_name": entry.canonical_name,
+                "semantic_description": entry.semantic_description,
+                "aliases": list(entry.aliases),
             }
-            for e in entries
+            for entry in entries
         ]
 
     def _store_capture_error(self, user_id: str, capture_id: str) -> None:

@@ -2,11 +2,13 @@ import datetime
 import json
 import logging
 import os
+import time
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from server.app.adapters.inbound.http.schemas import (
     CaptureUploadResponse,
@@ -33,13 +35,153 @@ from server.app.api.dependencies import (
     require_current_consent,
 )
 from server.app.domain.entities import CaptureEntity, UserEntity
-from server.app.domain.errors import AudioProcessingError, EntityNotFoundError, ValidationError
+from server.app.domain.errors import (
+    AudioProcessingError,
+    ConflictError,
+    EntityNotFoundError,
+    ProviderError,
+    ValidationError,
+)
 from server.app.domain.value_objects import CaptureStatus
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 protected_router = APIRouter(prefix="/api", dependencies=[Depends(require_current_consent)])
+
+# ---------------------------------------------------------------------------
+# Pipeline-split endpoints (S1/S2): two independent synchronous APIs.
+# POST /api/stt    — stateless transcription; persists nothing.
+# POST /api/text-kb — capture + knowledge item + graph in ONE UoW, idempotent
+# on the client-side capture_id. No job table, no polling, no server retries.
+# ---------------------------------------------------------------------------
+stt_router = APIRouter(prefix="/api", dependencies=[Depends(get_current_user)])
+
+
+def _typed_error(error_class: str, message: str) -> HTTPException:
+    """Typed error body for the split endpoints."""
+    return HTTPException(
+        status_code=400, detail={"class": error_class, "message": message}
+    )
+
+
+@stt_router.post("/stt")
+async def stt(
+    request: Request,
+    container: Container = Depends(get_container),
+):
+    """Stateless transcription of an audio body (persists NOTHING, S4b)."""
+    settings = container.settings
+    length = int(request.headers.get("content-length", "0"))
+    if length > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "class": "too_large",
+                "message": f"Audio exceeds the {settings.max_upload_bytes} byte limit.",
+            },
+        )
+    audio = await request.body()
+    if not audio:
+        raise _typed_error("invalid_input", "Audio body is empty.")
+    content_type = request.headers.get("content-type", "application/octet-stream")
+
+    started = time.perf_counter()
+    try:
+        transcript = container.transcriber.transcribe(audio, content_type)
+    except AudioProcessingError as exc:
+        message = str(getattr(exc, "args", (exc,))[0] or exc)
+        lowered = message.lower()
+        if "language" in lowered and ("english" in lowered and "only" in lowered.split()[:3] or "detected language" in lowered):
+            raise HTTPException(
+                status_code=400,
+                detail={"class": "unsupported_language", "message": message},
+            )
+        raise _typed_error("invalid_input", message)
+    except ProviderError as exc:
+        error_class = getattr(exc, "error_class", "")
+        upstream = error_class.startswith(("provider", "network", "timeout"))
+        raise HTTPException(
+            status_code=502 if upstream else 400,
+            detail={"class": error_class or "provider_failure", "message": str(exc)},
+        )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "transcript": transcript.text,
+        "language": transcript.language,
+        "provider": transcript.provider,
+        "elapsed_ms": elapsed_ms,
+    }
+
+
+class TextKBRequest(BaseModel):
+    capture_id: str
+    text: str
+
+
+@protected_router.post("/text-kb")
+def text_kb(
+    payload: TextKBRequest,
+    container: Container = Depends(get_container),
+    user: UserEntity = Depends(require_current_consent),
+):
+    """Knowledge ingest from text. Idempotent on capture_id; one UoW."""
+    try:
+        parsed = uuid.UUID(payload.capture_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=400,
+            detail={"class": "invalid_input",
+                    "message": "capture_id must be a valid UUID."},
+        )
+    if str(parsed) != payload.capture_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"class": "invalid_input",
+                    "message": "capture_id must be canonical."},
+        )
+
+    started = time.perf_counter()
+    try:
+        result = container.ingestor.ingest(user.id, payload.capture_id, payload.text)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422 if "too long" in str(exc) else 400,
+            detail={"class": "invalid_input", "message": str(exc)},
+        )
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"class": "conflict", "message": str(exc)},
+        )
+    except ProviderError as exc:
+        logger.error(
+            "text-kb ingest failed capture_id=%s error=%s",
+            payload.capture_id, type(exc).__name__, exc_info=exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"class": getattr(exc, "error_class", "provider_failure"),
+                    "message": str(exc)},
+        )
+    except Exception as exc:  # real server fault: 5xx, original traceback logged
+        logger.error(
+            "text-kb ingest failed capture_id=%s error=%s",
+            payload.capture_id, type(exc).__name__, exc_info=exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={"class": "server_error", "message": "Text-KB ingest failed."},
+        )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "capture_id": result.capture_id,
+        "knowledge_item_id": result.knowledge_item_id,
+        "entities_added": result.entities_added,
+        "relationships_added": result.relationships_added,
+        "provider": result.provider,
+        "elapsed_ms": elapsed_ms,
+    }
 
 
 def _to_public(k) -> PublicKnowledgeItem:
