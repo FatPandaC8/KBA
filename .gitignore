@@ -162,6 +162,10 @@ env/
 venv/
 ENV/
 env.bak/
+
+# Mobile app source lives under mobile/lib (the Python lib/ rule above is for
+# C-extension build output only) — never ignore the app's source tree.
+!mobile/lib/
 venv.bak/
 
 # Spyder project settings

@@ -84,6 +84,27 @@ def _seed_large_graph(user_id: str, count: int = 2000):
 
 
 
+def test_graph_edges_reference_present_nodes_with_consistent_types(user_factory, monkeypatch):
+    """API contract (render): every edge endpoint must be a node id present
+    in the SAME response, and the ids must be consistently typed — a junction
+    id the client cannot resolve would make the painter silently skip it."""
+    user = user_factory(client)
+    ingest_text(client, user, "Echo depends on FastAPI. Alice supports Echo.")
+
+    graph = client.get("/api/graph", headers=user.headers).json()
+    nodes = graph["nodes"]
+    node_ids = set()
+    for n in nodes:
+        assert isinstance(n["id"], str), "node ids must be strings"
+        node_ids.add(n["id"])
+    assert graph["edges"], "the fixture must produce relationships"
+    for edge in graph["edges"]:
+        assert isinstance(edge["id"], str)
+        assert isinstance(edge["from_node"], str) and isinstance(edge["to_node"], str)
+        assert edge["from_node"] in node_ids, edge
+        assert edge["to_node"] in node_ids, edge
+
+
 def test_graph_layout_is_clustered_and_deterministic(user_factory, monkeypatch):
     user = user_factory(client)
     ingest_text(client, user, "Echo depends on FastAPI. Alice supports Echo.")

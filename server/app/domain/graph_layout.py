@@ -22,6 +22,46 @@ _TYPE_PLURALS = {
     "self": "Self",
 }
 
+# Render contract (KG-04/KG-05): node cards are 88x40 on the client, so the
+# canonical centre-to-centre spacing must guarantee one visible node diameter
+# of gap at the default zoom. Hex-ring packing guarantees at least
+# ``_NODE_PITCH`` between any two centres within a community; cluster rings
+# keep at least ``_CLUSTER_GAP`` of empty space between community hulls.
+_NODE_PITCH = 130.0
+_CLUSTER_GAP = 200.0
+_CANVAS_CENTRE = (500.0, 500.0)
+
+
+def _hex_rings_for(count: int) -> int:
+    """Smallest hex-ring index k such that 1 + 3k(k+1) >= count."""
+    k = 0
+    while 1 + 3 * k * (k + 1) < count:
+        k += 1
+    return k
+
+
+def _hex_positions(count: int, pitch: float):
+    """The first ``count`` cells of a hexagonal ring lattice.
+
+    Ring k holds 6k cells at radius k*pitch (26 at the k=1 ring, etc.); every
+    pair of produced points is at least ``pitch`` apart by construction. The
+    ordering is deterministic: centre first, then rings outward, and within a
+    ring clockwise starting at angle 0.
+    """
+    if count <= 0:
+        return []
+    points = [(0.0, 0.0)]
+    ring = 1
+    while len(points) < count:
+        per_ring = 6 * ring
+        for index in range(per_ring):
+            if len(points) >= count:
+                break
+            angle = (2 * math.pi * index) / per_ring
+            points.append((ring * pitch * math.cos(angle), ring * pitch * math.sin(angle)))
+        ring += 1
+    return points[:count]
+
 
 def _plural_label(entity_type: str) -> str:
     low = (entity_type or "concept").lower()
@@ -76,14 +116,28 @@ def compute_layout(
 
     ordered = sorted(members.items(), key=lambda item: (-len(item[1]), item[0]))
     total = max(1, len(ordered))
+
+    # Community hull radii on the hex lattice: the outermost occupied ring.
+    hulls = {key: _hex_rings_for(len(ids)) * _NODE_PITCH for key, ids in ordered}
+    max_hull = max(hulls.values()) if hulls else 0.0
+
     clusters: List[Dict[str, Any]] = []
     positions: Dict[str, Tuple[float, float]] = {}
 
+    cx0, cy0 = _CANVAS_CENTRE
     for index, (key, ids) in enumerate(ordered):
-        angle = (2 * math.pi * index) / total
-        ring = 0.0 if total == 1 else 330.0
-        cx = 500.0 + ring * math.cos(angle)
-        cy = 500.0 + ring * math.sin(angle)
+        hull = hulls[key]
+        if total == 1:
+            # One community sits at the canvas centre; there is nothing it
+            # could be separated from.
+            cx, cy = cx0, cy0
+        else:
+            # Cluster rings stay outside every community hull plus the gap,
+            # so no two communities can visually touch (KG-05).
+            ring = max_hull + hull + _CLUSTER_GAP
+            angle = (2 * math.pi * index) / total
+            cx = cx0 + ring * math.cos(angle)
+            cy = cy0 + ring * math.sin(angle)
         if key.startswith("type:"):
             label = _plural_label(key.split(":", 1)[1])
         else:
@@ -94,16 +148,11 @@ def compute_layout(
             dominant = max(sorted(type_counts.items()), key=lambda item: item[1])[0]
             label = _plural_label(dominant)
         clusters.append({"id": key, "label": label, "x": cx, "y": cy, "size": len(ids)})
+
+        offsets = _hex_positions(len(ids), _NODE_PITCH)
         for member_index, eid in enumerate(sorted(ids)):
-            if len(ids) == 1:
-                px, py = cx, cy
-            else:
-                # Golden-angle spiral keeps dense communities separated.
-                radius = min(215.0, 14.0 * (member_index + 1) ** 0.5)
-                theta = member_index * 2.399963229728653
-                px = cx + radius * math.cos(theta)
-                py = cy + radius * math.sin(theta)
-            positions[eid] = (round(px, 2), round(py, 2))
+            dx, dy = offsets[member_index]
+            positions[eid] = (round(cx + dx, 2), round(cy + dy, 2))
 
     degree: Dict[str, int] = {eid: len(adjacency[eid]) for eid in entity_ids}
     cluster_for: Dict[str, str] = {}

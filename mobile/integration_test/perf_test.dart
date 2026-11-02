@@ -83,15 +83,15 @@ Future<void> main() async {
     await tester.tap(graphTab.last);
     await tester.pump(const Duration(seconds: 2));
 
-    // Wait for the seeded graph to render (SeedNode labels appear).
-    final seedNode = find.textContaining('SeedNode');
+    // Wait for the seeded graph to render (the seeded "Echo" node appears).
+    final seedNode = find.textContaining('Echo');
     for (var i = 0; i < 30; i++) {
       if (seedNode.evaluate().isNotEmpty) break;
       await tester.pump(const Duration(seconds: 1));
     }
 
     if (seedNode.evaluate().isEmpty) {
-      fail('seeded graph did not load (no SeedNode labels found)');
+      fail('seeded graph did not load (no Echo node found)');
     }
     await tester.pump(const Duration(seconds: 1));
 

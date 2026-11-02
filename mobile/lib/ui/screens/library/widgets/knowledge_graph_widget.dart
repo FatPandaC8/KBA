@@ -896,6 +896,91 @@ void drawPatternedPath(Canvas canvas, Path path, Paint paint, String pattern) {
   }
 }
 
+/// Paints the valid edges and returns how many were drawn.
+///
+/// Public so the widget test can count the drawn edges directly (a junction
+/// id the client cannot resolve is skipped, never painted as a stray line).
+int paintGraphEdges(
+  Canvas canvas, {
+  required Map<String, Offset> centers,
+  required Offset origin,
+  required List<GraphEdgeModel> edges,
+  String? selectedNodeId,
+  String? focusedEdgeId,
+}) {
+  var labelBudget = 14;
+  var drawn = 0;
+  for (final edge in edges) {
+    final from = centers[edge.fromNode];
+    final to = centers[edge.toNode];
+    if (from == null || to == null) continue;
+    drawn++;
+
+    final p1 = from - origin;
+    final p2 = to - origin;
+    final connected =
+        edge.fromNode == selectedNodeId || edge.toNode == selectedNodeId;
+    final focused = edge.id == focusedEdgeId;
+
+    final pattern = switch (edge.certainty) {
+      'uncertain' => 'dashed',
+      'conflicting' => 'dotted',
+      _ => 'solid',
+    };
+    final paint = Paint()
+      ..color = focused
+          ? EchoColors.forest
+          : (connected ? const Color(0xFF3F5A48) : const Color(0xFFAAB8AC))
+      ..strokeWidth = focused ? 2.8 : (connected ? 2.1 : 1.2)
+      ..style = PaintingStyle.stroke;
+
+    final path = Path()
+      ..moveTo(p1.dx, p1.dy)
+      ..lineTo(p2.dx, p2.dy);
+    drawPatternedPath(canvas, path, paint, pattern);
+
+    final showLabel =
+        labelBudget > 0 && (focused || connected) && edge.type.isNotEmpty;
+    if (!showLabel) continue;
+    labelBudget--;
+
+    final anchor = Offset((p1.dx + p2.dx) / 2, (p1.dy + p2.dy) / 2);
+    final textSpan = TextSpan(
+      text: edge.type,
+      style: const TextStyle(
+        fontSize: 9,
+        fontWeight: FontWeight.w600,
+        color: EchoColors.forest,
+      ),
+    );
+    final painter = TextPainter(
+      text: textSpan,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final rect = Rect.fromCenter(
+      center: anchor,
+      width: painter.width + 10,
+      height: painter.height + 6,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(6)),
+      Paint()..color = const Color(0xFFE5EDE6),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(6)),
+      Paint()
+        ..color = EchoColors.sage
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8,
+    );
+    painter.paint(
+      canvas,
+      Offset(anchor.dx - painter.width / 2, anchor.dy - painter.height / 2),
+    );
+  }
+  return drawn;
+}
+
 class _GraphEdgePainter extends CustomPainter {
   final Map<String, Offset> centers;
   final Offset origin;
@@ -913,74 +998,14 @@ class _GraphEdgePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    var labelBudget = 14;
-    for (final edge in edges) {
-      final from = centers[edge.fromNode];
-      final to = centers[edge.toNode];
-      if (from == null || to == null) continue;
-
-      final p1 = from - origin;
-      final p2 = to - origin;
-      final connected =
-          edge.fromNode == selectedNodeId || edge.toNode == selectedNodeId;
-      final focused = edge.id == focusedEdgeId;
-
-      final pattern = switch (edge.certainty) {
-        'uncertain' => 'dashed',
-        'conflicting' => 'dotted',
-        _ => 'solid',
-      };
-      final paint = Paint()
-        ..color = focused
-            ? EchoColors.forest
-            : (connected ? const Color(0xFF3F5A48) : const Color(0xFFAAB8AC))
-        ..strokeWidth = focused ? 2.8 : (connected ? 2.1 : 1.2)
-        ..style = PaintingStyle.stroke;
-
-      final path = Path()
-        ..moveTo(p1.dx, p1.dy)
-        ..lineTo(p2.dx, p2.dy);
-      drawPatternedPath(canvas, path, paint, pattern);
-
-      final showLabel =
-          labelBudget > 0 && (focused || connected) && edge.type.isNotEmpty;
-      if (!showLabel) continue;
-      labelBudget--;
-
-      final anchor = Offset((p1.dx + p2.dx) / 2, (p1.dy + p2.dy) / 2);
-      final textSpan = TextSpan(
-        text: edge.type,
-        style: const TextStyle(
-          fontSize: 9,
-          fontWeight: FontWeight.w600,
-          color: EchoColors.forest,
-        ),
-      );
-      final painter = TextPainter(
-        text: textSpan,
-        textDirection: TextDirection.ltr,
-      )..layout();
-      final rect = Rect.fromCenter(
-        center: anchor,
-        width: painter.width + 10,
-        height: painter.height + 6,
-      );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(rect, const Radius.circular(6)),
-        Paint()..color = const Color(0xFFE5EDE6),
-      );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(rect, const Radius.circular(6)),
-        Paint()
-          ..color = EchoColors.sage
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 0.8,
-      );
-      painter.paint(
-        canvas,
-        Offset(anchor.dx - painter.width / 2, anchor.dy - painter.height / 2),
-      );
-    }
+    paintGraphEdges(
+      canvas,
+      centers: centers,
+      origin: origin,
+      edges: edges,
+      selectedNodeId: selectedNodeId,
+      focusedEdgeId: focusedEdgeId,
+    );
   }
 
   @override

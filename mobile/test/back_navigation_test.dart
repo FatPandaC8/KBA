@@ -8,7 +8,6 @@ import 'package:mobile/ui/app_shell.dart';
 import 'package:mobile/ui/screens/detail/note_detail_screen.dart';
 import 'package:mobile/ui/screens/home/home_screen.dart';
 import 'package:mobile/ui/screens/library/library_screen.dart';
-import 'package:mobile/ui/screens/recordings/recordings_screen.dart';
 import 'package:mobile/ui/screens/settings/settings_screen.dart';
 import 'package:mobile/ui/widgets/echo_bottom_nav.dart';
 import 'package:shared_preferences/shared_preferences.dart';

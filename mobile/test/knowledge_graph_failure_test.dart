@@ -6,7 +6,6 @@ import 'package:mobile/services/backend_service.dart';
 import 'package:mobile/services/settings_service.dart';
 import 'package:mobile/state/note_provider.dart';
 import 'package:mobile/ui/screens/library/library_screen.dart';
-import 'package:mobile/ui/screens/library/widgets/knowledge_graph_widget.dart';
 
 import 'support/fakes.dart';
 
