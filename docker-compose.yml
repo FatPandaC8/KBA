@@ -1,5 +1,7 @@
 # Local development database. Postgres 16 in Docker, reachable on loopback only.
 # Dev credentials only — match .env.example.
+# Pipeline split (S2): no worker service, no job queue — the two synchronous
+# APIs (POST /api/stt, POST /api/text-kb) run in the API process.
 services:
   postgres:
     image: postgres:16-alpine
@@ -17,24 +19,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
-  # D8: the background worker runs as its own process (`python -m app.worker`),
-  # with SIGTERM-graceful shutdown and its own pool. Enabled with
-  # `docker compose --profile worker up -d`; local dev usually runs the worker
-  # on the host instead.
-  worker:
-    image: python:3.14-slim
-    container_name: kba-worker
-    profiles: ["worker"]
-    working_dir: /srv/server
-    environment:
-      DATABASE_URL: postgresql://echo:echo_dev_password@postgres:5432/echo_kb
-    volumes:
-      - .:/srv
-    depends_on:
-      postgres:
-        condition: service_healthy
-    command: sh -c "pip install --no-cache-dir -r requirements-worker.txt && alembic upgrade head && python -m app.worker"
 
 volumes:
   postgres_data:

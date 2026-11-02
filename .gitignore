@@ -235,3 +235,9 @@ e2e/artifacts/
 e2e/test-results/
 e2e/shots/
 playwright-report/
+
+# --- Pipeline-split e2e local run artifacts (dev device checks) --------------
+e2e/logs/
+e2e/*.txt
+e2e/type_email.sh
+e2e/type_pass.sh
