@@ -42,7 +42,10 @@ E2E_RESET_CONFIRM=DELETE_ECHO_ADMIN_SEED \
 ```
 
 Set `E2E_ADMIN_EMAIL/PASSWORD` and `E2E_USER_{1,2,3}_EMAIL/PASSWORD` before
-seeding. `ECHO_DB_PATH` selects the existing SQLite database.
+seeding. The seed stores only users, captures and knowledge items the admin
+console needs (there is no job table since the pipeline split; the failed
+capture carries `last_error` on the row). `DATABASE_URL` selects the Postgres
+database (Postgres 16 is the only backend).
 
 ## Verification
 
