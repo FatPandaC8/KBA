@@ -45,6 +45,10 @@ class ConsentRequiredError(DomainError):
     """Raised when an action requires current AI-provider consent."""
 
 
+class ConflictError(DomainError):
+    """409-class conflict (existing resource under the same id)."""
+
+
 # --------------------------------------------------------------- processing
 class ProviderError(DomainError):
     """A provider failed while doing work (PRC-05: provider_failure)."""

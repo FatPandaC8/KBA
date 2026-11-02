@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict, Any
 
 from server.app.domain.entities import (
@@ -319,6 +320,17 @@ class CaptureRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    def mark_error(
+        self,
+        capture_id: str,
+        user_id: Optional[str] = None,
+        *,
+        error_text: str,
+    ) -> None:
+        """Pipeline split (rule 5): persist the last ingest failure on the
+        capture row in a separate small transaction."""
+
+    @abstractmethod
     def get_by_id(self, capture_id: str, user_id: Optional[str] = None) -> Optional[CaptureEntity]:
         pass
 
@@ -520,6 +532,60 @@ class EmbeddingProviderPort(ABC):
     @property
     def model_name(self) -> str:
         return ""
+
+
+class AudioTranscriptionPort(ABC):
+    """STT port (pipeline split, S1/S2): one audio blob in, one transcript out.
+
+    Synchronous, stateless, persists nothing, no retry inside — the caller
+    re-sends the SAME audio on failure (S2, client retry button)."""
+
+    @abstractmethod
+    def transcribe(
+        self,
+        audio: bytes,
+        content_type: str,
+        language_hint: Optional[str] = None,
+    ) -> "TranscriptDTO":
+        pass
+
+
+@dataclass
+class TranscriptDTO:
+    """What STT returns (never persisted server-side, S4b)."""
+
+    text: str
+    language: Optional[str] = None
+    confidence: Optional[float] = None
+    provider: str = ""
+
+
+class KnowledgeIngestorPort(ABC):
+    """Text-KB port (pipeline split, S1/S2): transcript text in, graph up in.
+
+    Must not import or know about audio or STT (S1; architecture test).
+    Implementations persist everything in ONE unit of work and are idempotent
+    on capture_id (S4a)."""
+
+    @abstractmethod
+    def ingest(
+        self,
+        user_id: str,
+        capture_id: str,
+        text: str,
+    ) -> "IngestResultDTO":
+        pass
+
+
+@dataclass
+class IngestResultDTO:
+    """Result of one Text-KB ingest run."""
+
+    capture_id: str
+    knowledge_item_id: str
+    entities_added: int = 0
+    relationships_added: int = 0
+    provider: str = ""
 
 
 class JobStatusRepositoryPort(ABC):

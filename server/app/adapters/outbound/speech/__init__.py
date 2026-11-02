@@ -1,9 +1,13 @@
 import os
 import subprocess
+from typing import Optional
 
 import numpy as np
 
-from server.app.application.ports import AudioTranscriptionPort
+from server.app.application.ports import (
+    AudioTranscriptionPort,
+    TranscriptDTO,
+)
 from server.app.domain.errors import InvalidInputAudioError, ProviderError
 
 _GLOBAL_WHISPER_MODEL = None
@@ -54,20 +58,11 @@ class FasterWhisperSpeechAdapter(AudioTranscriptionPort):
     def __init__(self, language: str = "en"):
         self.language = language
 
-    def transcribe(self, audio_file_path: str) -> str:
-        if not os.path.exists(audio_file_path):
-            raise InvalidInputAudioError(f"Audio file not found: {audio_file_path}")
-
-        file_size = os.path.getsize(audio_file_path)
-        if file_size < 100:
-            raise InvalidInputAudioError(f"Audio file is too small or corrupted ({file_size} bytes)")
-
+    def _transcribe_array(self, audio_arr, duration_hint=""):
+        """Core whisper decode shared by both call styles (bytes/path)."""
         whisper_model = get_whisper_model()
         if whisper_model is None:
             raise ProviderError("Local faster-whisper STT engine is not available")
-
-        audio_arr = decode_audio_ffmpeg(audio_file_path, sr=16000)
-        duration_sec = len(audio_arr) / 16000.0
 
         segments, info = whisper_model.transcribe(
             audio_arr,
@@ -86,7 +81,65 @@ class FasterWhisperSpeechAdapter(AudioTranscriptionPort):
 
         if not transcript:
             raise InvalidInputAudioError(
-                f"Recording ({duration_sec:.1f}s) contained no intelligible speech or silence."
+                f"Recording ({duration_hint}) contained no intelligible speech or silence."
             )
 
+        return transcript, detected
+
+    def transcribe(self, audio_file_path: str) -> str:
+        """Legacy file-path call (kept for existing callers while the pipeline
+        split lands; the HTTP API uses transcribe_bytes())."""
+        if not os.path.exists(audio_file_path):
+            raise InvalidInputAudioError(f"Audio file not found: {audio_file_path}")
+
+        file_size = os.path.getsize(audio_file_path)
+        if file_size < 100:
+            raise InvalidInputAudioError(f"Audio file is too small or corrupted ({file_size} bytes)")
+
+        audio_arr = decode_audio_ffmpeg(audio_file_path, sr=16000)
+        duration_sec = len(audio_arr) / 16000.0
+        transcript, _ = self._transcribe_array(audio_arr, f"{duration_sec:.1f}s")
         return transcript
+
+    def transcribe_bytes(
+        self,
+        audio: bytes,
+        content_type: str,
+        language_hint: Optional[str] = None,
+    ) -> "TranscriptDTO":
+        """STT port (S1): bytes in, typed TranscriptDTO out, nothing stored.
+        language_hint is advisory (ignored by the English-only local STT)."""
+        del language_hint, content_type  # English-only local engine keeps none
+        if len(audio) < 100:
+            raise InvalidInputAudioError("Audio is too small or corrupted (<100 bytes)")
+        try:
+            audio_arr = decode_audio_from_bytes(audio, sr=16000)
+        except InvalidInputAudioError:
+            raise
+        except Exception as exc:
+            raise InvalidInputAudioError(f"Unsupported audio content: {exc}")
+        duration_sec = len(audio_arr) / 16000.0
+        text, detected = self._transcribe_array(audio_arr, f"{duration_sec:.1f}s")
+        return TranscriptDTO(text=text, language=detected, provider="faster-whisper")
+
+
+def decode_audio_from_bytes(audio: bytes, sr: int = 16000):
+    """ffmpeg decode straight from bytes (no server-side temp file)."""
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-i", "pipe:0",
+        "-ac", "1",
+        "-ar", str(sr),
+        "-f", "s16le",
+        "pipe:1",
+    ]
+    proc = subprocess.run(cmd, input=audio, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        raise InvalidInputAudioError(
+            f"FFmpeg audio decode error ({proc.returncode}): "
+            f"{proc.stderr.decode('utf-8', errors='ignore')}"
+        )
+    raw_bytes = proc.stdout
+    if not raw_bytes:
+        raise InvalidInputAudioError("Audio decoded to 0 bytes")
+    return np.frombuffer(raw_bytes, np.int16).flatten().astype(np.float32) / 32768.0

@@ -63,6 +63,24 @@ class PostgresCaptureRepository:
                 ),
             )
 
+    def mark_error(self, capture_id: str, user_id: Optional[str] = None,
+                   *, error_text: str) -> None:
+        """Rule 5 (pipeline split): store the last ingest failure on the
+        capture row in its OWN small transaction (the ingest UoW rollback has
+        already happened when this runs)."""
+        with transaction(self.db) as conn:
+            clause, params = scoped_clause("user_id", user_id)
+            conn.execute(
+                f"""
+                UPDATE captures
+                SET last_error = %s,
+                    last_error_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s{clause}
+                """,
+                (error_text[:1000], uuid.UUID(capture_id), *params),
+            )
+
     def get_by_id(
         self, capture_id: str, user_id: Optional[str] = None
     ) -> Optional[CaptureEntity]:

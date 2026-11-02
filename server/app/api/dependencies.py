@@ -38,6 +38,9 @@ from server.app.application.use_cases import (
     PurgeRetainedAudioUseCase,
     SemanticRecallUseCase,
 )
+from server.app.adapters.outbound.persistence.postgres import UnitOfWork
+from server.app.application.use_cases.text_kb import TextKBSettings, TextKBUseCase
+from server.app.application.use_cases.ingest import name_similarity as name_similarity_lookup
 from server.app.domain.entities import UserEntity
 from server.app.domain.errors import AuthError
 from server.app.infrastructure.config import ServerSettings, get_settings
@@ -138,6 +141,36 @@ class Container:
             support_repo=self.support_repo,
             tombstone_repo=self.tombstone_repo,
         )
+        # Pipeline split (S1/S2): synchronous Text-KB in the request; the
+        # failure is stored on the capture row in a separate small tx (rule 5).
+        self.ingestor = TextKBUseCase(
+            capture_repo=self.capture_repo,
+            knowledge_repo=self.knowledge_repo,
+            entity_repo=self.entity_repo,
+            rel_repo=self.rel_repo,
+            duplicate_repo=self.duplicate_repo,
+            embedding_repo=self.embedding_repo,
+            embedder=self.embedder,
+            support_repo=self.support_repo,
+            tombstone_repo=self.tombstone_repo,
+            extraction=self.extractor,
+            settings=TextKBSettings(
+                max_text_chars=settings.max_text_kb_chars,
+                name_similarity_fn=name_similarity_lookup,
+                auto_link_threshold=settings.duplicate_auto_link_threshold,
+                flag_threshold=settings.duplicate_flag_threshold,
+                relationship_registry=self.rel_type_repo,
+                store_last_error=True,
+                uow_factory=lambda: UnitOfWork(self.db.pool()),
+            ),
+        )
+
+        def _store_capture_error(user_id: str, capture_id: str, error_text: str) -> None:
+            self.capture_repo.mark_error(
+                capture_id, user_id=user_id, error_text=error_text,
+            )
+
+        self.ingestor.on_capture_error = _store_capture_error
         self.semantic_recall_uc = SemanticRecallUseCase(
             knowledge_repo=self.knowledge_repo,
             embedding_repo=self.embedding_repo,

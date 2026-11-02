@@ -86,6 +86,8 @@ class ServerSettings:
     pipeline_version: str = "v2.0-echo-mvp"
     max_voice_seconds: int = int(os.getenv("ECHO_MAX_VOICE_SECONDS", "120"))
     max_upload_bytes: int = int(os.getenv("ECHO_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+    # Text-KB limit (pipeline split): a single ingest call's transcript cap.
+    max_text_kb_chars: int = int(os.getenv("ECHO_MAX_TEXT_KB_CHARS", "20000"))
     # Admin authentication. Empty value fails closed; replaced by an email
     # allowlist in M4. No default credential is ever baked into the source.
     admin_token: str = os.getenv("ECHO_ADMIN_TOKEN", "")

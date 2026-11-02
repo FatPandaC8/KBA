@@ -10,6 +10,7 @@ exist in the transaction.
 
 from dataclasses import dataclass, field
 import logging
+from difflib import SequenceMatcher
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from server.app.domain.entities import (
@@ -28,6 +29,32 @@ STAGE_ORDER = (
     "embeddings",
     "prune_orphans",
 )
+
+_EPSILON = 1e-9
+
+
+def name_similarity(left: str, right: str) -> float:
+    """Similarity used for duplicate matching (KG-02). Lives with the ingest
+    stages so every caller shares ONE function.
+
+    Exact normalized names score 1.0. Otherwise a blend of token containment
+    and edit distance; word-order changes do not hide duplicates."""
+    a, b = normalize_key(left), normalize_key(right)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+
+    tokens_a, tokens_b = set(a.split()), set(b.split())
+    union = tokens_a | tokens_b
+    jaccard = len(tokens_a & tokens_b) / len(union) if union else 0.0
+    ratio = SequenceMatcher(None, a, b).ratio()
+    containment = 0.0
+    if min(len(tokens_a), len(tokens_b)) == 1:
+        short, long = (a, b) if len(a) <= len(b) else (b, a)
+        if len(short) >= 4 and short in long.split():
+            containment = 0.95
+    return max(ratio, jaccard * 0.95, containment)
 
 
 @dataclass
