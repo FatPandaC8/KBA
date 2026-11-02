@@ -41,7 +41,7 @@ from server.app.adapters.outbound.persistence.postgres import UnitOfWork
 from server.app.application.use_cases.text_kb import TextKBSettings, TextKBUseCase
 from server.app.application.use_cases.ingest import name_similarity as name_similarity_lookup
 from server.app.domain.entities import UserEntity
-from server.app.domain.errors import AuthError
+from server.app.domain.errors import AuthError, DomainError
 from server.app.infrastructure.config import ServerSettings, get_settings
 
 security = HTTPBearer(auto_error=False)
@@ -81,18 +81,40 @@ class Container:
 
         # STT and embeddings stay local. Only text ever reaches a hosted LLM.
         self.embedder = FastEmbedProvider()
-        self.transcriber = FasterWhisperSpeechAdapter()
+        # Pipeline split (S3): implementations are selected here from
+        # settings only — never per request. Unknown values fail closed.
+        if settings.stt_provider == "faster_whisper":
+            self.transcriber = FasterWhisperSpeechAdapter(
+                max_seconds=settings.max_voice_seconds
+            )
+        else:
+            raise DomainError(
+                f"Unknown ECHO_STT_PROVIDER {settings.stt_provider!r}; "
+                "supported: faster_whisper"
+            )
         self.llm_client = build_llm_client(settings, self.llm_usage_repo)
-        self.extractor = (
-            GroqExtractionAdapter(
+        if settings.kb_extractor in ("groq", "llm"):
+            if self.llm_client is None:
+                raise DomainError(
+                    "ECHO_KB_EXTRACTOR=groq selected but no LLM provider is "
+                    "configured; set ECHO_LLM_PROVIDER (missing key fails "
+                    "closed, S3)"
+                )
+            self.extractor = GroqExtractionAdapter(
                 self.llm_client,
                 pipeline_version=settings.pipeline_version,
                 repair_attempts=settings.llm_repair_attempts,
                 max_prompt_chars=settings.llm_max_prompt_chars,
             )
-            if self.llm_client is not None
-            else SemanticKnowledgeExtractor(pipeline_version=settings.pipeline_version)
-        )
+        elif settings.kb_extractor == "local":
+            self.extractor = SemanticKnowledgeExtractor(
+                pipeline_version=settings.pipeline_version
+            )
+        else:
+            raise DomainError(
+                f"Unknown ECHO_KB_EXTRACTOR {settings.kb_extractor!r}; "
+                "supported: groq, local"
+            )
         self.provider_registry = LocalProviderRegistry(settings)
         self.email_port = LogEmailAdapter(settings.email_outbox_path)
         self.google_verifier = GoogleTokenInfoVerifier(settings.google_client_id)

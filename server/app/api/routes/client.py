@@ -35,8 +35,10 @@ from server.app.domain.entities import CaptureEntity, UserEntity
 from server.app.domain.errors import (
     AudioProcessingError,
     ConflictError,
+    DomainError,
     EntityNotFoundError,
     ProviderError,
+    TooLongAudioError,
     ValidationError,
 )
 from server.app.domain.value_objects import CaptureStatus
@@ -86,10 +88,21 @@ async def stt(
     started = time.perf_counter()
     try:
         transcript = container.transcriber.transcribe(audio, content_type)
-    except AudioProcessingError as exc:
+    except TooLongAudioError as exc:
+        # S4 input limit: over-long audio is 413 with a clear message.
+        raise HTTPException(
+            status_code=413,
+            detail={"class": "too_large", "message": str(exc)},
+        )
+    except (AudioProcessingError, ConflictError, ValidationError, DomainError) as exc:
+        # STT is stateless: any typed STT error surfaces in THIS request with
+        # its typed class (no 5xx for client-fixable inputs).
         message = str(getattr(exc, "args", (exc,))[0] or exc)
         lowered = message.lower()
-        if "language" in lowered and ("english" in lowered and "only" in lowered.split()[:3] or "detected language" in lowered):
+        if "language" in lowered and (
+            "english" in lowered and "only" in lowered.split()[:3]
+            or "detected language" in lowered
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={"class": "unsupported_language", "message": message},

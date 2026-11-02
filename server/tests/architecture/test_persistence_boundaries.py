@@ -89,23 +89,47 @@ def test_no_sqlite_leftovers_anywhere_under_app():
             assert token not in content, f"{fpath} contains {token}"
 
 
+def _imports_of(module_path: str):
+    import ast
+
+    with open(module_path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module)
+    return names
+
+
 def test_structural_rules():
-    """Split rules (S1/S2) enforced on source text:
-    - the API process never imports or starts a worker entrypoint;
+    """Split rules (S1/S2) enforced on the AST:
+    - the API process never imports a worker entrypoint or job code;
     - the Text-KB package never imports STT/speech code and vice versa."""
-    text_kb = open(
-        os.path.join(_APP_ROOT, "application/use_cases/text_kb.py"), encoding="utf-8"
-    ).read()
-    assert "speech" not in text_kb, "text_kb must not import STT/speech code"
-    assert "AudioProcessing" not in text_kb
-    for token in ("worker", "job_state", "JobQueue", "processing_jobs"):
-        content = open(os.path.join(_APP_ROOT, "main.py"), encoding="utf-8").read()
-        assert token not in content, f"app/main.py references {token} (worker era)"
-    speech = open(
-        os.path.join(_APP_ROOT, "adapters/outbound/speech/__init__.py"),
-        encoding="utf-8",
-    ).read()
-    assert "text_kb" not in speech, "STT adapter must not know about Text-KB"
+    text_kb = os.path.join(_APP_ROOT, "application/use_cases/text_kb.py")
+    text_kb_imports = _imports_of(text_kb)
+    forbidden_into_text_kb = {n for n in text_kb_imports if "speech" in n}
+    assert (
+        not forbidden_into_text_kb
+    ), f"text_kb imports STT code: {sorted(forbidden_into_text_kb)}"
+
+    speech = os.path.join(_APP_ROOT, "adapters/outbound/speech/__init__.py")
+    speech_imports = _imports_of(speech)
+    forbidden_into_speech = {
+        n for n in speech_imports if ("text_kb" in n or "use_cases" in n)
+    }
+    assert (
+        not forbidden_into_speech
+    ), f"STT adapter imports Text-KB code: {sorted(forbidden_into_speech)}"
+
+    main_imports = _imports_of(os.path.join(_APP_ROOT, "main.py"))
+    forbidden_into_main = {
+        n
+        for n in main_imports
+        if ("worker" in n or "job_state" in n or "jobs" in n)
+    }
+    assert not forbidden_into_main, f"main imports worker code: {sorted(forbidden_into_main)}"
 
 
 def test_admin_use_case_owns_no_sql_and_no_psycopg():

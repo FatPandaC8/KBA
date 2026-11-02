@@ -118,6 +118,14 @@ class ServerSettings:
         "ECHO_LLM_PROVIDER",
         "rule_based" if os.getenv("ECHO_ENV", "production") == "test" else "groq",
     )
+    # Pipeline split (S3): providers are swapped by configuration only —
+    # there is no per-request provider parameter. STT stays local; the
+    # KB extractor is the Groq adapter or the local rule-based one.
+    stt_provider: str = os.getenv("ECHO_STT_PROVIDER", "faster_whisper")
+    kb_extractor: str = os.getenv(
+        "ECHO_KB_EXTRACTOR",
+        "groq" if os.getenv("ECHO_LLM_PROVIDER", "") == "groq" else "local",
+    )
     llm_timeout_seconds: int = int(os.getenv("ECHO_LLM_TIMEOUT_SECONDS", "45"))
     llm_max_retries: int = int(os.getenv("ECHO_LLM_MAX_RETRIES", "3"))
     llm_repair_attempts: int = int(os.getenv("ECHO_LLM_REPAIR_ATTEMPTS", "1"))

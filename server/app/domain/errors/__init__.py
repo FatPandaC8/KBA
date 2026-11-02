@@ -106,3 +106,13 @@ class InvalidInputAudioError(DomainError):
     """The input itself is unusable (silent/corrupt/non-English)."""
 
     error_class = "invalid_input"
+
+
+class TooLongAudioError(InvalidInputAudioError):
+    """The audio exceeds the configured duration cap (S4 input limits)."""
+
+    def __init__(self, message: str, *, seconds: int = 0, limit_seconds: int = 0):
+        super().__init__(message)
+        self.seconds = seconds
+        self.limit_seconds = limit_seconds
+        self.error_class = "too_large"

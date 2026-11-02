@@ -8,7 +8,11 @@ from server.app.application.ports import (
     AudioTranscriptionPort,
     TranscriptDTO,
 )
-from server.app.domain.errors import InvalidInputAudioError, ProviderError
+from server.app.domain.errors import (
+    InvalidInputAudioError,
+    TooLongAudioError,
+    ProviderError,
+)
 
 _GLOBAL_WHISPER_MODEL = None
 _GLOBAL_WHISPER_MODEL_NAME = None
@@ -59,8 +63,9 @@ def decode_audio_from_bytes(audio: bytes, sr: int = 16000):
 class FasterWhisperSpeechAdapter(AudioTranscriptionPort):
     """Local faster-whisper STT. No remote or paid provider is used."""
 
-    def __init__(self, language: str = "en"):
+    def __init__(self, language: str = "en", max_seconds: int = 120):
         self.language = language
+        self.max_seconds = max_seconds
 
     def _transcribe_array(self, audio_arr, duration_hint=""):
         """Core whisper decode (bytes in)."""
@@ -108,6 +113,15 @@ class FasterWhisperSpeechAdapter(AudioTranscriptionPort):
         except Exception as exc:
             raise InvalidInputAudioError(f"Unsupported audio content: {exc}")
         duration_sec = len(audio_arr) / 16000.0
+        # Input limit (S4): reject over-long recordings with a clear message
+        # before any model work; the HTTP route maps this to 413.
+        if duration_sec > self.max_seconds:
+            raise TooLongAudioError(
+                f"Audio is {duration_sec:.0f}s long; the maximum is "
+                f"{self.max_seconds}s. Record a shorter note.",
+                seconds=int(duration_sec),
+                limit_seconds=self.max_seconds,
+            )
         text, detected = self._transcribe_array(audio_arr, f"{duration_sec:.1f}s")
         return TranscriptDTO(text=text, language=detected, provider="faster-whisper")
 
