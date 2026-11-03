@@ -11,10 +11,12 @@ const isLoaded = ref(false)
 
 export const useAuth = () => {
   const router = useRouter()
+  const config = useRuntimeConfig()
+  const apiBase = config.public.apiBase || 'http://127.0.0.1:8080'
 
   const fetchMe = async () => {
     try {
-      const res = await $fetch<{ user: User }>('/api/auth/me', {
+      const res = await $fetch<{ user: User }>(`${apiBase}/api/auth/me`, {
         credentials: 'include'
       })
       currentUser.value = res.user
@@ -28,7 +30,7 @@ export const useAuth = () => {
   }
 
   const login = async (email: string, password: string) => {
-    const res = await $fetch<{ user: User }>('/api/auth/login', {
+    const res = await $fetch<{ user: User }>(`${apiBase}/api/auth/login`, {
       method: 'POST',
       body: { email, password },
       credentials: 'include'
@@ -38,7 +40,7 @@ export const useAuth = () => {
   }
 
   const signup = async (email: string, password: string) => {
-    const res = await $fetch<{ user: User }>('/api/auth/signup', {
+    const res = await $fetch<{ user: User }>(`${apiBase}/api/auth/signup`, {
       method: 'POST',
       body: { email, password },
       credentials: 'include'
@@ -49,7 +51,7 @@ export const useAuth = () => {
 
   const logout = async () => {
     try {
-      await $fetch('/api/auth/logout', {
+      await $fetch(`${apiBase}/api/auth/logout`, {
         method: 'POST',
         credentials: 'include'
       })

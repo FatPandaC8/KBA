@@ -1,5 +1,6 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
+  ssr: false,
   devtools: { enabled: false },
   modules: ['@nuxtjs/tailwindcss'],
   css: ['~/assets/css/main.css'],
@@ -11,7 +12,7 @@ export default defineNuxtConfig({
   nitro: {
     devProxy: {
       '/api': {
-        target: 'http://127.0.0.1:8080/api',
+        target: 'http://127.0.0.1:8080',
         changeOrigin: true
       }
     }
