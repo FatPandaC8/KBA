@@ -1,0 +1,17 @@
+# Exclude any lingering Dart or Python files if they are still in history or vendored folders
+*.dart linguist-detectable=false
+*.py linguist-detectable=false
+
+# Force GitHub to detect your Go backend
+*.go linguist-detectable=true
+
+# Ensure Nuxt/Vue frontend files are explicitly counted
+*.vue linguist-detectable=true
+*.ts linguist-detectable=true
+*.js linguist-detectable=true
+
+# Ignore your Nuxt build and dependency outputs so they don't skew stats to pure HTML/CSS
+.nuxt/* linguist-vendored
+dist/* linguist-vendored
+.output/* linguist-vendored
+node_modules/* linguist-vendored
