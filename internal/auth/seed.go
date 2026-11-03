@@ -69,9 +69,15 @@ func SeedDevUsers(ctx context.Context, s *store.Store) error {
 				log.Printf("[Gusby Auth] Error creating seed user %s: %v", acc.email, err)
 				continue
 			}
+			if acc.name == "admin" {
+				_ = s.SetUserAdmin(ctx, user.ID, true)
+			}
 			log.Printf("[Gusby Auth] Seeded user %s (%s, id: %s)", acc.name, user.Email, user.ID)
 			seededCount++
 		} else {
+			if acc.name == "admin" && !existing.IsAdmin {
+				_ = s.SetUserAdmin(ctx, existing.ID, true)
+			}
 			// Synchronize password if changed in .env
 			match, err := VerifyPassword(acc.password, existing.PasswordHash)
 			if err != nil || !match {

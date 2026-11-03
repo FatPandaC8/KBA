@@ -68,13 +68,13 @@ func HashToken(token string) string {
 func (s *Store) CreateUser(ctx context.Context, email, passwordHash string) (*User, error) {
 	norm := NormalizeString(email)
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO gusby.users (email, email_normalized, password_hash)
-		VALUES ($1, $2, $3)
-		RETURNING id, email, email_normalized, created_at, updated_at
+		INSERT INTO gusby.users (email, email_normalized, password_hash, is_admin, status)
+		VALUES ($1, $2, $3, false, 'active')
+		RETURNING id, email, email_normalized, is_admin, status, created_at, updated_at
 	`, email, norm, passwordHash)
 
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Email, &u.EmailNormalized, &u.CreatedAt, &u.UpdatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.EmailNormalized, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -84,13 +84,13 @@ func (s *Store) CreateUser(ctx context.Context, email, passwordHash string) (*Us
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	norm := NormalizeString(email)
 	row := s.pool.QueryRow(ctx, `
-		SELECT id, email, email_normalized, password_hash, created_at, updated_at
+		SELECT id, email, email_normalized, password_hash, is_admin, status, created_at, updated_at
 		FROM gusby.users
 		WHERE email_normalized = $1
 	`, norm)
 
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Email, &u.EmailNormalized, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.EmailNormalized, &u.PasswordHash, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -102,13 +102,13 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, error)
 
 func (s *Store) GetUserByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT id, email, email_normalized, password_hash, created_at, updated_at
+		SELECT id, email, email_normalized, password_hash, is_admin, status, created_at, updated_at
 		FROM gusby.users
 		WHERE id = $1
 	`, id)
 
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Email, &u.EmailNormalized, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.EmailNormalized, &u.PasswordHash, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
