@@ -484,6 +484,22 @@ func (s *Store) RetryJob(ctx context.Context, jobID uuid.UUID) error {
 	return err
 }
 
+func (s *Store) PauseJobForAI(ctx context.Context, jobID uuid.UUID, backoffSec int) error {
+	if backoffSec <= 0 {
+		backoffSec = 5
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE gusby.processing_jobs
+		SET stage = 'waiting_for_ai',
+		    locked_at = NULL,
+		    locked_by = NULL,
+		    run_at = NOW() + make_interval(secs => $2),
+		    updated_at = NOW()
+		WHERE id = $1
+	`, jobID, float64(backoffSec))
+	return err
+}
+
 // -----------------------------------------------------------------------------
 // Document Management Methods
 // -----------------------------------------------------------------------------
@@ -1458,7 +1474,7 @@ func (s *Store) GetAIGateState(ctx context.Context) (*AIGateState, error) {
 func (s *Store) UpdateAIGateState(ctx context.Context, state, reason, updatedBy string, resetConsecutive bool) error {
 	query := `
 		INSERT INTO gusby.ai_gate_state (id, state, reason, consecutive_failures, updated_by, updated_at)
-		VALUES ('primary_gate', $1, $2, CASE WHEN $4 THEN 0 ELSE consecutive_failures END, $3, NOW())
+		VALUES ('primary_gate', $1, $2, 0, $3, NOW())
 		ON CONFLICT (id) DO UPDATE SET
 			state = $1,
 			reason = $2,

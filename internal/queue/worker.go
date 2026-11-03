@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -18,14 +19,22 @@ type Worker struct {
 	id        string
 	store     *store.Store
 	llmClient llm.LLMClient
+	gate      *llm.AIGate
 	interval  time.Duration
 }
 
-func NewWorker(id string, s *store.Store, client llm.LLMClient) *Worker {
+func NewWorker(id string, s *store.Store, client llm.LLMClient, gate ...*llm.AIGate) *Worker {
+	var g *llm.AIGate
+	if len(gate) > 0 && gate[0] != nil {
+		g = gate[0]
+	} else {
+		g = llm.NewAIGate(s, client, 3)
+	}
 	return &Worker{
 		id:        id,
 		store:     s,
 		llmClient: client,
+		gate:      g,
 		interval:  1 * time.Second,
 	}
 }
@@ -77,7 +86,14 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 		}
 	}
 
-	// 2. Stage: Extraction
+	// 2. Stage: Extraction - Check Gate First
+	allowed, reason, err := w.gate.AllowCall(ctx)
+	if !allowed {
+		log.Printf("[worker %s] AI Gate active (%s). Pausing job %s into waiting_for_ai", w.id, reason, job.ID)
+		_ = w.store.PauseJobForAI(ctx, job.ID, 5)
+		return false, nil
+	}
+
 	_ = w.store.UpdateJobStage(ctx, job.ID, "extracting")
 	runID, err := pipeline.CreateExtractionRun(ctx, w.store, job.UserID, doc.ID, w.llmClient.ModelName(), pipeline.PromptVersionConcept)
 	if err != nil {
@@ -91,14 +107,50 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 	var conceptIDs []uuid.UUID
 
 	for _, chunk := range chunks {
+		startChunk := time.Now()
 		res, err := pipeline.ExtractChunk(ctx, w.llmClient, chunk)
+		duration := int(time.Since(startChunk).Milliseconds())
+
+		callLog := &store.AICallLog{
+			UserID:        &job.UserID,
+			RunID:         &runID,
+			Provider:      w.llmClient.Describe().Kind,
+			Model:         w.llmClient.ModelName(),
+			PipelineStage: "chunk_extraction",
+			PromptVersion: pipeline.PromptVersionConcept,
+			LatencyMs:     duration,
+			CreatedAt:     time.Now(),
+		}
+
 		if err != nil {
+			errClass := "extraction_failure"
+			if errors.Is(err, llm.ErrQuotaExceeded) {
+				errClass = "rate_limited"
+			}
+			callLog.Status = "error"
+			callLog.ErrorClass = errClass
+			_ = w.gate.RecordCall(ctx, callLog)
+
+			// If circuit breaker tripped or gate blocked
+			allowedNow, _, _ := w.gate.AllowCall(ctx)
+			if !allowedNow {
+				log.Printf("[worker %s] Gate tripped during extraction. Moving job %s to waiting_for_ai", w.id, job.ID)
+				_ = w.store.PauseJobForAI(ctx, job.ID, 10)
+				return false, nil
+			}
+
 			msg := err.Error()
 			_ = pipeline.FinishExtractionRun(ctx, w.store, runID, allExtracted.TokensPrompt, allExtracted.TokensComp, err)
 			_ = w.store.FailJob(ctx, job.ID, msg)
 			_ = w.store.UpdateDocumentStatus(ctx, job.UserID, doc.ID, "failed", &msg)
 			return true, err
 		}
+
+		callLog.Status = "success"
+		callLog.ErrorClass = "none"
+		callLog.TokensPrompt = res.TokensPrompt
+		callLog.TokensCompletion = res.TokensComp
+		_ = w.gate.RecordCall(ctx, callLog)
 
 		allExtracted.Concepts = append(allExtracted.Concepts, res.Concepts...)
 		allExtracted.Propositions = append(allExtracted.Propositions, res.Propositions...)
@@ -118,15 +170,51 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 	}
 	_ = pipeline.FinishExtractionRun(ctx, w.store, runID, allExtracted.TokensPrompt, allExtracted.TokensComp, nil)
 
-	// 3. Stage: Resolving & Integrating
+	// 3. Stage: Resolving & Integrating - Check Gate
+	allowedInt, reasonInt, _ := w.gate.AllowCall(ctx)
+	if !allowedInt {
+		log.Printf("[worker %s] AI Gate active (%s) before integration. Pausing job %s into waiting_for_ai", w.id, reasonInt, job.ID)
+		_ = w.store.PauseJobForAI(ctx, job.ID, 5)
+		return false, nil
+	}
+
 	_ = w.store.UpdateJobStage(ctx, job.ID, "integrating")
+	startInt := time.Now()
 	summary, err := graph.IntegrateExtractedItems(ctx, w.store, w.llmClient, job.UserID, doc.ID, &allExtracted)
+	intDuration := int(time.Since(startInt).Milliseconds())
+
+	intCallLog := &store.AICallLog{
+		UserID:        &job.UserID,
+		RunID:         &runID,
+		Provider:      w.llmClient.Describe().Kind,
+		Model:         w.llmClient.ModelName(),
+		PipelineStage: "graph_integration",
+		PromptVersion: "v1.0",
+		LatencyMs:     intDuration,
+		CreatedAt:     time.Now(),
+	}
+
 	if err != nil {
+		intCallLog.Status = "error"
+		intCallLog.ErrorClass = "integration_failure"
+		_ = w.gate.RecordCall(ctx, intCallLog)
+
+		allowedNow, _, _ := w.gate.AllowCall(ctx)
+		if !allowedNow {
+			log.Printf("[worker %s] Gate tripped during integration. Moving job %s to waiting_for_ai", w.id, job.ID)
+			_ = w.store.PauseJobForAI(ctx, job.ID, 10)
+			return false, nil
+		}
+
 		msg := err.Error()
 		_ = w.store.FailJob(ctx, job.ID, msg)
 		_ = w.store.UpdateDocumentStatus(ctx, job.UserID, doc.ID, "failed", &msg)
 		return true, err
 	}
+
+	intCallLog.Status = "success"
+	intCallLog.ErrorClass = "none"
+	_ = w.gate.RecordCall(ctx, intCallLog)
 
 	// 4. Stage: Topics clustering
 	for _, c := range allExtracted.Concepts {

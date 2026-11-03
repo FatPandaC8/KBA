@@ -55,6 +55,115 @@ func (g *GroqClient) ModelName() string {
 	return g.model
 }
 
+func (g *GroqClient) Describe() ProviderDescription {
+	rpm := 0
+	tpm := 0
+	if g.rateLimiter != nil {
+		rpm = g.rateLimiter.rpmLimit
+		tpm = g.rateLimiter.tpmLimit
+	}
+	return ProviderDescription{
+		Kind:         "groq",
+		Model:        g.model,
+		Version:      "1.0",
+		IsConfigured: g.apiKey != "",
+		Capabilities: []string{"chat", "json_object", "rate_limiter"},
+		RPMLimit:     rpm,
+		TPMLimit:     tpm,
+	}
+}
+
+func (g *GroqClient) Health(ctx context.Context) (ProviderHealth, error) {
+	if g.apiKey == "" {
+		return ProviderHealth{
+			Status:    "down",
+			Reason:    "Groq API key is not configured",
+			LatencyMs: 0,
+			Details: map[string]any{
+				"configured": false,
+			},
+		}, nil
+	}
+
+	start := time.Now()
+	reqPayload := chatRequest{
+		Model: g.model,
+		Messages: []chatMessage{
+			{Role: "user", Content: "ping"},
+		},
+		MaxTokens: 1,
+	}
+	payloadBytes, err := json.Marshal(reqPayload)
+	if err != nil {
+		return ProviderHealth{
+			Status:    "degraded",
+			Reason:    fmt.Sprintf("Failed to encode health payload: %v", err),
+			LatencyMs: 0,
+			Details:   map[string]any{"error": err.Error()},
+		}, nil
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, g.baseURL+"/chat/completions", bytes.NewReader(payloadBytes))
+	if err != nil {
+		return ProviderHealth{
+			Status:    "degraded",
+			Reason:    fmt.Sprintf("Failed to create health request: %v", err),
+			LatencyMs: 0,
+			Details:   map[string]any{"error": err.Error()},
+		}, nil
+	}
+
+	req.Header.Set("Authorization", "Bearer "+g.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := g.httpClient.Do(req)
+	latency := int(time.Since(start).Milliseconds())
+	if err != nil {
+		return ProviderHealth{
+			Status:    "down",
+			Reason:    fmt.Sprintf("Groq API unreachable: %v", err),
+			LatencyMs: latency,
+			Details:   map[string]any{"error": err.Error()},
+		}, nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		return ProviderHealth{
+			Status:    "healthy",
+			Reason:    "Groq API reachable and responding normally",
+			LatencyMs: latency,
+			Details: map[string]any{
+				"http_status": resp.StatusCode,
+				"model":       g.model,
+			},
+		}, nil
+	} else if resp.StatusCode == http.StatusTooManyRequests {
+		return ProviderHealth{
+			Status:    "degraded",
+			Reason:    "Groq API rate limit or quota exceeded (HTTP 429)",
+			LatencyMs: latency,
+			Details: map[string]any{
+				"http_status": resp.StatusCode,
+				"rate_limit":  true,
+			},
+		}, nil
+	}
+
+	return ProviderHealth{
+		Status:    "degraded",
+		Reason:    fmt.Sprintf("Groq API returned HTTP %d", resp.StatusCode),
+		LatencyMs: latency,
+		Details: map[string]any{
+			"http_status": resp.StatusCode,
+		},
+	}, nil
+}
+
 type chatRequest struct {
 	Model          string          `json:"model"`
 	Messages       []chatMessage   `json:"messages"`

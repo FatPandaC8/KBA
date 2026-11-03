@@ -33,6 +33,44 @@ func (m *MockClient) ModelName() string {
 	return m.model
 }
 
+func (m *MockClient) Describe() ProviderDescription {
+	return ProviderDescription{
+		Kind:         "mock",
+		Model:        m.model,
+		Version:      "1.0",
+		IsConfigured: true,
+		Capabilities: []string{"chat", "json_object", "mock_telemetry"},
+		RPMLimit:     60,
+		TPMLimit:     100000,
+	}
+}
+
+func (m *MockClient) Health(ctx context.Context) (ProviderHealth, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.shouldFailWith != nil {
+		return ProviderHealth{
+			Status:    "down",
+			Reason:    m.shouldFailWith.Error(),
+			LatencyMs: 1,
+			Details: map[string]any{
+				"mock_error": m.shouldFailWith.Error(),
+			},
+		}, nil
+	}
+
+	return ProviderHealth{
+		Status:    "healthy",
+		Reason:    "Mock LLM client operating normally",
+		LatencyMs: 1,
+		Details: map[string]any{
+			"mock_model": m.model,
+			"active":     true,
+		},
+	}, nil
+}
+
 func (m *MockClient) SetResponse(prefix, response string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
