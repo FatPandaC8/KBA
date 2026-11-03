@@ -1,7 +1,5 @@
-# Local development database. Postgres 16 in Docker, reachable on loopback only.
-# Dev credentials only — match .env.example.
-# Pipeline split (S2): no worker service, no job queue — the two synchronous
-# APIs (POST /api/stt, POST /api/text-kb) run in the API process.
+# Gusby Local Development Database (Postgres 16 in Docker on loopback)
+# Development credentials only — match .env.example
 services:
   postgres:
     image: postgres:16-alpine

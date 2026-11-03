@@ -35,14 +35,22 @@ func LoadConfig() *Config {
 	}
 
 	rpm := 30
-	if r := os.Getenv("ECHO_GROQ_RPM"); r != "" {
+	if r := os.Getenv("GROQ_RPM"); r != "" {
+		if val, err := strconv.Atoi(r); err == nil {
+			rpm = val
+		}
+	} else if r := os.Getenv("ECHO_GROQ_RPM"); r != "" {
 		if val, err := strconv.Atoi(r); err == nil {
 			rpm = val
 		}
 	}
 
 	tpm := 8000
-	if t := os.Getenv("ECHO_GROQ_TPM"); t != "" {
+	if t := os.Getenv("GROQ_TPM"); t != "" {
+		if val, err := strconv.Atoi(t); err == nil {
+			tpm = val
+		}
+	} else if t := os.Getenv("ECHO_GROQ_TPM"); t != "" {
 		if val, err := strconv.Atoi(t); err == nil {
 			tpm = val
 		}
