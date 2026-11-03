@@ -333,16 +333,16 @@ async function submitIngestion() {
     }
 
     if (currentTab.value === 'text') {
-      endpoint = 'http://127.0.0.1:8080/api/documents/text'
+      endpoint = '/api/documents/text'
       options.headers = { 'Content-Type': 'application/json' }
       options.body = JSON.stringify(textForm.value)
     } else if (currentTab.value === 'url') {
-      endpoint = 'http://127.0.0.1:8080/api/documents/url'
+      endpoint = '/api/documents/url'
       options.headers = { 'Content-Type': 'application/json' }
       options.body = JSON.stringify(urlForm.value)
     } else if (currentTab.value === 'file') {
       if (!selectedFile.value) return
-      endpoint = 'http://127.0.0.1:8080/api/documents/file'
+      endpoint = '/api/documents/file'
       const formData = new FormData()
       formData.append('file', selectedFile.value)
       formData.append('title', selectedFile.value.name)
@@ -353,7 +353,7 @@ async function submitIngestion() {
     const data = await res.json()
 
     if (!res.ok) {
-      errorMessage.value = data.message || 'Ingestion failed'
+      errorMessage.value = data.error?.message || data.message || 'Ingestion failed'
       isProcessing.value = false
       return
     }
@@ -386,7 +386,7 @@ async function pollDocumentStatus(docID: string) {
   const interval = setInterval(async () => {
     attempts++
     try {
-      const res = await fetch(`http://127.0.0.1:8080/api/documents/${docID}`, {
+      const res = await fetch(`/api/documents/${docID}`, {
         credentials: 'include'
       })
       if (res.ok) {
@@ -403,7 +403,7 @@ async function pollDocumentStatus(docID: string) {
         } else if (doc.status === 'failed') {
           clearInterval(interval)
           isProcessing.value = false
-          errorMessage.value = 'Extraction pipeline encountered an error processing this document.'
+          errorMessage.value = doc.error_message || 'Extraction pipeline encountered an error processing this document.'
         }
       }
     } catch {

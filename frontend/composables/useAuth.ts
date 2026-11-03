@@ -12,7 +12,7 @@ const isLoaded = ref(false)
 export const useAuth = () => {
   const router = useRouter()
   const config = useRuntimeConfig()
-  const apiBase = config.public.apiBase || 'http://127.0.0.1:8080'
+  const apiBase = config.public.apiBase ?? ''
 
   const fetchMe = async () => {
     try {

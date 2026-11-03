@@ -10,13 +10,18 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
   runtimeConfig: {
     public: {
-      apiBase: process.env.GUSBY_API_BASE || 'http://127.0.0.1:8080'
+      apiBase: process.env.GUSBY_API_BASE || ''
+    }
+  },
+  routeRules: {
+    '/api/**': {
+      proxy: 'http://127.0.0.1:8080/api/**'
     }
   },
   nitro: {
     devProxy: {
       '/api': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:8080/api',
         changeOrigin: true
       }
     }

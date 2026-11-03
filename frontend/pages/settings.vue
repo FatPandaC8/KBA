@@ -226,7 +226,7 @@ async function handleChangePassword() {
 
   isUpdatingPassword.value = true
   try {
-    const res = await fetch('http://127.0.0.1:8080/api/auth/password', {
+    const res = await fetch('/api/auth/password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -238,7 +238,7 @@ async function handleChangePassword() {
 
     const data = await res.json()
     if (!res.ok) {
-      passwordError.value = data.message || 'Failed to update password'
+      passwordError.value = data.error?.message || data.message || 'Failed to update password'
       return
     }
 

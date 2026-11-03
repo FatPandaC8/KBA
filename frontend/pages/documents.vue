@@ -316,7 +316,7 @@ function formatDate(iso: string) {
 async function fetchDocuments() {
   isLoading.value = true
   try {
-    const res = await fetch('http://127.0.0.1:8080/api/documents', {
+    const res = await fetch('/api/documents', {
       credentials: 'include'
     })
     if (res.ok) {
@@ -336,7 +336,7 @@ async function openDocumentDrawer(doc: DocumentItem) {
   drawerTab.value = 'source'
 
   try {
-    const res = await fetch(`http://127.0.0.1:8080/api/documents/${doc.id}`, {
+    const res = await fetch(`/api/documents/${doc.id}`, {
       credentials: 'include'
     })
     if (res.ok) {
