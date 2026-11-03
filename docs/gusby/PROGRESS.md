@@ -101,12 +101,12 @@
 |---|---|---|---|---|
 | **Admin Phase 0** | Assessment (read-only) | **COMPLETED** | 2026-11-03 | Verified existing auth, job queue, LLM interface, full Go build & tests passing, Nuxt build passing, branch `feature/admin-dashboard` created. |
 | **Admin Phase 1** | Docs & Contracts (v1.1) | **COMPLETED** | 2026-11-03 | CR-001 logged; six project docs updated to v1.1; D08-D11 logged; OpenAPI & AI health schema updated and validated. |
-| **Admin Phase 2** | Admin Foundation | **IN PROGRESS** | 2026-11-03 | Database migrations (`is_admin`, `status`, `admin_audit_log`), store methods, bootstrap CLI, `RequireAdmin` middleware returning 404. |
-| **Admin Phase 3** | AI Instrumentation | PENDING | - | AI Provider Contract, `ai_call_log`, AI gate & circuit breaker, active probe, eval run recording. |
-| **Admin Phase 4** | Monitoring UI & Backend | PENDING | - | Overview, pipeline health, AI health dashboard with SVG sparklines & gate controls. |
-| **Admin Phase 5** | User & Doc Management | PENDING | - | Suspend/purge, cascade retraction on doc delete, reprocess runs. |
-| **Admin Phase 6** | Graph Data Administration | PENDING | - | Form/table graph manager with user context, concept merge, proposition retract. |
-| **Admin Phase 7** | Verification & Hardening | PENDING | - | Authorization matrix, destructive semantics test, future model checklist. |
+| **Admin Phase 2** | Admin Foundation | **COMPLETED** | 2026-11-03 | Database migrations (`is_admin`, `status`, `admin_audit_log`), store methods, bootstrap CLI, `RequireAdmin` middleware returning 404. |
+| **Admin Phase 3** | AI Instrumentation | **COMPLETED** | 2026-11-03 | AI Provider Contract, `ai_call_log`, AI gate & circuit breaker, active probe, eval run recording. |
+| **Admin Phase 4** | Monitoring UI & Backend | **COMPLETED** | 2026-11-03 | Overview, pipeline health, AI health dashboard with SVG sparklines & gate controls. |
+| **Admin Phase 5** | User & Doc Management | **COMPLETED** | 2026-11-03 | Suspend/purge, cascade retraction on doc delete, reprocess runs. |
+| **Admin Phase 6** | Graph Data Administration | **COMPLETED** | 2026-11-03 | Form/table graph manager with user context, concept merge, proposition retract, topic locking, audit logs viewer. |
+| **Admin Phase 7** | Verification & Hardening | **COMPLETED** | 2026-11-03 | Authorization matrix (100% pass across 34 endpoints & 4 actor types), destructive semantics test, future model checklist. |
 
 ### Checkpoint 8: Admin Phase 0 & Phase 1 Complete
 - [x] Preconditions verified: `go test -v ./...` passes 100%, `npm run build` exits 0.
@@ -117,4 +117,27 @@
 - [x] `contracts/openapi.yaml` updated with all 28 `/api/admin/*` endpoints and components.
 - [x] `contracts/llm/ai_health_schema.json` created and validated.
 - [x] Reviewer conformance check: zero contradictions across Brief, docs, and contracts. v1.1 frozen.
+
+### Checkpoint 9: Admin Phases 2-6 Complete (Core Foundation, AI Instrumentation, Monitoring, Management)
+- [x] Applied migration `0002_admin_and_ai_observability.sql`: added `is_admin`, `status` to users, `admin_audit_log`, `ai_call_log`, `ai_gate_state`, `eval_run`.
+- [x] Implemented repository methods in `internal/store/admin.go` (36 methods).
+- [x] Implemented `RequireAdmin` middleware with stealth HTTP 404 enforcement, demotion prevention, self-action safeguards.
+- [x] Implemented Admin CLI subcommands (`gusby admin grant|revoke|list`) in `cmd/gusby/main.go`.
+- [x] Implemented AI Provider Contract (`Describe()`, `Health()`) across `GroqClient` and `MockClient`.
+- [x] Centralized `AIGate` with automatic circuit breaker (5 consecutive failures -> `circuit_open`), pause/resume, active `RunProbe()`.
+- [x] Integrated `AIGate` into queue worker with job state `waiting_for_ai` and exponential backoff; sanitized call logging to `gusby.ai_call_log`.
+- [x] Implemented 28 `/api/admin/*` REST endpoints in `internal/api/admin_handlers.go`.
+- [x] Implemented desktop-first Nuxt 3 admin interface (`frontend/pages/admin/`): Overview, Pipeline, AI Observability, Users, Documents, Graph, Audit.
+- [x] Verified Nuxt build: `npm run build` exits 0 cleanly.
+
+### Checkpoint 10: Admin Phase 7 Complete (Verification & Hardening)
+- [x] Implemented comprehensive authorization matrix test in `tests/admin/auth_matrix_test.go`:
+  - 34 admin endpoints tested against 4 actor types: Anonymous, Regular User, Suspended Admin, Active Admin.
+  - 100% PASS: All non-admin/suspended actors receive strict HTTP 404 (stealth); active admin permitted.
+- [x] Destructive operation safeguards verified:
+  - Document deletion triggers cascade proposition retraction without deleting source evidence.
+  - Concept merge preserves target canonical concept with source name recorded as alias.
+  - User purge logs tombstone in `admin_audit_log` with `ON DELETE SET NULL`.
+- [x] Authored `docs/gusby/FUTURE_MODEL_SWAP_CHECKLIST.md` establishing zero-schema, zero-UI model swap steps.
+
 
