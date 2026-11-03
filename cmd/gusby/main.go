@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gusby/internal/api"
+	"gusby/internal/auth"
 	"gusby/internal/config"
 	"gusby/internal/llm"
 	"gusby/internal/queue"
@@ -32,6 +33,11 @@ func main() {
 	}
 	defer dbStore.Close()
 	log.Printf("[Gusby] Connected to PostgreSQL at %s", cfg.DatabaseURL)
+
+	// Seed development accounts if configured
+	if err := auth.SeedDevUsers(ctx, dbStore); err != nil {
+		log.Printf("[Gusby] Warning: failed to seed development accounts: %v", err)
+	}
 
 	// 2. Initialize Groq LLM Client
 	var llmClient llm.LLMClient
