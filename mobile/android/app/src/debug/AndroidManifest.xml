@@ -1,6 +1,0 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Debug-only: allow plain HTTP to a local development backend reached
-         through `adb reverse` or a LAN address. Release builds keep Android's
-         secure default and require HTTPS. -->
-    <application android:usesCleartextTraffic="true" />
-</manifest>
