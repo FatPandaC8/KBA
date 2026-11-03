@@ -115,8 +115,10 @@ func (s *Server) HandleSignUp(w http.ResponseWriter, r *http.Request) {
 	auth.SetSessionCookie(w, token, s.cfg.Env == "production")
 	s.renderJSON(w, http.StatusCreated, map[string]any{
 		"user": map[string]any{
-			"id":    user.ID,
-			"email": user.Email,
+			"id":       user.ID,
+			"email":    user.Email,
+			"is_admin": user.IsAdmin,
+			"status":   user.Status,
 		},
 	})
 }
@@ -146,8 +148,10 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	auth.SetSessionCookie(w, token, s.cfg.Env == "production")
 	s.renderJSON(w, http.StatusOK, map[string]any{
 		"user": map[string]any{
-			"id":    user.ID,
-			"email": user.Email,
+			"id":       user.ID,
+			"email":    user.Email,
+			"is_admin": user.IsAdmin,
+			"status":   user.Status,
 		},
 	})
 }
@@ -167,8 +171,10 @@ func (s *Server) HandleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	s.renderJSON(w, http.StatusOK, map[string]any{
 		"user": map[string]any{
-			"id":    user.ID,
-			"email": user.Email,
+			"id":       user.ID,
+			"email":    user.Email,
+			"is_admin": user.IsAdmin,
+			"status":   user.Status,
 		},
 	})
 }

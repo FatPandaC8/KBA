@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 export interface User {
   id: string
   email: string
+  is_admin?: boolean
+  status?: string
 }
 
 const currentUser = ref<User | null>(null)
@@ -63,6 +65,7 @@ export const useAuth = () => {
 
   return {
     user: currentUser,
+    currentUser,
     isLoaded,
     fetchMe,
     login,
