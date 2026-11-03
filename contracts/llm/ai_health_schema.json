@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AIHealthAndStateResponse",
+  "type": "object",
+  "required": [
+    "status",
+    "reason",
+    "latency_ms",
+    "provider",
+    "gate",
+    "details"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["healthy", "degraded", "down", "paused", "unknown"]
+    },
+    "reason": {
+      "type": "string",
+      "description": "Deterministic explanation of why the current health status was derived"
+    },
+    "latency_ms": {
+      "type": "integer",
+      "description": "Roundtrip latency of the health probe in milliseconds"
+    },
+    "provider": {
+      "type": "object",
+      "required": ["kind", "model", "version", "is_configured", "capabilities"],
+      "properties": {
+        "kind": { "type": "string", "example": "groq" },
+        "model": { "type": "string", "example": "openai/gpt-oss-120b" },
+        "version": { "type": "string", "example": "1.0" },
+        "is_configured": { "type": "boolean" },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "rpm_limit": { "type": "integer" },
+        "tpm_limit": { "type": "integer" }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "required": ["state", "reason", "consecutive_failures", "updated_at"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["enabled", "paused", "circuit_open", "half_open"]
+        },
+        "reason": { "type": "string" },
+        "consecutive_failures": { "type": "integer" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "details": {
+      "type": "object",
+      "description": "Generic key-value map rendered as-is by admin UI to support future custom model telemetry without UI changes",
+      "additionalProperties": true
+    }
+  }
+}

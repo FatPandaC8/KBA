@@ -92,3 +92,29 @@
   - Verified 100% verbatim evidence quotes with exact document UUIDs, byte spans, and char spans.
   - Automatic topic island creation verified.
   - Test passed cleanly in 12.59s.
+
+---
+
+## Admin Dashboard Extension (CR-001)
+
+| Phase | Description | Status | Checkpoint Date | Notes |
+|---|---|---|---|---|
+| **Admin Phase 0** | Assessment (read-only) | **COMPLETED** | 2026-11-03 | Verified existing auth, job queue, LLM interface, full Go build & tests passing, Nuxt build passing, branch `feature/admin-dashboard` created. |
+| **Admin Phase 1** | Docs & Contracts (v1.1) | **COMPLETED** | 2026-11-03 | CR-001 logged; six project docs updated to v1.1; D08-D11 logged; OpenAPI & AI health schema updated and validated. |
+| **Admin Phase 2** | Admin Foundation | **IN PROGRESS** | 2026-11-03 | Database migrations (`is_admin`, `status`, `admin_audit_log`), store methods, bootstrap CLI, `RequireAdmin` middleware returning 404. |
+| **Admin Phase 3** | AI Instrumentation | PENDING | - | AI Provider Contract, `ai_call_log`, AI gate & circuit breaker, active probe, eval run recording. |
+| **Admin Phase 4** | Monitoring UI & Backend | PENDING | - | Overview, pipeline health, AI health dashboard with SVG sparklines & gate controls. |
+| **Admin Phase 5** | User & Doc Management | PENDING | - | Suspend/purge, cascade retraction on doc delete, reprocess runs. |
+| **Admin Phase 6** | Graph Data Administration | PENDING | - | Form/table graph manager with user context, concept merge, proposition retract. |
+| **Admin Phase 7** | Verification & Hardening | PENDING | - | Authorization matrix, destructive semantics test, future model checklist. |
+
+### Checkpoint 8: Admin Phase 0 & Phase 1 Complete
+- [x] Preconditions verified: `go test -v ./...` passes 100%, `npm run build` exits 0.
+- [x] Working branch created: `feature/admin-dashboard`.
+- [x] Formal Change Request `CR-001` recorded in `docs/gusby/CHANGE_REQUESTS.md`.
+- [x] Architecture decisions `D08` - `D11` logged in `docs/gusby/DECISIONS.md`.
+- [x] Six project docs updated to v1.1: `01_PRD.md`, `02_TRD.md`, `03_APP_FLOW.md`, `04_DESIGN_SYSTEM.md`, `05_SCHEMA_AND_API.md`, `06_IMPLEMENTATION_PLAN.md`.
+- [x] `contracts/openapi.yaml` updated with all 28 `/api/admin/*` endpoints and components.
+- [x] `contracts/llm/ai_health_schema.json` created and validated.
+- [x] Reviewer conformance check: zero contradictions across Brief, docs, and contracts. v1.1 frozen.
+

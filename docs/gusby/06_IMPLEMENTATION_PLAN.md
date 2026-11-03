@@ -1,7 +1,7 @@
 # Gusby: Implementation Plan & Milestone Roadmap (IMPLEMENTATION_PLAN.md)
-**Version:** 1.0-draft  
-**Status:** In Review  
-**Source of Truth Precedence:** 00_PRODUCT_BRIEF.md > 06_IMPLEMENTATION_PLAN.md > Prompt Defaults
+**Version:** 1.1 (Extended via CR-001)  
+**Status:** Approved & Binding  
+**Source of Truth Precedence:** 00_PRODUCT_BRIEF.md > 06_IMPLEMENTATION_PLAN.md > DECISIONS.md > Prompt Defaults
 
 ---
 
@@ -10,103 +10,96 @@
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'background': 'transparent', 'clusterBkg': 'none' }}}%%
 flowchart TD
-    M0["M0: Assessment & Git Safety<br/>(Complete)"] --> M1["M1: Docs & Contracts Freeze<br/>(v1.0 baseline)"]
-    M1 --> M2["M2: Data Foundation & Migrations<br/>(PostgreSQL gusby schema)"]
-    M2 --> M3["M3: Auth & Tenant Isolation<br/>(Argon2id, Session Cookies, Scoping)"]
-    M3 --> M4["M4: Ingestion & Extraction Engine<br/>(Text/URL/File, Chunking, Groq LLM, Evidence Locator)"]
-    M4 --> M5["M5: Integration, Conflicts & Topics<br/>(pg_trgm Entity Resolution, 4D Confidence, Conflict Classifier)"]
-    M5 --> M6["M6: Graph Query & Desktop Nuxt Frontend<br/>(LOD Projections, Knowledge Space, Canvas, Review Drawer)"]
-    M6 --> M7["M7: Verification, Hardening & Evaluation Run<br/>(Gold Eval Suite, E2E Security Tests, Final Audit)"]
+    M0["Phase 0: Assessment & Git Safety<br/>(Complete)"] --> M1["Phase 1: Docs & Contracts v1.1 Freeze<br/>(CR-001 Baseline)"]
+    M1 --> M2["Phase 2: Admin Foundation<br/>(is_admin, RequireAdmin 404, Bootstrap, Audit Log)"]
+    M2 --> M3["Phase 3: AI Component Instrumentation<br/>(Provider Contract, Call Log, AI Gate & Breaker, Probe)"]
+    M3 --> M4["Phase 4: Monitoring Backend & Frontend<br/>(Overview, Pipeline Health, AI Health & Controls)"]
+    M4 --> M5["Phase 5: User & Document Management<br/>(Suspend/Purge, Cascade Retract, Reprocess)"]
+    M5 --> M6["Phase 6: Graph Data Administration<br/>(Form/Table Tool, Concept Merge, Prop Retract)"]
+    M6 --> M7["Phase 7: Verification & Hardening<br/>(Auth Matrix, Semantics Audit, E2E Tests, Nuxt Build)"]
 ```
 
 ---
 
-## 2. Milestone Deliverables & Task Ownership `[Decided]`
+## 2. Milestone Deliverables & Task Ownership `[Decided - CR-001]`
 
-### Milestone 1: Docs & Contracts Freeze (Phase 1)
+### Phase 1: Docs & Contracts v1.1 Freeze
 - **Owner**: Docs Writer, Architect, Reviewer
 - **Tasks**:
-  1. Complete six binding project docs in `docs/gusby/`.
-  2. Architect generates machine-readable contracts in `contracts/`:
-     - `contracts/openapi.yaml` (full REST API specification)
-     - `contracts/llm/concept_extraction_schema.json`
-     - `contracts/llm/proposition_extraction_schema.json`
-     - `contracts/llm/entity_adjudication_schema.json`
-     - `contracts/llm/conflict_classification_schema.json`
-     - `contracts/config/config_schema.json`
-  3. Reviewer conducts strict conformance check against `00_PRODUCT_BRIEF.md`.
-  4. Freeze docs at v1.0.
+  1. Update six project docs in `docs/gusby/` to v1.1 via CR-001.
+  2. Update `contracts/openapi.yaml` with all `/api/admin/*` endpoints and schemas.
+  3. Create AI health, probe, and metric contract schemas.
+  4. Reviewer verification of docs consistency and zero contradictions.
 
-### Milestone 2: Data Foundation (Phase 2)
+### Phase 2: Admin Foundation
 - **Owner**: Backend Engineer
 - **Tasks**:
-  1. Create Go module in repo root or `cmd/gusby` with clean package architecture.
-  2. Implement database migrations for PostgreSQL `gusby` schema.
-  3. Create domain entities, repository interfaces, and `pgx` store implementations in `internal/store`.
-  4. Unit test database connection, migrations, constraints, and trigram search.
+  1. Database migration: Add `is_admin` and `status` to `gusby.users`; create `gusby.admin_audit_log`.
+  2. Store methods in `internal/store/admin.go`: User admin flag, user status mutation, session revocation, audit log insertion & queries.
+  3. Bootstrapping: CLI flag / command `cmd/gusby/main.go` and env bootstrap (`GUSBY_OWNER_EMAIL`).
+  4. Authorization Middleware: `internal/auth/admin.go`: `RequireAdmin` returning 404 for unauthenticated or non-admin requests.
+  5. Safeguards: Self-suspend / self-delete / last-admin removal protection.
 
-### Milestone 3: Authentication & Multi-Tenant Isolation (Phase 3)
-- **Owner**: Backend Engineer, QA Engineer
-- **Tasks**:
-  1. Implement user registration and login with Argon2id password hashing in `internal/auth`.
-  2. Implement cryptographically secure session generation, SHA-256 storage, and `HttpOnly` cookie handling.
-  3. Implement auth middleware enforcing strict tenant isolation.
-  4. QA: Automated cross-tenant tests proving User A cannot read or modify User B's resources.
-
-### Milestone 4: Ingestion & Extraction Engine (Phase 4)
+### Phase 3: AI Component Instrumentation
 - **Owner**: AI Engineer, Backend Engineer
 - **Tasks**:
-  1. Ingestion adapters in `internal/ingest`: raw text, file parser (TXT, PDF, DOCX), SSRF-protected URL reader.
-  2. Normalization (Unicode NFC) and boundary-aware chunker with preserved byte and rune offsets.
-  3. Groq LLM client in `internal/llm`: token bucket rate limiter, exponential backoff, retry-after header parsing, schema enforcement.
-  4. Concept and Proposition extraction stages in `internal/pipeline`.
-  5. Deterministic Go evidence validator verifying exact verbatim quotes in source text.
-  6. Postgres-backed job queue worker in `internal/queue` using `FOR UPDATE SKIP LOCKED`.
+  1. Database migration: Create `gusby.ai_call_log`, `gusby.ai_gate_state`, `gusby.eval_runs`.
+  2. Extend `AIProvider` contract in `internal/llm/`: `Describe()`, `Health()`, normalized per-call metadata.
+  3. Instrument Groq client with per-call logging to `gusby.ai_call_log` (zero prompt/text storage).
+  4. Implement AI Gate & Circuit Breaker in `internal/llm/gate.go` (states: `enabled`, `paused`, `circuit_open`, `half_open`).
+  5. Implement Active Health Probe (harmless prompt, small budget, logged and audited).
+  6. Persist and expose evaluation benchmark runs in `gusby.eval_runs`.
+  7. Unit tests for health derivation, circuit breaker transitions, and paused-gate worker waiting.
 
-### Milestone 5: Integration, Conflicts & Topics (Phase 5)
-- **Owner**: AI Engineer, Backend Engineer
+### Phase 4: Monitoring Backend & Frontend
+- **Owner**: Backend Engineer, Frontend Engineer
 - **Tasks**:
-  1. Staged entity resolution: exact match → `pg_trgm` similarity → LLM adjudication.
-  2. 4-dimension confidence integration policy: High (canonical), Medium (proposal), Low (document-only), Invalid (rejected).
-  3. Conflict detector & classifier: compare Subject-Predicate pairs; classify into Contextual Difference vs Contradiction.
-  4. Topic clustering: assign concepts to topics; compute centroid positions.
+  1. Backend API endpoints in `internal/admin/`:
+     - `GET /api/admin/overview`
+     - `GET /api/admin/pipeline`
+     - `POST /api/admin/pipeline/jobs/{id}/retry`
+     - `GET /api/admin/ai/health`
+     - `GET /api/admin/ai/metrics`
+     - `GET /api/admin/ai/eval-runs`
+     - `POST /api/admin/ai/probe`
+     - `POST /api/admin/ai/gate/pause`, `/resume`, `/reset-breaker`
+  2. Frontend Nuxt layout & routing:
+     - Sidebar Admin shield icon (only if `user.is_admin === true`).
+     - Route middleware guard redirecting non-admins.
+     - Admin navigation shell.
+  3. Frontend Monitoring screens:
+     - Overview page (`/admin`)
+     - Pipeline page (`/admin/pipeline`) with stage breakdown and retry actions
+     - AI Component page (`/admin/ai`) with status badge & reason, inline SVG sparklines, quality signals, gate controls, and probe modal.
 
-### Milestone 6: Graph Query & Desktop Nuxt Frontend (Phase 6)
-- **Owner**: Frontend Engineer, Backend Engineer
+### Phase 5: User & Document Management
+- **Owner**: Backend Engineer, Frontend Engineer
 - **Tasks**:
-  1. Implement Level-of-Detail (LOD) graph query endpoints in `internal/graph` with node limits.
-  2. Scaffold Nuxt 3 application with Tailwind CSS and the earthy design system in `frontend/`.
-  3. Build Knowledge Space canvas with Cytoscape.js or 2D Canvas: Topic Islands, semantic zoom (Far, Mid, Deep).
-  4. Build Add Knowledge, Documents list, Settings, and Auth screens.
-  5. Implement in-place review drawer and verbatim evidence reader with exact character span highlights.
+  1. Backend API endpoints in `internal/admin/`:
+     - Users: List, search, suspend (revoking sessions), unsuspend, hard delete in single transaction with typed confirmation, limit reset.
+     - Documents: List with filters, detail drawer, reprocess (new run, idempotent), delete document (with soft retraction of orphaned propositions).
+  2. Frontend Management screens:
+     - Users page (`/admin/users`) with suspend modal and typed delete modal (`DELETE <email>`).
+     - Documents page (`/admin/documents`) with run inspector drawer and typed delete modal (`DELETE <title>`).
 
-### Milestone 7: Verification, Hardening & Evaluation Run (Phase 7)
+### Phase 6: Graph Data Administration
+- **Owner**: Backend Engineer, Frontend Engineer
+- **Tasks**:
+  1. Backend API endpoints in `internal/admin/`:
+     - Scoped graph admin taking mandatory `user_id`.
+     - Concepts: List, edit, merge with audit event, archive.
+     - Propositions: List, edit qualifier/modality, soft-retract, restore, manual addition strictly validated by deterministic evidence validator.
+     - Topics: List, edit, set `is_user_locked = true`.
+     - Conflicts: List, resolve with recorded decision preserving both propositions.
+  2. Frontend Graph Data screen:
+     - `/admin/graph` form and table interface with top User Selector dropdown.
+
+### Phase 7: Verification & Hardening
 - **Owner**: QA Engineer, Reviewer, Orchestrator
 - **Tasks**:
-  1. Build gold evaluation dataset (10-20 short documents in English & Vietnamese) with ground-truth concepts, propositions, and evidence spans.
-  2. Run evaluation CLI tool measuring precision, recall, and evidence validity rate.
-  3. Security & edge-case test suite: prompt injection, SSRF attempts, Unicode offsets, rate limits, session expiry.
-  4. Reviewer conformance audit and final sign-off.
-
----
-
-## 3. Evaluation Plan (Gold Evaluation Benchmark) `[Decided]`
-
-The gold evaluation benchmark validates that Gusby honors its fundamental philosophy: **Precision over recall.**
-
-### Benchmark Dataset Composition:
-- 15 curated documents:
-  - 5 English technical/scientific articles.
-  - 5 Vietnamese articles with complex composite diacritics and cultural terms.
-  - 3 Contradictory document pairs (conflicting facts from different dates).
-  - 2 Adversarial documents (prompt injection attempts, irrelevant noise).
-- Manually labeled ground truth:
-  - `ground_truth_concepts`: Canonical concept names and acceptable aliases.
-  - `ground_truth_propositions`: Valid directed relationships with exact verbatim evidence quotes.
-  - `ground_truth_conflicts`: Expected conflict classification.
-
-### Quantitative Metrics:
-- **Evidence Validity Rate** = `(Valid Verbatim Spans / Total Extracted Spans) * 100%` (Target: **100%**).
-- **Precision** = `(True Positive Propositions / Total Proposed Propositions) * 100%` (Target: **≥ 90%**).
-- **Conflict Accuracy** = `(Correctly Classified Conflicts / Total Conflict Pairs) * 100%` (Target: **≥ 85%**).
-- **Token Efficiency** = Average Groq tokens consumed per 1,000 document characters.
+  1. Full Go unit and integration test suite including Authorization Matrix test.
+  2. Test destructive semantics: document deletion cascade retraction, concept merge auditability, deterministic evidence enforcement on manual additions.
+  3. Test AI failure simulations: circuit breaker trip on consecutive 5xx/429, half-open probe recovery, paused gate job waiting.
+  4. Future-model readiness checklist verification.
+  5. Nuxt type-check and production build (`npm run build`).
+  6. Final session log in Vault.

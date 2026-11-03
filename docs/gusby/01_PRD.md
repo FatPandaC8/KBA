@@ -1,7 +1,7 @@
 # Gusby: Product Requirements Document (PRD)
-**Version:** 1.0-draft  
-**Status:** In Review  
-**Source of Truth Precedence:** 00_PRODUCT_BRIEF.md > 01_PRD.md > Prompt Defaults
+**Version:** 1.1 (Extended via CR-001)  
+**Status:** Approved & Binding  
+**Source of Truth Precedence:** 00_PRODUCT_BRIEF.md > 01_PRD.md > DECISIONS.md > Prompt Defaults
 
 ---
 
@@ -21,99 +21,108 @@ A small, dense, 100% trustworthy knowledge graph beats a massive graph plagued b
 - **No edge exists without verbatim evidence.** Every proposition links to an exact character span in the source text.
 - **Evidence validation is deterministic.** The model cannot declare its own truth; Go-side code mathematically verifies the quote in the source text.
 - **Contradictions are preserved, not erased.**
+- **Admin actions obey trust rules.** The admin is powerful, but Gusby's trust rules still apply to the admin: no silent overwrite, no silent deletion, no fabricated evidence, all actions audited.
 
 ### 1.4. Target Users `[Decided]`
 - **Researchers & Academics**: Need to map literature, trace claims directly to page citations, and identify contradictions between studies.
 - **Intelligence & Market Analysts**: Need to track entity interactions across news articles and whitepapers without risk of hallucinated connections.
 - **Knowledge Workers & Domain Specialists**: Need to build personal or project knowledge bases with verifiable provenance.
+- **System Owner / Administrator**: Needs to monitor pipeline & AI health, operate circuit breakers, manage users/documents, and audit knowledge integrity.
 
 ---
 
 ## 2. Product Goals & Success Criteria
 
 ### 2.1. Quantitative Success Criteria `[Decided]`
-1. **Evidence Validity Rate**: **100%** of propositions in the Canonical Graph must resolve to an exact, verifiable substring in the source text. Invalid evidence drops propositions from canonical integration.
+1. **Evidence Validity Rate**: **100%** of propositions in the Canonical Graph must resolve to an exact, verifiable substring in the source text.
 2. **Extraction Precision**: **≥ 90%** precision on the benchmark gold evaluation set.
-3. **Graph Interaction Performance**: Constant 60 FPS panning and semantic zooming on Desktop screens up to the enforced Level-of-Detail limit (500 nodes per projection).
-4. **Per-User Isolation**: **100%** isolation verified by automated cross-tenant security tests (zero cross-user leakage).
+3. **Graph Interaction Performance**: Constant 60 FPS panning and semantic zooming up to the Level-of-Detail limit (500 nodes per projection).
+4. **Per-User Isolation**: **100%** isolation verified by automated cross-tenant security tests.
 5. **Idempotency**: Re-ingesting an identical document hash produces 0 duplicate nodes, edges, or runs.
+6. **Admin Authorization Boundary**: **100%** server-side enforcement. Non-admins receive HTTP 404 (zero route enumeration).
+7. **AI Call Observability**: **100%** of external/internal AI completions recorded with latency, tokens, status, error class, and zero prompt/document text leakage.
+8. **Deterministic Admin Evidence Enforcement**: **100%** of manual proposition additions validated by deterministic evidence validator; zero manual proposition without valid document quote.
 
 ### 2.2. Qualitative Success Criteria `[Decided]`
 1. **Intellectual, Pure White Aesthetic**: Clean, distraction-free desktop canvas following the earthy-palette design system.
-2. **Auditability**: Every merge, conflict, and review action is recorded with timestamp and decider (AI or User).
-3. **Graceful Degradation**: Clear, actionable error messages on unsupported files (e.g. scanned PDFs without text layers) or rate-limit events.
+2. **Auditability**: Every merge, conflict, review action, and admin mutation/content-access recorded with timestamp and decider.
+3. **Future AI Model Readiness**: AI component monitoring and control designed around a generic Provider Contract, enabling future transition from Groq API to a custom paper-trained model with zero UI changes.
 
 ---
 
 ## 3. Scope & Feature Boundaries
 
-### 3.1. In-Scope Key Features (MVP) `[Decided]`
+### 3.1. In-Scope Key Features
 
-#### Feature 1: Multi-Source Ingestion
-- **Text**: Direct copy-paste into textarea with character count limits.
-- **URL**: Web article ingestion with SSRF protection, readability parsing, and metadata extraction.
-- **Files**: `.txt`, `.pdf` (digital text layer required), `.docx` up to 10MB per file.
-- **Status Lifecycle**: `Uploading` → `Processing` → `Completed` | `Failed`.
+#### Feature 1: Multi-Source Ingestion `[Decided]`
+- Text, URL (SSRF-protected), and files (`.txt`, `.pdf` digital text, `.docx` up to 10MB).
+- Status Lifecycle: `Uploading` → `Processing` → `Completed` | `Failed`.
 
-#### Feature 2: Multi-Stage Extraction Pipeline
-- Document normalization (Unicode NFC) and chunking with preserved character offsets.
-- Two-stage LLM extraction via Groq: Concept Extraction followed by Proposition Extraction.
-- Deterministic Go-side evidence span locator and character offset validator.
+#### Feature 2: Multi-Stage Extraction Pipeline `[Decided]`
+- Unicode NFC normalization, chunking with byte and char offsets.
+- Two-stage extraction: Concept extraction followed by Proposition extraction.
+- Deterministic evidence validator verifying exact quote substring in source text.
 
-#### Feature 3: Staged Entity Resolution
-- Stage 1: Exact and alias match against user's existing concepts.
-- Stage 2: Trigram lexical similarity using PostgreSQL `pg_trgm`.
-- Stage 3: LLM adjudication strictly for ambiguous candidate pairs.
+#### Feature 3: Staged Entity Resolution `[Decided]`
+- Exact & alias match → Trigram lexical similarity (`pg_trgm`) → LLM adjudication for ambiguous candidates.
 
-#### Feature 4: Four-Dimension Confidence Integration
-Integration into the Canonical Graph evaluates four independent dimensions:
-1. `Extraction Confidence` (LLM-reported confidence in concept identification)
-2. `Evidence Validity` (Binary deterministic match of quote in source)
-3. `Entity Resolution Confidence` (Confidence in concept canonicalization)
-4. `Proposition Confidence` (Confidence in relationship validity)
-- **High**: Auto-integrated into Canonical Graph.
-- **Medium**: Integration Proposal created, marked with review state `needs_review = true`.
-- **Low**: Retained only within the local Document Graph.
-- **Invalid Evidence**: Barred from Canonical Graph.
+#### Feature 4: Four-Dimension Confidence Integration `[Decided]`
+- Extraction confidence, Evidence validity, Entity resolution confidence, Proposition confidence.
 
-#### Feature 5: Conflict Classification & Preservation
-- Automatic detection of proposition candidates sharing identical Subject and Predicate but differing Objects or modalities.
-- Classification into: Contextual Difference, Direct Contradiction, or Insufficient Evidence.
-- Preservation of both propositions with their supporting evidence. Unresolved contradictions flagged with `conflict` state.
+#### Feature 5: Conflict Classification & Preservation `[Decided]`
+- Automatic contradiction detection, non-destructive preservation, review flagging.
 
-#### Feature 6: Topic Islands & Semantic Zoom
-- Automatic topic assignment (many-to-many with concepts, non-hierarchical).
-- 4-level semantic zoom in the desktop Knowledge Space:
-  - Level 1 (Far): Topic Islands.
-  - Level 2 (Closer): Core/Main Concepts per island.
-  - Level 3 (Deep): Concepts and Proposition edges.
-  - Level 4 (Deepest): Propositions and exact Verbatim Evidence spans.
+#### Feature 6: Topic Islands & Semantic Zoom `[Decided]`
+- 4-level semantic zoom (Far, Closer, Deep, Deepest) in Knowledge Space.
 
-#### Feature 7: Review as a State
-- No standalone "Review Queue" page.
-- Pending proposals and conflicts flagged visually directly on nodes/edges and side drawer.
-- Quick filter toggle `[Needs Review]` in Knowledge Space.
+#### Feature 7: Review as a State `[Decided]`
+- In-place review states on nodes and edges; `[Needs Review]` filter toggle.
 
-#### Feature 8: Secure Multi-Tenant Auth
-- Email + password registration and login using Argon2id.
-- Server-side sessions with hashed tokens stored in Postgres, transmitted in `HttpOnly, Secure, SameSite=Lax` cookies.
-- Hard per-user database scoping on every table and query.
+#### Feature 8: Secure Multi-Tenant Auth `[Decided]`
+- Argon2id, cryptographic session tokens, HttpOnly cookies, per-user database scoping.
+
+#### Feature 9: Single-Owner Admin Dashboard & Operational Controls `[Decided - CR-001]`
+- **Single Owner Access**: `is_admin` flag on user account. CLI / env bootstrap (`GUSBY_OWNER_EMAIL`). Server-side `RequireAdmin` returning 404. Non-admin sidebar hides admin routes.
+- **Pipeline & Job Monitoring**: Queue depth (queued, running, waiting for AI, completed, failed), stuck job detection, median/p95 latency per stage, retry operational controls.
+- **User Activity Monitoring**: User accounts, status (`active`, `suspended`), document counts, token usage windows, signup trends, activity feed.
+- **AI Component Monitoring & Controls**:
+  - Provider Contract (`Describe`, `Health` with status `healthy`/`degraded`/`down`/`paused`/`unknown` and generic `details` key-value map).
+  - Rolling window error rates, latency (median, p95), error breakdown by class (rate limit, timeout, server error, invalid JSON, schema validation failure, auth error, budget exceeded).
+  - Rate-limit and quota indicators (Groq headers when present, per-user budget exhaustion counts).
+  - Output quality signals: schema validation failure rate, invalid-JSON retry rate, invalid-evidence rate.
+  - Evaluation history display from gold evaluation benchmark runs.
+  - Operational Controls: AI Gate (`enabled`, `paused`, `circuit_open`), pause/resume, circuit breaker reset, active harmless probe.
+- **User Management**: Suspend/unsuspend (immediate session revocation), hard delete (cascading purge in single transaction with typed confirmation), reset limits.
+- **Document Management**: Reprocess failed runs (idempotent, new run created, canonical propositions preserved), delete document (cascades to soft retraction of propositions lacking other valid evidence, flags orphaned concepts).
+- **Graph Data Administration**: Table/form tool with explicit user selector. Concept edit/merge/archive, proposition retract/restore/edit, topic locking, conflict resolution.
+- **Admin Audit Log**: Append-only `gusby.admin_audit_log` recording every mutation, content access, and AI control action in the same transaction.
 
 ---
 
 ### 3.2. Explicit Out-of-Scope List `[Decided]`
-The following features are strictly **OUT OF SCOPE** for Gusby MVP:
-- Mobile applications (iOS, Android) — Gusby is Desktop Web only.
+The following features are strictly **OUT OF SCOPE**:
+- Mobile applications (iOS, Android).
 - Audio capture, recording, or Speech-to-Text (STT).
 - General AI conversational chatbot or reasoning assistant.
 - Notion / Obsidian-style markdown editors or manual wiki note-taking.
 - Tasks, reminders, or productivity tooling.
 - Multi-user collaboration, workspace sharing, public links, or organization RBAC.
-- Dark mode (Gusby is strictly light mode on pure white canvas).
-- Nested or hierarchical topics (e.g. subtopics of subtopics).
-- Freehand manual graph drawing/editing (nodes and edges reflect evidence only).
-- Scanned PDF OCR (PDFs without embedded digital text layers).
+- Dark mode.
+- Scanned PDF OCR (non-digital PDFs).
 - Vector databases, pgvector, or third-party embedding providers.
+- **Explicit Admin Out-of-Scope**:
+  - Billing, invoicing, or cost dashboards.
+  - Graph-quality academic analytics.
+  - Multi-admin role hierarchies or permissions matrix.
+  - Teams, organizations, or tenant groups.
+  - User impersonation ("log in as user").
+  - Visual graph canvas editor for admin.
+  - Bulk edit or bulk import/export.
+  - Email notifications, webhooks, or alerting systems.
+  - External monitoring stacks (Prometheus, Grafana, OpenTelemetry collectors).
+  - UI for editing API keys.
+  - UI for dynamically switching LLM provider or model (stays a configuration change).
+  - Building, training, or stubbing custom machine learning models in this phase.
 
 ---
 
@@ -121,14 +130,17 @@ The following features are strictly **OUT OF SCOPE** for Gusby MVP:
 
 | Risk | Impact | Mitigation Strategy |
 |---|---|---|
-| **Groq Free-Tier Rate Limits** (RPM/TPM caps) | Pipeline stalls or fails with HTTP 429 | Shared Go rate-limiter, exponential backoff with jitter, small chunk sizes, daily token budget tracking per user. |
-| **SSRF via URL Ingestion** | Internal network or cloud metadata exposure | Private/loopback IP validation in Go before and after HTTP redirect resolution; strict HTTP/HTTPS protocol whitelist; timeout & payload size limits. |
-| **Prompt Injection in Ingested Content** | Untrusted document instructions hijack extraction schema | Strict prompt boundary delimitation (`<source_document>` XML tags), deterministic JSON schema validation, zero execution of document instructions. |
-| **Unicode Offset Mismatch** | Broken UI highlights on Vietnamese text | Canonical UTF-8 byte offsets stored alongside Unicode rune offsets; unified NFC normalization prior to offset indexing. |
-| **Silent Knowledge Degradation** | Re-running extraction overwrites user edits or conflicting claims | Non-destructive conflict model; immutable source documents; explicit audit event logging. |
+| **Groq Free-Tier Rate Limits** | Pipeline stalls or fails with HTTP 429 | Shared rate-limiter, exponential backoff, circuit breaker, AI gate `waiting_for_ai` state, daily per-user budget tracking. |
+| **Admin Privilege Abuse / Accidental Deletion** | Loss of user graph data | Destructive operations require typed confirmation (`DELETE / CONFIRM`), server-side confirmation validation, append-only `admin_audit_log`, non-destructive cascade retraction. |
+| **Admin Path Discovery / Enumeration** | Attackers probe administrative endpoints | Server-side middleware returns 404 for non-admins; non-admins never see admin navigation in frontend. |
+| **AI Secret Leakage in Admin UI** | Exposure of Groq API key or credentials | Endpoints return only boolean `is_configured`; keys never stored in responses, logs, or fixtures. |
+| **Evidence Fabrication by Admin** | Admin manually injects unsubstantiated claims | Manual proposition addition strictly enforces deterministic evidence validation against existing user documents. |
+| **Circuit Breaker Thrashed by False Positives** | Unnecessary pipeline pauses | Threshold-based trigger (consecutive failures or sustained error rate over window) with automatic half-open trial before full closure. |
 
 ---
 
-## 5. Open Questions & Hypotheses `[Hypothesis]`
-- **OQ-PRD-1**: Are conservative confidence thresholds (e.g. High >= 0.85, Med 0.65-0.84) sufficient prior to gold set calibration? *(Status: Adopted as default)*
-- **OQ-PRD-2**: Should Account Deletion be implemented in MVP? *(Status: Marked as Needs research; excluded from MVP initial delivery)*
+## 5. Open Questions & Hypotheses `[Decided / Confirmed]`
+- **OQ-PRD-1**: Conservative confidence thresholds? -> Adopted default (High >= 0.85, Med 0.65-0.84).
+- **OQ-PRD-2**: Account deletion? -> Confirmed for Admin User Management via single-transaction hard delete.
+- **OQ-PRD-3**: Document content access visibility? -> Monitoring screens show metadata only; viewing content or user graph requires explicit action and is logged in `admin_audit_log`.
+- **OQ-PRD-4**: Reset limits? -> Clears usage counters, resets budget window, clears rate-limit lockouts.

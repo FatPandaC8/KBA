@@ -379,6 +379,800 @@ paths:
                   success:
                     type: boolean
 
+  # ---------------------------------------------------------------------------
+  # Admin API Endpoints (Single-Owner, RequireAdmin -> 404 for non-admins)
+  # ---------------------------------------------------------------------------
+  /admin/overview:
+    get:
+      summary: Admin Dashboard headline overview
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ai:
+                    type: object
+                  pipeline:
+                    type: object
+                  users:
+                    type: object
+                  graph:
+                    type: object
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /admin/pipeline:
+    get:
+      summary: Pipeline and job queue health
+      parameters:
+        - name: stage
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stages:
+                    type: object
+                  latencies:
+                    type: object
+                  stuck_jobs:
+                    type: array
+                    items:
+                      type: object
+                  jobs:
+                    type: array
+                    items:
+                      type: object
+                  total:
+                    type: integer
+
+  /admin/pipeline/jobs/{id}/retry:
+    post:
+      summary: Retry a failed pipeline job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                  status:
+                    type: string
+                  message:
+                    type: string
+
+  /admin/ai/health:
+    get:
+      summary: AI component health and provider description
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIHealthAndState'
+
+  /admin/ai/metrics:
+    get:
+      summary: AI performance metrics and quality signals
+      parameters:
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [1h, 24h, 7d]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/ai/eval-runs:
+    get:
+      summary: Benchmark gold evaluation runs history
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  eval_runs:
+                    type: array
+                    items:
+                      type: object
+
+  /admin/ai/probe:
+    post:
+      summary: Execute active harmless AI health probe
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  latency_ms:
+                    type: integer
+                  http_status:
+                    type: integer
+                  tokens_consumed:
+                    type: integer
+                  probe_timestamp:
+                    type: string
+
+  /admin/ai/gate:
+    get:
+      summary: Get AI Gate and Circuit Breaker state
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  state:
+                    type: string
+                  reason:
+                    type: string
+                  consecutive_failures:
+                    type: integer
+                  updated_at:
+                    type: string
+
+  /admin/ai/gate/pause:
+    post:
+      summary: Pause AI processing gate
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/ai/gate/resume:
+    post:
+      summary: Resume AI processing gate
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/ai/gate/reset-breaker:
+    post:
+      summary: Reset circuit breaker to enabled
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/users:
+    get:
+      summary: List users with search and pagination
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [all, active, suspended]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      type: object
+                  total:
+                    type: integer
+
+  /admin/users/{id}:
+    get:
+      summary: Get user details and usage
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+    delete:
+      summary: Hard delete user and cascading resources
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation]
+              properties:
+                confirmation:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/users/{id}/suspend:
+    post:
+      summary: Suspend user and revoke active sessions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/users/{id}/unsuspend:
+    post:
+      summary: Unsuspend user account
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/users/{id}/reset-limits:
+    post:
+      summary: Reset token budget counters and lockout windows
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/documents:
+    get:
+      summary: List documents across users
+      parameters:
+        - name: user_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/documents/{id}:
+    get:
+      summary: Get document details and extraction runs
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+    delete:
+      summary: Delete document and soft-retract unsupported propositions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation]
+              properties:
+                confirmation:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/documents/{id}/reprocess:
+    post:
+      summary: Idempotently reprocess document with a new extraction run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/graph/concepts:
+    get:
+      summary: List concepts for selected user
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/graph/concepts/merge:
+    post:
+      summary: Merge two concepts with audit event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, source_concept_id, target_concept_id]
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                source_concept_id:
+                  type: string
+                  format: uuid
+                target_concept_id:
+                  type: string
+                  format: uuid
+                reason:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/graph/concepts/{id}:
+    put:
+      summary: Edit concept details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, name]
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+    delete:
+      summary: Archive or delete concept
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: user_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/graph/propositions:
+    get:
+      summary: List propositions for selected user
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+    post:
+      summary: Manually create proposition with deterministic evidence validation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, subject_concept_id, predicate, object_concept_id, document_id, verbatim_quote]
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                subject_concept_id:
+                  type: string
+                  format: uuid
+                predicate:
+                  type: string
+                object_concept_id:
+                  type: string
+                  format: uuid
+                document_id:
+                  type: string
+                  format: uuid
+                verbatim_quote:
+                  type: string
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/graph/propositions/{id}/retract:
+    post:
+      summary: Soft-retract proposition
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                reason:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/graph/propositions/{id}/restore:
+    post:
+      summary: Restore retracted proposition
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                reason:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/graph/topics:
+    get:
+      summary: List topics for selected user
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/graph/topics/{id}:
+    put:
+      summary: Edit topic and mark user-locked
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, name]
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/graph/conflicts:
+    get:
+      summary: List conflicts needing review for selected user
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/graph/conflicts/{id}/resolve:
+    post:
+      summary: Resolve conflict with recorded decision
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, decision]
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                decision:
+                  type: string
+                  enum: [contextual_difference, contradiction, dismissed, insufficient_evidence]
+                justification:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/audit:
+    get:
+      summary: Stream of append-only admin audit log events
+      parameters:
+        - name: action_type
+          in: query
+          schema:
+            type: string
+        - name: target_user_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                  total:
+                    type: integer
+
 components:
   responses:
     ErrorResponse:
@@ -634,3 +1428,53 @@ components:
           $ref: '#/components/schemas/PropositionDetail'
         conflicting_proposition:
           $ref: '#/components/schemas/PropositionDetail'
+
+    AIHealthAndState:
+      type: object
+      required: [status, reason, latency_ms, provider, gate, details]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, down, paused, unknown]
+        reason:
+          type: string
+        latency_ms:
+          type: integer
+        provider:
+          type: object
+          required: [kind, model, version, is_configured, capabilities]
+          properties:
+            kind:
+              type: string
+            model:
+              type: string
+            version:
+              type: string
+            is_configured:
+              type: boolean
+            capabilities:
+              type: array
+              items:
+                type: string
+            rpm_limit:
+              type: integer
+            tpm_limit:
+              type: integer
+        gate:
+          type: object
+          required: [state, reason, consecutive_failures, updated_at]
+          properties:
+            state:
+              type: string
+              enum: [enabled, paused, circuit_open, half_open]
+            reason:
+              type: string
+            consecutive_failures:
+              type: integer
+            updated_at:
+              type: string
+              format: date-time
+        details:
+          type: object
+          description: Generic key-value telemetry for current provider and future model
+          additionalProperties: true

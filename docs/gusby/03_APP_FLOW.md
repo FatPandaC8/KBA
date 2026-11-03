@@ -1,23 +1,29 @@
 # Gusby: Application Flow & Screen Specification (APP_FLOW.md)
-**Version:** 1.0-draft  
-**Status:** In Review  
-**Source of Truth Precedence:** 00_PRODUCT_BRIEF.md > 03_APP_FLOW.md > Prompt Defaults
+**Version:** 1.1 (Extended via CR-001)  
+**Status:** Approved & Binding  
+**Source of Truth Precedence:** 00_PRODUCT_BRIEF.md > 03_APP_FLOW.md > DECISIONS.md > Prompt Defaults
 
 ---
 
 ## 1. Application Routes & Navigation Structure `[Decided]`
 
-Gusby is a desktop-first web application. Its route map is minimal, uncluttered, and intellectual:
-
 ```
 / (Root)
  ├── /auth/login         (Sign In screen)
  ├── /auth/signup        (Sign Up screen)
- └── [Authenticated Shell]
-      ├── /              (Knowledge Space - central graph canvas)
-      ├── /add           (Add Knowledge - ingestion workspace)
-      ├── /documents     (Documents - repository list)
-      └── /settings      (Settings - minimal preferences)
+ ├── [Authenticated User Shell]
+ │    ├── /              (Knowledge Space - central graph canvas)
+ │    ├── /add           (Add Knowledge - ingestion workspace)
+ │    ├── /documents     (Documents - repository list & drawer)
+ │    └── /settings      (Settings - minimal preferences)
+ └── [Authenticated Admin Area - /admin/*] (Visible only to is_admin=true)
+      ├── /admin              (Overview - headline stats, quick health, active alerts)
+      ├── /admin/pipeline     (Pipeline & Job Queue - queues, stuck jobs, stage latencies, retries)
+      ├── /admin/ai           (AI Component - health badge & reason, charts, quality signals, gate controls, probe)
+      ├── /admin/users        (User Management - list, search, suspend/unsuspend, delete, reset limits)
+      ├── /admin/documents    (Document Management - list, failure drill-down, delete with cascade retraction, reprocess)
+      ├── /admin/graph        (Graph Data Admin - user selector, concepts, propositions, topics, conflict resolution)
+      └── /admin/audit        (Admin Audit Log - append-only event stream, before/after JSONB inspector)
 ```
 
 The persistent layout contains a compact icon-only left navigation bar:
@@ -25,141 +31,165 @@ The persistent layout contains a compact icon-only left navigation bar:
 - **Space**: Graph icon (active by default).
 - **Add**: Plus icon.
 - **Documents**: Folder / Library icon.
+- **Admin**: Shield / Gauge icon (**Rendered ONLY if `user.is_admin === true`**).
 - **Settings**: Cog icon (bottom pinned).
 - **User Avatar / Sign Out**: Quick indicator.
 
 ---
 
-## 2. Screen Specifications & State Transitions `[Decided]`
+## 2. Standard Screen Specifications `[Decided]`
 
 ### Screen 1: Auth (Sign In & Sign Up)
 - **Routes**: `/auth/login`, `/auth/signup`
-- **Visuals**: Centered minimal form on pure white canvas; typography-driven; no splashy SaaS marketing illustrations; subtle hairline borders.
-- **Elements**: Email input, password input, primary submit button ("Sign In" / "Create Account"), toggle link to switch between sign in and sign up.
-- **States**:
-  - `Default`: Empty input fields.
-  - `Submitting`: Button disabled with subtle spinner.
-  - `Error`: Inline error message banner (`"Invalid email or password"` or `"Email already registered"`).
-- **Acceptance Criteria**:
-  1. Valid credentials set the `gusby_session` HttpOnly cookie and redirect immediately to `/`.
-  2. Failed login displays a generic error message without enumerating whether the email exists.
-  3. Attempting to access protected routes without an active session immediately redirects to `/auth/login`.
-
----
+- **Visuals**: Centered minimal form on pure white canvas; typography-driven; hairline borders.
+- **States**: `Default`, `Submitting`, `Error` (`"Invalid email or password"`).
+- **Acceptance Criteria**: Sets `gusby_session` cookie; non-admins never see admin hints; failed login never enumerates email existence.
 
 ### Screen 2: Knowledge Space (Central Interactive Canvas)
 - **Route**: `/`
-- **Visuals**: Fullscreen pure white canvas displaying interactive Topic Islands and Concepts; floating top search bar; floating bottom-right zoom/LOD controls; collapsible right detail drawer.
-- **Controls**:
-  - **Floating Search Bar**: Top center. Typing queries filters concepts, dims non-matching nodes, and zooms camera to the best match.
-  - **Review State Filter**: Pill toggle `[Needs Review]` in the top-right toolbar. When active, resolved nodes are dimmed (opacity 0.2), and nodes/edges carrying pending proposals or conflicts glow with a warm terracotta badge.
-  - **Zoom / View Controls**: Bottom-right zoom buttons (`+`, `-`, `Fit View`), with current zoom level indicator (Far / Mid / Deep).
-- **States**:
-  - `Loading`: Subtle centered pulsing graph skeleton.
-  - `Empty`: Clean message: `"Your knowledge space is empty. Add your first document, URL, or note to begin building your graph."` with a primary button to `/add`.
-  - `Populated`: 60 FPS interactive canvas with semantic zoom.
-- **Semantic Zoom Transitions**:
-  - **Level 1 (Far Zoom, 0.2x - 0.5x)**: Shows Topic Islands as soft circular cluster halos with Topic labels. Clicking a Topic zooms the camera smoothly into that island.
-  - **Level 2 (Mid Zoom, 0.5x - 1.2x)**: Shows core/main Concepts as clean circular nodes with legible labels.
-  - **Level 3 (Deep Zoom, 1.2x - 2.5x)**: Expands full local concept network with directed proposition edges. Hovering an edge shows predicate label.
-  - **Level 4 (Detail Selection)**: Clicking any Concept opens a compact popover with core idea and degree count; clicking "View Details" smoothly slides out the Right Detail Panel.
-- **Acceptance Criteria**:
-  1. Semantic zoom levels smoothly adapt level-of-detail without frame drops.
-  2. Canvas renders up to 500 nodes at constant 60 FPS.
-  3. Clicking any node updates URL hash or state (`/?concept=<id>`) without reloading.
-
----
+- **Visuals**: Fullscreen pure white canvas displaying interactive Topic Islands and Concepts; floating search bar; floating zoom/LOD controls; collapsible right detail drawer.
+- **Review State**: Pill toggle `[Needs Review]` highlights pending proposals/conflicts in terracotta badge.
 
 ### Screen 3: Add Knowledge (Ingestion Workspace)
 - **Route**: `/add`
-- **Visuals**: Focused, distraction-free input surface with generous whitespace.
-- **Tabs**:
-  1. **Paste Text**: Multi-line textarea with live character counter (up to 50,000 chars) and title input.
-  2. **URL**: Clean input field for pasting article/documentation URLs.
-  3. **Upload File**: Drag-and-drop zone supporting `.txt`, `.pdf`, `.docx` up to 10MB.
-- **Submit Action**: Single primary action button `"Process Knowledge"`.
-- **States**:
-  - `Ready`: Clean inputs.
-  - `Submitting`: File upload progress bar.
-  - `Queued / Processing`: Shows progress indicator: `"Extracting concepts and evidence..."`.
-  - `Success`: Displays extraction summary (e.g. `14 concepts, 22 propositions, 100% evidence verified`) with buttons `"View in Knowledge Space"` and `"Add Another"`.
-  - `Error`: Clear error toast explaining failure (e.g. `"Scanned PDFs without digital text layers are not supported"`, `"URL is not accessible or private IP is blocked"`).
-- **Acceptance Criteria**:
-  1. Duplicate content hash displays notice `"Document already ingested on YYYY-MM-DD"` and navigates to existing document.
-  2. Malicious or SSRF target URLs are blocked with immediate rejection message.
-  3. Ingested document is immediately enqueued in `gusby.processing_jobs`.
+- **Tabs**: Text, URL, File. Live status polling, duplicate detection.
 
----
-
-### Screen 4: Documents (Source Repository)
+### Screen 4: Documents (Document Repository)
 - **Route**: `/documents`
-- **Visuals**: Clean, high-density minimal tabular view.
-- **Columns**: Title/Source, Type (`Text`, `URL`, `PDF`, `DOCX`), Added Date, Concepts Extracted, Status badge (`Completed`, `Processing`, `Failed`).
-- **Actions**:
-  - Click row: Opens Document Drawer showing source text and extracted Document Graph.
-  - Retry button: Available for `Failed` rows.
-- **States**:
-  - `Empty`: `"No documents ingested yet."`
-  - `Populated`: Paginated or virtualized list.
-- **Acceptance Criteria**:
-  1. Shows real-time status updates as processing jobs complete.
-  2. Clicking a document reveals its original source text and the exact propositions derived from it.
-
----
+- **Elements**: Filterable list, status badges, slide-over drawer showing raw text and chunk boundaries.
 
 ### Screen 5: Settings
 - **Route**: `/settings`
-- **Visuals**: Minimal preferences form.
+- **Elements**: Account info, password change, token quota indicator.
+
+---
+
+## 3. Admin Area Screen Specifications `[Decided - CR-001]`
+
+### Screen A1: Admin Overview (`/admin`)
+- **Visuals**: Clean card-based overview using hairline borders and generous whitespace.
 - **Sections**:
-  1. **Appearance & Palette**: Earthy palette selector (Classic Slate, Terracotta Stone, Forest Moss, Ochre Sand).
-  2. **Account**: Email address display, change password fields (Current Password, New Password, Confirm).
-  3. **Session & Security**: Sign out button.
-  4. **Data Management**: Account Deletion and Data Export marked as `[Needs research: planned for future release]`.
-- **Acceptance Criteria**:
-  1. Changing palette immediately updates CSS tokens across the entire application without reload.
-  2. Password change requires verifying current password and enforcing strength rules.
-  3. Sign out revokes session in Postgres, clears cookie, and redirects to `/auth/login`.
+  - **Headline Cards**:
+    - AI Component Health: Badge (`healthy`, `degraded`, `down`, `paused`), active model name, rolling error rate.
+    - Pipeline Throughput: Active jobs, queued jobs, stuck jobs count, 24h failure rate.
+    - User Activity: Total active users, new signups (24h/7d), today's total AI tokens consumed.
+    - Graph Scale: Total concepts, canonical propositions, active conflicts across all users.
+  - **Quick Action Bar**: Run AI Probe, View Stuck Jobs, View Recent Audit Events.
+- **States**: `Loading` (skeleton cards), `Error` (inline retry banner).
 
 ---
 
-## 3. Review-as-State Interaction Workflows `[Decided]`
-
-Because Gusby rejects a standalone Review Queue page, review interactions occur in-place:
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'background': 'transparent', 'clusterBkg': 'none' }}}%%
-flowchart TD
-    A["User in Knowledge Space"] --> B{"Filter: [Needs Review]"}
-    B -->|Enabled| C["Non-review nodes dim to 20% opacity<br/>Flagged items glow with alert badge"]
-    B -->|Disabled| D["Normal graph exploration"]
-    C --> E["User clicks flagged Node or Edge"]
-    E --> F["Right Drawer slides open with Review Card"]
-    F --> G{"Action Selected"}
-    G -->|Approve Proposal| H["Move to Canonical Graph<br/>Record User Audit Event"]
-    G -->|Reject Proposal| I["Dismiss from Canonical Graph<br/>Retain in Document Graph only"]
-    G -->|Resolve Conflict| J["Select winning proposition or<br/>confirm contextual distinction"]
-```
-
-### Review Card Actions:
-1. **Integration Proposal Card**:
-   - Shows proposed Concept or Proposition with 4-dimension confidence breakdown.
-   - Highlights supporting quote in source text.
-   - Buttons: `[Approve & Integrate]` (commits to canonical graph), `[Keep Local Only]` (dismisses proposal).
-2. **Conflict Resolution Card**:
-   - Displays Proposition A (Source 1, Date 1, Evidence 1) vs Proposition B (Source 2, Date 2, Evidence 2).
-   - Shows AI classification: `Contradiction` or `Contextual Difference`.
-   - Actions:
-     - `[Keep Both as Contextual Variants]`: Saves context notes.
-     - `[Mark Contradiction Accepted]`: Preserves both with verified dispute flag.
-     - `[Override Proposition]`: User explicitly declares preference with audit note.
+### Screen A2: Pipeline & Job Monitoring (`/admin/pipeline`)
+- **Visuals**: Two-column layout: Queue Health Metrics on top; Job Table below.
+- **Elements**:
+  - **Queue Breakdown**: Counts by stage (`queued`, `running`, `waiting_for_ai`, `done`, `failed`).
+  - **Stuck Jobs Section**: Highlights jobs running $> 5$ minutes or with expired heartbeats, with `"Force Release / Re-queue"` action.
+  - **Stage Latency & Failure Rate**: Median and p95 latency for `chunking`, `extracting`, `resolving`, `integrating`.
+  - **Job Table**: Filterable by stage, search by Document ID or User ID. Columns: Job ID, Document Title, User Email, Stage, Attempts, Last Error, Created, Updated.
+  - **Operational Control**: `"Retry Job"` button on failed jobs. Opens confirmation: verifies idempotent re-execution from last valid stage.
 
 ---
 
-## 4. Evidence Viewing Workflow `[Decided]`
+### Screen A3: AI Component Monitoring & Control (`/admin/ai`)
+- **Visuals**: Multi-section operational dashboard for monitoring and controlling the current Groq API provider (and future custom model).
+- **Sections**:
+  1. **Provider Identity & Config Card**:
+     - Kind (`groq`), Model (`openai/gpt-oss-120b`), Version, Capabilities (`json_mode`, etc.).
+     - API Key Status: Boolean `"Configured"` badge (Never displays or leaks raw key).
+  2. **Health Badge & Reason**:
+     - Large visual badge (`healthy` green, `degraded` amber, `down` red, `paused` slate).
+     - Explicit textual derivation reason (e.g. `"Healthy: 0% error rate over last 50 calls; last probe succeeded in 320ms"`).
+  3. **Performance Metrics (Selectable Window: 1h, 24h, 7d)**:
+     - Total Calls, Token Volume (Input / Output).
+     - Latency: Median and p95 (inline SVG sparkline).
+     - Error Breakdown: Rate limited (429), Timeout, Server Error (5xx), Invalid JSON, Schema Validation Failure, Budget Exceeded.
+     - Last Success Time & Last Failure Time with error reason.
+  4. **Rate Limit & Budget State**:
+     - Remaining requests/tokens (if reported by provider headers), recent 429 count, users exhausting budget.
+  5. **Output Quality Signals**:
+     - Schema Validation Failure Rate (target $< 5\%$).
+     - Invalid JSON Retry Rate (target $< 2\%$).
+     - **Invalid Evidence Rate** (quotes not found in source text, target $< 1\%$).
+  6. **Evaluation History Card**:
+     - Latest gold evaluation suite benchmark metrics (Evidence Validity Rate 100%, Injection Defense 100%, Conflict Accuracy).
+     - Trend comparison table against previous runs.
+  7. **Generic Provider Details Panel**:
+     - Key-value inspector rendering `ProviderHealth.Details` as-is (enabling future custom model GPU metrics, queue depth, or checkpoint tags).
+  8. **Operational Controls (AI Gate)**:
+     - Current Gate Status (`enabled`, `paused`, `circuit_open`).
+     - Action Buttons:
+       - **Run Active Probe**: Executes harmless prompt test call. Shows modal with latency, HTTP status, and response summary.
+       - **Pause AI**: Pauses all incoming LLM stages. Queued jobs enter `waiting_for_ai`.
+       - **Resume AI**: Resumes processing; waiting jobs resume automatically.
+       - **Reset Circuit Breaker**: Resets error counters and closes circuit to `enabled`.
+     - Confirmation Modal: Each control requires a click confirmation and provides an immediate success/error toast.
 
-When inspecting any Proposition in the Right Drawer:
-1. The user clicks `[View Evidence]`.
-2. The drawer displays an inline reader containing the source document chunk.
-3. The exact character span (`[char_start, char_end]`) is rendered with an exact hairline highlight:
-   `<mark class="evidence-highlight bg-amber-100 text-stone-900 border-b-2 border-amber-500">...</mark>`
-4. The document name, chunk index, and extraction timestamp are clearly displayed beneath the citation.
+---
+
+### Screen A4: User Management (`/admin/users`)
+- **Visuals**: Searchable, paginated user table with side-drawer user profile.
+- **Elements**:
+  - Filter by status (`all`, `active`, `suspended`).
+  - Search by email.
+  - Columns: Email, Status, Signup Date, Last Active, Documents Count, 24h Tokens Consumed, Actions.
+- **Drawer / Actions**:
+  - **Suspend / Unsuspend**: Requires optional reason. Suspending immediately revokes all active sessions in `gusby.sessions` and blocks login.
+  - **Reset Limits**: Clears token usage counters and resets rate-limit lockout window for this user.
+  - **Delete User**: **Destructive Action**. Opens confirmation modal requiring typed input: `"DELETE <email>"`. Explains consequences: all documents, chunks, extraction records, concepts, propositions, topics, and sessions belonging to this user will be permanently purged in a single transaction.
+
+---
+
+### Screen A5: Document Management (`/admin/documents`)
+- **Visuals**: Document table with multi-filter (User, Status) and run inspector drawer.
+- **Elements**:
+  - Columns: Title, Source Type, User Email, Status, Chunks, Concepts Extracted, Created At, Actions.
+  - Drawer: Shows raw document source text, chunk spans, extraction runs history, and failure reasons.
+- **Actions**:
+  - **Reprocess Document**: Idempotent re-run trigger. Creates a new extraction run, preserving history. Applies bounded retries and token budgeting.
+  - **Delete Document**: **Destructive Action**. Opens confirmation modal requiring typed input: `"DELETE <title>"`. Displays calculated consequences:
+    - Lists number of propositions that will be soft-retracted (propositions with zero remaining valid evidence).
+    - Lists number of concepts that will be flagged as orphaned.
+    - Requires typed confirmation. Executes in a single database transaction.
+
+---
+
+### Screen A6: Graph Data Administration (`/admin/graph`)
+- **Visuals**: Table and form management interface (Form/Table based utility, NOT a visual graph canvas).
+- **Tenant Context**: **Mandatory User Selector Dropdown** at the top. The admin explicitly selects a target user before any graph data is loaded.
+- **Tabs**:
+  1. **Concepts**:
+     - Search & List concepts for selected user.
+     - Actions: Edit name/description/type; manage aliases.
+     - **Merge Concepts**: Select Source Concept and Target Concept. Validates merge, updates proposition pointers, preserves extraction provenance, logs in `integration_events` and `admin_audit_log`.
+     - Archive Concept: Soft-archive concept if it has propositions; delete only if zero references exist.
+  2. **Propositions**:
+     - List propositions with Subject, Predicate, Object, Modality, Polarity, Evidence Quote.
+     - **Retract / Restore**: Soft-retracts proposition (`is_canonical = false`, `status = 'retracted'`).
+     - **Edit Qualifiers / Modality**: Requires typed reason; preserves prior state in history.
+     - **Manual Proposition Addition**: Form with Subject, Predicate, Object, Document ID, and Verbatim Evidence Quote.
+       - **Strict Invariant**: Enforces Go deterministic evidence validation. If quote is not found at verbatim offset in the selected document, the addition is **hard rejected**.
+  3. **Topics**:
+     - Create, rename, edit description, manage concept memberships.
+     - Mark manual edits as **User-Locked** so incremental auto-clustering does not overwrite them.
+  4. **Conflicts & Reviews**:
+     - List items needing review (conflicts, integration proposals).
+     - Actions: Resolve with recorded decision (`contextual_difference`, `contradiction`, `dismissed`, `insufficient_evidence`). Preserves both propositions and evidence.
+
+---
+
+### Screen A7: Admin Audit Log (`/admin/audit`)
+- **Visuals**: Chronological append-only event stream table.
+- **Filters**: Date range, Action Type (`user_suspend`, `user_delete`, `document_delete`, `concept_merge`, `proposition_retract`, `ai_gate_pause`, `ai_gate_resume`, `ai_probe`), Target Type.
+- **Columns**: Timestamp, Admin Email, Action, Target Type & ID, Affected User, Reason, Details.
+- **Detail Modal**: Side-by-side JSONB comparison of `before_state` and `after_state`.
+
+---
+
+## 4. Authorization & Error Flow Matrix `[Decided - CR-001]`
+
+| User Type | Route Requested | Server Response | Client Behavior |
+|---|---|---|---|
+| **Anonymous (No Cookie)** | `/admin/*` | HTTP 404 (or 401) | Redirect immediately to `/auth/login` |
+| **Regular User (`is_admin=false`)** | `/admin/*` | **HTTP 404 Not Found** | Renders 404 Page (Zero leak that admin route exists) |
+| **Suspended User** | `/admin/*` or `/api/*` | **HTTP 401 Unauthorized** | Revoked session; redirected to `/auth/login` |
+| **Admin (`is_admin=true`)** | `/admin/*` | **HTTP 200 OK** | Renders requested Admin screen with live data |

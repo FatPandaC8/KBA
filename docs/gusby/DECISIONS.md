@@ -55,3 +55,39 @@ This log records binding architectural decisions made during development. Every 
 - **Decision**:
   - Nuxt 3 with Tailwind CSS (configured for minimal, intellectual design system).
   - Graph rendering: Canvas/WebGL-accelerated library (e.g. Cytoscape.js with fcose/cola layout or D3 Force on 2D Canvas) capable of fluid 60fps rendering up to the enforced node cap (500 nodes per projection).
+
+### D08: Single-Owner Admin Role & Security Model
+- **Status**: Decided
+- **Context**: Operational monitoring and data administration are needed without the complexity of multi-admin RBAC or separate admin login portals.
+- **Decision**:
+  - `is_admin` boolean added to `gusby.users`. No public or user API can set or alter this flag.
+  - Bootstrapping: CLI command `gusby admin grant --email <email>` and env variable fallback `GUSBY_OWNER_EMAIL`.
+  - Server-side authorization middleware `RequireAdmin` returns HTTP 404 (or generic 403) to prevent endpoint enumeration by unauthorized users.
+  - Safeguards: Admin cannot suspend or delete self; the last remaining admin account cannot be removed or demoted. Destructive operations require explicit typed confirmation (`DELETE / CONFIRM`) both on client and server.
+  - Strict tenant scoping: Admin operations taking `user_id` strictly route through scoped repository queries (`WHERE user_id = $1`). Admin does not bypass multi-tenant isolation.
+
+### D09: AI Provider Contract, Observability & Circuit Breaker
+- **Status**: Decided
+- **Context**: Today the AI component uses Groq API; in the future a custom model built from research papers will be swapped in. The architecture must enable this swap cleanly with zero UI changes and strict observability.
+- **Decision**:
+  - Extend Go `LLMClient` with `Describe() ProviderDescription` and `Health(ctx) (ProviderHealth, error)`. `Health()` provides normalized status (`healthy`, `degraded`, `down`, `paused`, `unknown`) and a generic `details map[string]any` rendered as-is by the admin UI.
+  - Append-only `gusby.ai_call_log` records per-call metadata (latency, status, error class, token counts, retry count, run ID, user ID). Zero prompt, response, or document text is ever stored in this table. Retention default: 30 days.
+  - AI Gate & Circuit Breaker: Shared gate across all pipeline LLM calls with persistent state in `gusby.ai_gate_state` (`enabled`, `paused`, `circuit_open` with half-open recovery). Jobs wait (`waiting_for_ai`) rather than burn retries when paused or open.
+  - Active probe: Admin-initiated test call using a fixed harmless prompt, tiny token budget, logged and audited.
+
+### D10: Destructive Operation Semantics, Cascade Retraction & Auditability
+- **Status**: Decided
+- **Context**: The admin is powerful, but Gusby's core principle "precision over recall and 100% evidence validity" must never be violated by admin actions.
+- **Decision**:
+  - Document Deletion: In one transaction, delete document and raw evidence. Any canonical proposition left with zero valid evidence is soft-retracted (`status = 'retracted'`, hidden from normal views, preserved for audit). Concepts left with no document references are flagged `orphaned = true` for review.
+  - User Deletion: Hard delete of all user data in a single cascading transaction after typed confirmation. A minimal audit record is preserved in `admin_audit_log`.
+  - Manual Graph Edits: Any manually created proposition MUST cite a verbatim span from an existing document, validated by the deterministic evidence validator.
+  - Admin Audit Log: Append-only table `gusby.admin_audit_log` records every mutation, content access, and AI control action in the same transaction.
+
+### D11: Metrics Computation via PostgreSQL SQL Queries
+- **Status**: Decided
+- **Context**: Monitoring pipeline and user health without adding external infrastructure (no Prometheus, Grafana, or dedicated metric agents).
+- **Decision**:
+  - Pipeline health (queue depth, failure rates, stage latencies, stuck jobs) and user metrics are computed using optimized SQL queries with indexes over `gusby.processing_jobs`, `gusby.documents`, `gusby.users`, and `gusby.ai_call_log`.
+  - Paginated, filterable, with manual refresh and optional lightweight client polling.
+

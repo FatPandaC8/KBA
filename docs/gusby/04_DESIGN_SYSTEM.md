@@ -1,7 +1,7 @@
 # Gusby: Design System & Visual Specification (DESIGN_SYSTEM.md)
-**Version:** 1.0-draft  
-**Status:** In Review  
-**Source of Truth Precedence:** 00_PRODUCT_BRIEF.md > 04_DESIGN_SYSTEM.md > Prompt Defaults
+**Version:** 1.1 (Extended via CR-001)  
+**Status:** Approved & Binding  
+**Source of Truth Precedence:** 00_PRODUCT_BRIEF.md > 04_DESIGN_SYSTEM.md > DECISIONS.md > Prompt Defaults
 
 ---
 
@@ -16,6 +16,7 @@ Gusby is an **intellectual, editorial, and graph-first** workspace. It rejects t
 4. **Subtle Hairlines**: Borders are razor-thin (1px) with low-contrast neutral tones (`#E5E7EB` / `#E2E8F0`).
 5. **Earthy Preset Palettes**: Accents and node groupings rely on natural, mineral pigments (slate, terracotta, olive moss, ochre sand).
 6. **Subtle Motion**: All transitions are understated (150ms–250ms `cubic-bezier(0.16, 1, 0.3, 1)`), zero springy or bouncy cartoon physics.
+7. **Admin Utility Restraint**: Admin screens follow the identical design tokens. Tables, metrics cards, and SVG charts maintain editorial typography, razor hairlines, and whitespace. No flashy third-party admin templates.
 
 ---
 
@@ -58,102 +59,63 @@ Gusby is an **intellectual, editorial, and graph-first** workspace. It rejects t
 - Node Fill: `#F4F7F4` (Sage Mist)
 - Node Stroke: `#5A6B5C` (Lichen Green)
 - Edge Color: `#D4DDD5` (Earthy Willow)
-- Highlight / Evidence: `#FEF9C3` (Sunlit Grass) / Border `#65A30D`
+- Highlight / Evidence: `#ECFDF5` (Mint Leaf Glow) / Border `#059669`
 
-#### Preset 4: Ochre Sand
-- Primary Accent: `#6B4F1D` (Raw Umber)
-- Node Fill: `#FAF6ED` (Sand Tint)
-- Node Stroke: `#9A7B38` (Desert Ochre)
-- Edge Color: `#E8E2D5` (Linen Thread)
-- Highlight / Evidence: `#FEF3C7` (Amber Wash) / Border `#B45309`
-
-### 2.3. Semantic Status & Review Tokens
-- **Needs Review / Flagged**: `#D97706` (Warm Ochre Alert) / Badge `#FEF3C7`
-- **Conflict / Contradiction**: `#DC2626` (Muted Crimson) / Background `#FEE2E2`
-- **Verified / High Confidence**: `#16A34A` (Forest Green) / Background `#DCFCE7`
-- **Processing**: `#3B82F6` (Blueprint Blue) / Background `#EFF6FF`
+#### Preset 4: Desert Ochre
+- Primary Accent: `#785E2F` (Warm Ochre)
+- Node Fill: `#FBF8F1` (Sand Tint)
+- Node Stroke: `#A38042` (Raw Ochre)
+- Edge Color: `#E8E2D5` (Sand Cord)
+- Highlight / Evidence: `#FEF9C3` (Pale Sand Glow) / Border `#CA8A04`
 
 ---
 
-## 3. Typography Hierarchy `[Decided]`
+## 3. Typography & Typesetting `[Decided]`
 
-The typography mirrors modern editorial publishing. Clean, legible sans-serif with high contrast and structured rhythm:
-
-- **Font Family**: `Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`
-- **Code / Evidence Monospace**: `JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace`
-
-| Level | Size | Weight | Line Height | Tracking | Usage |
-|---|---|---|---|---|---|
-| **Display** | 24px (1.5rem) | 600 Semi-Bold | 1.25 | -0.02em | Space headers, screen titles |
-| **Heading 1** | 18px (1.125rem) | 600 Semi-Bold | 1.3 | -0.015em | Panel titles, topic headings |
-| **Heading 2** | 14px (0.875rem) | 600 Semi-Bold | 1.4 | -0.01em | Section titles, card headers |
-| **Body Primary** | 13px (0.8125rem) | 400 Regular | 1.5 | 0 | Descriptions, propositions, text |
-| **Body Semi-Bold**| 13px (0.8125rem) | 500 Medium | 1.5 | 0 | Concept labels, buttons, tabs |
-| **Caption / Meta**| 11px (0.6875rem) | 400 Regular | 1.4 | +0.01em | Timestamps, status, offsets |
-| **Evidence Span** | 12px (0.75rem) | 400 Regular | 1.6 | 0 | Verbatim cited quotes |
+- **Display & Headings**: Inter or system modern sans-serif (`font-sans`), weights 500 (Medium) and 600 (Semi-bold).
+- **Body Text**: Inter (`font-sans`), weight 400 (Regular), relaxed leading (`line-height: 1.625`), tracking slightly negative (`-0.011em`).
+- **Data, Offsets, Logs & Code**: JetBrains Mono or system monospace (`font-mono`), weight 400.
+- **Sizes**:
+  - Display / Hero: `text-2xl` (24px, 1.5rem, weight 600)
+  - Section Headings: `text-lg` (18px, 1.125rem, weight 600)
+  - Card Titles: `text-sm` (14px, 0.875rem, weight 600)
+  - Body: `text-sm` (14px, 0.875rem, weight 400)
+  - Captions / Meta / Badges: `text-xs` (12px, 0.75rem, weight 500)
 
 ---
 
-## 4. UI Components & Layout Guidelines `[Decided]`
+## 4. Admin Component & Visual Specifications `[Decided - CR-001]`
 
-### 4.1. Left Navigation Bar
-- Width: Fixed `56px`.
-- Background: Pure White (`#FFFFFF`).
-- Border: 1px right hairline (`#E5E7EB`).
-- Icons: Clean 20px geometric line icons (`lucide-vue-next` or SVG).
-- Active State: Clean dark ink icon with subtle 2px left indicator bar.
+### 4.1. Status Badges & Semantic Colors
+All badges use muted backgrounds with saturated text and hairline borders:
+- **Healthy / Enabled / Completed**: Background `#ECFDF5`, Border `#A7F3D0`, Text `#065F46` (Emerald).
+- **Degraded / Circuit Open / Needs Review**: Background `#FFFBEB`, Border `#FDE68A`, Text `#92400E` (Warm Amber).
+- **Down / Failed / Error / Retracted**: Background `#FEF2F2`, Border `#FECACA`, Text `#991B1B` (Ruby Crimson).
+- **Paused / Waiting for AI / Queued**: Background `#F8FAFC`, Border `#E2E8F0`, Text `#475569` (Cool Slate).
 
-### 4.2. Knowledge Space Canvas
-- Background: `#FFFFFF` with optional faint grid dots (`rgba(0,0,0,0.03)` spaced at 32px).
-- Floating Search Bar:
-  - Width: `420px`, Height: `40px`.
-  - Background: `rgba(255, 255, 255, 0.94)` with `backdrop-filter: blur(8px)`.
-  - Border: 1px solid `#E5E7EB`, shadow: `0 4px 16px rgba(0,0,0,0.04)`.
-  - Corner radius: `8px`.
+### 4.2. Metric Cards & KPI Layout
+- **Card Container**: Pure white background (`bg-white`), 1px hairline border (`border border-gray-200`), rounded corners (`rounded-lg`), subtle shadow (`shadow-sm`), generous padding (`p-5`).
+- **Label**: `text-xs font-medium text-gray-500 uppercase tracking-wider`.
+- **Value**: `text-2xl font-semibold text-gray-900 tracking-tight font-sans` or `font-mono`.
+- **Sub-label / Trend**: `text-xs text-gray-500 mt-1`.
 
-### 4.3. Right Detail Drawer (Inspector)
-- Width: `420px`.
-- Slide-over transition: `transform 220ms ease-out`.
-- Header: Entity / Topic title, type badge, confidence pill, close button.
-- Body: Scrollable tabbed view (Propositions, Evidence, Provenance, Review Actions).
+### 4.3. Lightweight Inline SVG Charts
+- **No external chart libraries**: Zero dependency on Chart.js, Highcharts, or D3 bundle bloat.
+- **Sparklines & Area Charts**:
+  - Implemented as responsive `<svg viewBox="0 0 300 60" preserveAspectRatio="none">`.
+  - Stroke: 1.5px hairline (`stroke-gray-800` or `stroke-emerald-600`).
+  - Fill: Subtle gradient to transparent (`stop-opacity="0.12"` to `stop-opacity="0.0"`).
+  - Gridlines: Minimal horizontal guidelines (`stroke-dasharray="2,2"` with `#F3F4F6`).
 
-### 4.4. Buttons & Form Controls
-- **Primary Button**: Background `var(--text-primary)`, Text `#FFFFFF`, rounded `6px`, padding `8px 16px`, font-size `13px`, font-weight `500`. Hover: opacity `0.9`.
-- **Secondary / Ghost Button**: Background `transparent`, Border 1px solid `#E5E7EB`, Text `var(--text-primary)`, rounded `6px`.
-- **Text Inputs**: Border 1px solid `#E5E7EB`, focus ring: `2px solid var(--text-primary)`.
+### 4.4. Data Tables
+- **Container**: `bg-white border border-gray-200 rounded-lg overflow-hidden`.
+- **Header**: `bg-gray-50/70 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wider py-3 px-4`.
+- **Row**: `border-b border-gray-100 hover:bg-gray-50/50 transition-colors py-3 px-4 text-sm text-gray-700`.
+- **Empty State**: Centered icon, muted headline, subtle description, generous vertical padding (`py-12`).
 
----
-
-## 5. Graph Rendering & Semantic Zoom Visual Rules `[Decided]`
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'background': 'transparent', 'clusterBkg': 'none' }}}%%
-flowchart TD
-    Z1["ZOOM LEVEL 1: FAR (0.2x - 0.5x)<br/>Topic Islands: Soft semi-transparent halos (opacity 0.08)<br/>Topic Centroid with large title (16px)"]
-    Z2["ZOOM LEVEL 2: MID (0.5x - 1.2x)<br/>Main Concepts: Circles (radius 18px), stroke 1.5px<br/>Labels below nodes (12px, ink black)"]
-    Z3["ZOOM LEVEL 3: DEEP (1.2x - 2.5x)<br/>Full Concept Subgraph & Proposition Edges<br/>Edge lines: 1px width with directed arrowheads"]
-    Z4["ZOOM LEVEL 4: INSPECTION<br/>Node clicked: Glowing halo + Right Drawer slides in<br/>Exact Verbatim Evidence rendered in reader"]
-    
-    Z1 --> Z2 --> Z3 --> Z4
-```
-
-### Node Styling Specifications:
-- **Concept Node**:
-  - Shape: Perfect circle.
-  - Normal State: Radius `14px`, Fill `var(--node-fill)`, Border `1.5px solid var(--node-stroke)`.
-  - Hover State: Radius `16px`, Border `2px solid var(--text-primary)`.
-  - Selected State: Radius `16px`, Outer ring `4px solid rgba(44, 62, 80, 0.15)`.
-  - Flagged for Review: Terracotta badge dot (`6px`) at top-right corner.
-- **Edge Styling**:
-  - Line: Clean solid line, width `1px`, color `var(--edge-color)`.
-  - Arrowhead: Minimal geometric chevron (`size 6px`).
-  - Predicate Label: Displayed on hover or deep zoom at midpoint in 10px muted text.
-  - Conflicting Edge: Dashed line (`4px dash, 4px gap`), color `#DC2626`.
-
-### Evidence Highlighting:
-- Exact character span rendered with:
-  ```html
-  <span class="px-1 py-0.5 rounded bg-amber-100 text-stone-900 border-b border-amber-500 font-normal">
-    "verbatim quote from original document"
-  </span>
-  ```
+### 4.5. Destructive Confirmation Modals
+- **Backdrop**: `bg-black/25 backdrop-blur-xs`.
+- **Dialog Surface**: Pure white `bg-white border border-gray-200 rounded-xl shadow-xl max-w-lg p-6`.
+- **Warning Header**: Red warning icon badge (`bg-red-50 text-red-600 border border-red-100 p-2 rounded-full`).
+- **Consequence Summary**: Bordered amber/red callout detailing exact items affected (e.g. `"Deleting this document will soft-retract 4 canonical propositions."`).
+- **Typed Input Requirement**: Monospace input (`font-mono border border-gray-300 focus:border-red-500`) requiring exact string match. Submit button remains disabled until exact match is typed.
