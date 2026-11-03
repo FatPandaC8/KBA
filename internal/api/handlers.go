@@ -14,6 +14,7 @@ import (
 	"gusby/internal/config"
 	"gusby/internal/graph"
 	"gusby/internal/ingest"
+	"gusby/internal/llm"
 	"gusby/internal/store"
 )
 
@@ -21,13 +22,25 @@ type Server struct {
 	cfg         *config.Config
 	store       *store.Store
 	authService *auth.Service
+	llmClient   llm.LLMClient
+	gate        *llm.AIGate
 }
 
-func NewServer(cfg *config.Config, s *store.Store) *Server {
+func NewServer(cfg *config.Config, s *store.Store, client ...llm.LLMClient) *Server {
+	var c llm.LLMClient
+	if len(client) > 0 && client[0] != nil {
+		c = client[0]
+	} else {
+		c = llm.NewMockClient("{}")
+	}
+	gate := llm.NewAIGate(s, c, 3)
+
 	return &Server{
 		cfg:         cfg,
 		store:       s,
 		authService: auth.NewService(s),
+		llmClient:   c,
+		gate:        gate,
 	}
 }
 

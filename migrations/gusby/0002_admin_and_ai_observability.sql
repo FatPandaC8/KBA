@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS gusby.admin_audit_log (
     action_type TEXT NOT NULL,
     target_type TEXT NOT NULL,
     target_id UUID,
-    target_user_id UUID REFERENCES gusby.users(id),
+    target_user_id UUID REFERENCES gusby.users(id) ON DELETE SET NULL,
     reason TEXT,
     before_state JSONB,
     after_state JSONB,

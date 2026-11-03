@@ -76,7 +76,7 @@ func main() {
 	log.Printf("[Gusby] Background queue worker started (SKIP LOCKED polling)")
 
 	// 4. Initialize HTTP Server
-	server := api.NewServer(cfg, dbStore)
+	server := api.NewServer(cfg, dbStore, llmClient)
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.Port),
 		Handler:      server.Routes(),
