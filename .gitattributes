@@ -1,7 +1,3 @@
-# Exclude any lingering Dart or Python files if they are still in history or vendored folders
-*.dart linguist-detectable=false
-*.py linguist-detectable=false
-
 # Force GitHub to detect your Go backend
 *.go linguist-detectable=true
 
