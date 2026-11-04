@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # ============================================================================
@@ -65,7 +65,7 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y postgresql-client
           chmod +x ./scripts/migrate.sh
-          DATABASE_URL="postgresql://gusby_test_user:test_secure_password_123@127.0.0.1:5432/gusby_test?sslmode=disable" ./scripts/migrate.sh
+          DATABASE_URL="postgresql://gusby_test_user:test_secure_password_123@127.0.0.1:5432/gusby_test?sslmode=disable" BACKUP_BEFORE_MIGRATE=false ./scripts/migrate.sh up
 
       - name: Run Go Unit & Integration Tests (with Race Detector)
         env:
@@ -73,7 +73,7 @@ jobs:
           GUSBY_ENV: test
           SKIP_LIVE_GROQ_TEST: "true"
         run: |
-          go test -race -v -count=1 ./internal/... ./tests/admin/... ./eval/gusby/...
+          go test -race -v -count=1 ./...
 
       - name: Build Go Backend Binary
         run: |
@@ -165,12 +165,36 @@ jobs:
       - name: Install PostgreSQL Client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: Run Initial Database Migration
+      - name: Validate Database Migrations
         env:
           DATABASE_URL: "postgresql://gusby_migrator:migrator_password_secure@127.0.0.1:5432/gusby_migration_test?sslmode=disable"
         run: |
           chmod +x ./scripts/migrate.sh
-          ./scripts/migrate.sh
+          ./scripts/migrate.sh validate
+
+      - name: Test Incremental Schema Migration & Data Preservation
+        env:
+          DB_URL: "postgresql://gusby_migrator:migrator_password_secure@127.0.0.1:5432/gusby_migration_test?sslmode=disable"
+        run: |
+          # 1. Apply initial migration (0001)
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -f migrations/gusby/0001_initial_schema.sql
+          
+          # 2. Insert representative live data into 0001 schema
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -c "
+            INSERT INTO gusby.users (email, email_normalized, password_hash)
+            VALUES ('ci_user@gusby.local', 'ci_user@gusby.local', 'dummy_hash_for_test');
+          "
+          
+          # 3. Apply pending migrations using migrate.sh up
+          BACKUP_BEFORE_MIGRATE=false DATABASE_URL="$DB_URL" ./scripts/migrate.sh up
+          
+          # 4. Verify data preservation and new columns from 0002
+          USER_COUNT=$(psql "$DB_URL" -t -A -c "SELECT count(*) FROM gusby.users WHERE email = 'ci_user@gusby.local' AND is_admin = false AND status = 'active';")
+          if [ "$USER_COUNT" != "1" ]; then
+            echo "Error: Pre-existing user record was corrupted or altered during migration!"
+            exit 1
+          fi
+          echo "Incremental migration preserved pre-existing data successfully."
 
       - name: Verify Required Extensions & Schemas
         env:
@@ -179,11 +203,11 @@ jobs:
           psql "$DB_URL" -c "SELECT extname FROM pg_extension WHERE extname = 'pg_trgm';" | grep -q "pg_trgm" || (echo "pg_trgm extension missing!" && exit 1)
           psql "$DB_URL" -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'gusby';"
 
-      - name: Test Migration Idempotency (Second Execution Must Not Fail)
+      - name: Test Migration Idempotency (Second Execution Must Report No Pending Migrations)
         env:
           DATABASE_URL: "postgresql://gusby_migrator:migrator_password_secure@127.0.0.1:5432/gusby_migration_test?sslmode=disable"
         run: |
-          ./scripts/migrate.sh
+          BACKUP_BEFORE_MIGRATE=false ./scripts/migrate.sh up
 
   # ============================================================================
   # 4. Security & Vulnerability Audits

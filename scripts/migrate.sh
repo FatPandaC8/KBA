@@ -45,16 +45,19 @@ if [[ "$DB_URL" =~ /server_lab([?].*)?$ ]]; then
 fi
 
 # Locate psql
-PSQL_CMD=""
-if command -v psql &> /dev/null; then
-    PSQL_CMD="psql"
-elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "kba-postgres"; then
-    PSQL_CMD="docker exec -i kba-postgres psql"
-else
-    echo "Error: 'psql' client utility is not installed or not in PATH." >&2
-    echo "On Termux: pkg install postgresql" >&2
-    echo "On Ubuntu/Debian: sudo apt-get install postgresql-client" >&2
-    exit 1
+PSQL_CMD="${PSQL_CMD:-}"
+if [[ -z "$PSQL_CMD" ]]; then
+    if command -v psql &> /dev/null; then
+        PSQL_CMD="psql"
+    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -E -q "kba-postgres|gusby.*pg|postgres"; then
+        PG_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "kba-postgres|gusby.*pg|postgres" | head -n 1)
+        PSQL_CMD="docker exec -i $PG_CONTAINER psql"
+    else
+        echo "Error: 'psql' client utility is not installed or not in PATH." >&2
+        echo "On Termux: pkg install postgresql" >&2
+        echo "On Ubuntu/Debian: sudo apt-get install postgresql-client" >&2
+        exit 1
+    fi
 fi
 
 MIGRATIONS_DIR="$ROOT_DIR/migrations/gusby"
@@ -74,7 +77,7 @@ run_sql() {
     if [[ "$PSQL_CMD" == *"docker exec"* ]]; then
         $PSQL_CMD "$DB_URL" -v ON_ERROR_STOP=1 -t -A -c "$sql"
     else
-        psql "$DB_URL" -v ON_ERROR_STOP=1 -t -A -c "$sql"
+        $PSQL_CMD "$DB_URL" -v ON_ERROR_STOP=1 -t -A -c "$sql"
     fi
 }
 
@@ -83,7 +86,7 @@ run_file() {
     if [[ "$PSQL_CMD" == *"docker exec"* ]]; then
         $PSQL_CMD "$DB_URL" -v ON_ERROR_STOP=1 < "$file"
     else
-        psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$file"
+        $PSQL_CMD "$DB_URL" -v ON_ERROR_STOP=1 -f "$file"
     fi
 }
 

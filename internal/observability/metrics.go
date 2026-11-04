@@ -14,29 +14,29 @@ import (
 
 type Metrics struct {
 	// HTTP Metrics
-	HTTPRequestsTotal     *prometheus.CounterVec
-	HTTPRequestDuration   *prometheus.HistogramVec
-	HTTPErrorsTotal       *prometheus.CounterVec
-	HTTPActiveRequests    prometheus.Gauge
+	HTTPRequestsTotal   *prometheus.CounterVec
+	HTTPRequestDuration *prometheus.HistogramVec
+	HTTPErrorsTotal     *prometheus.CounterVec
+	HTTPActiveRequests  prometheus.Gauge
 
 	// Database Metrics
-	DBPoolConnections     *prometheus.GaugeVec
-	DBQueryDuration       *prometheus.HistogramVec
+	DBPoolConnections *prometheus.GaugeVec
+	DBQueryDuration   *prometheus.HistogramVec
 
 	// Queue Worker Metrics
-	QueueJobsTotal        *prometheus.CounterVec
-	QueueJobDuration      *prometheus.HistogramVec
-	QueueActiveJobs       prometheus.Gauge
+	QueueJobsTotal   *prometheus.CounterVec
+	QueueJobDuration *prometheus.HistogramVec
+	QueueActiveJobs  prometheus.Gauge
 
 	// AI Provider Metrics
-	AIRequestsTotal       *prometheus.CounterVec
-	AIRequestDuration     *prometheus.HistogramVec
-	AITokensTotal         *prometheus.CounterVec
+	AIRequestsTotal   *prometheus.CounterVec
+	AIRequestDuration *prometheus.HistogramVec
+	AITokensTotal     *prometheus.CounterVec
 
 	// System & Process Info
-	ProcessStartTime      time.Time
-	ProcessUptimeGauge    prometheus.Gauge
-	BuildInfoGauge        *prometheus.GaugeVec
+	ProcessStartTime   time.Time
+	ProcessUptimeGauge prometheus.Gauge
+	BuildInfoGauge     *prometheus.GaugeVec
 }
 
 var globalMetrics *Metrics

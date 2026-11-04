@@ -71,34 +71,91 @@ echo "========================================================================"
 # ------------------------------------------------------------------------------
 # Step 1 & 2: Identify Eligible Commit SHA & CI Verification Status
 # ------------------------------------------------------------------------------
-TARGET_COMMIT="${1:-}"
+TARGET_COMMIT=""
+FORCE_UNVERIFIED=false
+
+for arg in "$@"; do
+    if [[ "$arg" == "--force-unverified" ]]; then
+        FORCE_UNVERIFIED=true
+    elif [[ -z "$TARGET_COMMIT" ]] && [[ "$arg" != --* ]]; then
+        TARGET_COMMIT="$arg"
+    fi
+done
+
+REPO_NAME="FatPandaC8/KBA"
 
 if [[ -z "$TARGET_COMMIT" ]]; then
-    echo "[Step 1/14] Querying latest verified commit on main branch..."
-    REPO_NAME="FatPandaC8/KBA"
+    echo "[Step 1/14] Discovering latest CI-verified commit on main branch..."
     
-    # Check if gh CLI or curl is available
+    # Method A: GitHub CLI
     if command -v gh &> /dev/null && gh auth status &> /dev/null; then
-        echo "[Step 1/14] Using GitHub CLI to verify latest successful CI commit..."
-        LATEST_RUN=$(gh run list --repo "$REPO_NAME" --branch main --workflow "Gusby Production CI" --status success --limit 1 --json headSha,conclusion -q '.[0].headSha' || true)
-        if [[ -n "$LATEST_RUN" ]]; then
+        echo "[Step 1/14] Querying GitHub via gh CLI..."
+        LATEST_RUN=$(gh run list --repo "$REPO_NAME" --branch main --workflow "Gusby Production CI" --status success --limit 1 --json headSha -q '.[0].headSha' 2>/dev/null || true)
+        if [[ -n "$LATEST_RUN" && "$LATEST_RUN" != "null" ]]; then
             TARGET_COMMIT="$LATEST_RUN"
-            echo "[Step 2/14] Selected CI-verified commit: $TARGET_COMMIT"
+        fi
+    fi
+
+    # Method B: GitHub Public REST API via curl + jq
+    if [[ -z "$TARGET_COMMIT" ]] && command -v curl &> /dev/null && command -v jq &> /dev/null; then
+        echo "[Step 1/14] Querying GitHub Actions REST API for verified main runs..."
+        API_RESP=$(curl -sSf -H "Accept: application/vnd.github.v3+json" --max-time 10 "https://api.github.com/repos/$REPO_NAME/actions/runs?branch=main&status=success&per_page=5" 2>/dev/null || true)
+        if [[ -n "$API_RESP" ]]; then
+            TARGET_COMMIT=$(echo "$API_RESP" | jq -r '.workflow_runs[] | select(.name == "Gusby Production CI" and .conclusion == "success") | .head_sha' | head -n 1 || true)
+            if [[ "$TARGET_COMMIT" == "null" ]]; then
+                TARGET_COMMIT=""
+            fi
         fi
     fi
 
     if [[ -z "$TARGET_COMMIT" ]]; then
-        # Fallback to local git commit if working directly in repository
-        if git rev-parse --is-inside-work-tree &> /dev/null; then
-            TARGET_COMMIT=$(git rev-parse HEAD)
-            echo "[Step 2/14] Using local repository HEAD commit: $TARGET_COMMIT"
+        if [[ "$FORCE_UNVERIFIED" == "true" ]]; then
+            if git rev-parse --is-inside-work-tree &> /dev/null; then
+                TARGET_COMMIT=$(git rev-parse HEAD)
+                echo "[Step 2/14] WARNING: No verified CI commit found on main. Using local HEAD due to --force-unverified: $TARGET_COMMIT" >&2
+            else
+                echo "Error: Could not determine target commit SHA and host is not inside a git repository." >&2
+                exit 1
+            fi
         else
-            echo "Error: Could not determine target commit SHA. Provide commit SHA as argument: $0 <commit_sha>" >&2
+            echo "========================================================================" >&2
+            echo "DEPLOYMENT GATING FAILURE: No CI-verified commit found on 'main' branch." >&2
+            echo "Gusby deployment gating requires that 'Gusby Production CI' passed on GitHub." >&2
+            echo "Check GitHub Actions: https://github.com/$REPO_NAME/actions" >&2
+            echo "To override ONLY in an emergency disaster recovery scenario, run:" >&2
+            echo "  $0 <commit_sha> --force-unverified" >&2
+            echo "========================================================================" >&2
             exit 1
         fi
+    else
+        echo "[Step 2/14] Selected verified commit from passing CI run: $TARGET_COMMIT"
     fi
 else
     echo "[Step 2/14] Target commit explicitly requested: $TARGET_COMMIT"
+    
+    # Verify the requested commit has passed CI
+    if [[ "$FORCE_UNVERIFIED" != "true" ]]; then
+        echo "[Step 2/14] Verifying CI status for requested commit $TARGET_COMMIT..."
+        CI_CONCLUSION=""
+        if command -v curl &> /dev/null && command -v jq &> /dev/null; then
+            RUNS_JSON=$(curl -sSf -H "Accept: application/vnd.github.v3+json" --max-time 10 "https://api.github.com/repos/$REPO_NAME/actions/runs?head_sha=$TARGET_COMMIT" 2>/dev/null || true)
+            if [[ -n "$RUNS_JSON" ]]; then
+                CI_CONCLUSION=$(echo "$RUNS_JSON" | jq -r '.workflow_runs[] | select(.name == "Gusby Production CI") | .conclusion' | head -n 1 || true)
+            fi
+        fi
+
+        if [[ "$CI_CONCLUSION" != "success" ]]; then
+            echo "========================================================================" >&2
+            echo "DEPLOYMENT GATING VIOLATION: Commit $TARGET_COMMIT has not passed CI!" >&2
+            echo "Observed CI Conclusion: '${CI_CONCLUSION:-not found / pending}'" >&2
+            echo "Gating contract strictly prohibits deploying failing, pending, or unverified commits." >&2
+            echo "========================================================================" >&2
+            exit 1
+        fi
+        echo "[Step 2/14] CI Verification confirmed: Gusby Production CI passed."
+    else
+        echo "[Step 2/14] WARNING: Skipping CI verification due to --force-unverified flag." >&2
+    fi
 fi
 
 SHORT_SHA="${TARGET_COMMIT:0:7}"
@@ -140,7 +197,7 @@ fi
 echo "[Step 5/14] Validating runtime dependencies and environment..."
 
 # Check required binaries
-for cmd in go node npm psql nginx pm2; do
+for cmd in go node npm psql nginx pm2 curl jq tar gzip; do
     if ! command -v "$cmd" &> /dev/null; then
         echo "Error: Required command '$cmd' is not found in PATH." >&2
         exit 1

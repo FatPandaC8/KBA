@@ -49,15 +49,18 @@ echo "[Gusby Backup] Starting $BACKUP_TYPE backup..."
 echo "[Gusby Backup] Target directory: $BACKUP_DIR"
 
 # Check pg_dump availability
-PG_DUMP_CMD=""
-if command -v pg_dump &> /dev/null; then
-    PG_DUMP_CMD="pg_dump"
-elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "kba-postgres"; then
-    PG_DUMP_CMD="docker exec -i kba-postgres pg_dump"
-else
-    echo "Error: 'pg_dump' utility is not found." >&2
-    echo "On Termux: pkg install postgresql" >&2
-    exit 1
+PG_DUMP_CMD="${PG_DUMP_CMD:-}"
+if [[ -z "$PG_DUMP_CMD" ]]; then
+    if command -v pg_dump &> /dev/null; then
+        PG_DUMP_CMD="pg_dump"
+    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -E -q "kba-postgres|gusby.*pg|postgres"; then
+        PG_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "kba-postgres|gusby.*pg|postgres" | head -n 1)
+        PG_DUMP_CMD="docker exec -i $PG_CONTAINER pg_dump"
+    else
+        echo "Error: 'pg_dump' utility is not found." >&2
+        echo "On Termux: pkg install postgresql" >&2
+        exit 1
+    fi
 fi
 
 # Execute dump of the 'gusby' schema with compression
