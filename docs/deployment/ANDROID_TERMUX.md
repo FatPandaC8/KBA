@@ -49,11 +49,11 @@ Only 4 core services run:
 └── ecosystem.config.cjs
 
 ~/services/gusby/                # Production runtime directory
-├── bin/gusby                    # Compiled Go backend binary
+├── .env                         # Production environment configuration (chmod 600)
+├── bin/
+│   └── gusby                    # Compiled Go backend binary
 ├── frontend/                    # Generated static Nuxt SPA assets
-├── logs/                        # Backend logs (backend-out.log, backend-err.log)
-├── backups/                     # Database backups
-└── .env                         # Production environment secrets (chmod 600)
+└── logs/                        # Backend logs (backend-out.log, backend-err.log)
 ```
 
 ---
@@ -88,7 +88,7 @@ psql -d gusby_db -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
 
 ### Step 3.3: Clone Repository & Create Production Directory
 ```bash
-mkdir -p ~/apps ~/services/gusby/bin ~/services/gusby/frontend ~/services/gusby/logs ~/services/gusby/backups
+mkdir -p ~/apps ~/services/gusby/bin ~/services/gusby/frontend ~/services/gusby/logs ~/backups/gusby
 git clone https://github.com/FatPandaC8/KBA.git ~/apps/gusby
 cd ~/apps/gusby
 
@@ -140,13 +140,16 @@ Or deploy a specific CI-verified commit SHA:
 ```
 
 What `deploy.sh` does:
-1. Checks that required commands exist (`go`, `node`, `npm`, `pm2`, `curl`, `jq`, `git`).
-2. Verifies via GitHub Actions API that `Gusby Production CI` completed with `success` for the commit.
-3. Compiles the Go backend to `~/services/gusby/bin/gusby`.
-4. Generates the static Nuxt frontend (`npm ci` and `npm run generate`).
-5. Copies static frontend assets to `~/services/gusby/frontend/`.
-6. Restarts `gusby-backend` in PM2.
-7. Runs `deploy/termux/verify.sh` to confirm health.
+1. Verifies required tools (`go`, `node`, `npm`, `pm2`, `curl`, `jq`, `git`).
+2. Verifies production `.env` exists and has safe permissions (`chmod 600`).
+3. Verifies the target commit passed the required GitHub Actions CI workflow (`Gusby Production CI`).
+4. Builds the Go backend binary for the Termux ARM64 host.
+5. Generates the Nuxt static frontend SPA (`npm ci` and `npm run generate`).
+6. Copies the generated frontend static assets into `~/services/gusby/frontend/`.
+7. Replaces the backend binary in `~/services/gusby/bin/gusby`.
+8. Restarts the existing PM2 backend process with `--update-env`, or starts it if not running.
+9. Runs mandatory deployment verification (`deploy/termux/verify.sh`).
+10. Reports the deployed commit SHA.
 
 Normal deployment **never** touches or restarts PostgreSQL, and never runs migrations.
 
@@ -203,8 +206,8 @@ pm2 logs gusby-backend
 tail -f ~/services/gusby/logs/backend-out.log
 tail -f ~/services/gusby/logs/backend-err.log
 
-# Restart backend process
-pm2 restart gusby-backend
+# Restart backend process (reloading environment configuration)
+pm2 restart gusby-backend --update-env
 
 # Reload Nginx configuration
 nginx -t && nginx -s reload

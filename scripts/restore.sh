@@ -62,6 +62,12 @@ if [[ "$ACTUAL_DB" == "server_lab" || -z "$ACTUAL_DB" ]]; then
     exit 1
 fi
 
+EXPECTED_DB="${GUSBY_EXPECTED_DB:-gusby_db}"
+if [[ "$ACTUAL_DB" != "$EXPECTED_DB" ]]; then
+    echo "CRITICAL SAFETY ERROR: Connected DB '$ACTUAL_DB' does not match expected database '$EXPECTED_DB'." >&2
+    exit 1
+fi
+
 # Verify archive integrity
 if ! gzip -t "$BACKUP_FILE" 2>/dev/null; then
     echo "Error: File is not a valid gzip archive: $BACKUP_FILE" >&2

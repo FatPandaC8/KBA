@@ -14,10 +14,10 @@ flowchart LR
     Dev["1. Local Dev\n(Go & Nuxt)"] --> PR["2. Pull Request\n& Peer Review"]
     PR --> CI["3. Automated CI\n(4 Test Suites)"]
     CI --> Release["4. Release\n(SHA Anchored)"]
-    Release --> Deploy["5. Termux Deploy\n(Atomic Symlink)"]
+    Release --> Deploy["5. Termux Deploy\n(Direct Deployment)"]
     Deploy --> Verify["6. Production\nVerification"]
     Verify --> Obs["7. Observability\n& Incident Response"]
-    Verify -.->|On Failure| Rollback["Safe Rollback\n(Previous Symlink)"]
+    Verify -.->|On Failure| Rollback["Safe Rollback\n(Redeploy Previous Commit)"]
 ```
 
 ---

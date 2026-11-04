@@ -80,14 +80,14 @@ pg_isready -h 127.0.0.1 -p 5432
 1. Check disk utilization: `df -h /data`.
 2. Prune old backups (keep latest 3):
    ```bash
-   ls -lt backups/gusby_*.sql.gz | tail -n +4 | awk '{print $9}' | xargs rm -f
+   ls -lt ~/backups/gusby/gusby_*.sql.gz | tail -n +4 | awk '{print $9}' | xargs rm -f
    ```
 3. Truncate application logs: `pm2 flush`.
-4. Clean old build releases:
+4. Clean build artifacts and temporary files:
    ```bash
-   ls -dt releases/release-* | tail -n +3 | xargs rm -rf
+   cd ~/apps/gusby && rm -rf frontend/.nuxt frontend/.output bin/*.build
    ```
-5. Restart PostgreSQL and backend if needed.
+5. Restart backend if needed: `pm2 restart gusby-backend --update-env`.
 
 ---
 
@@ -136,21 +136,25 @@ pg_isready -h 127.0.0.1 -p 5432
 ### Runbook 7: Failed Deployment
 **Symptoms**: Deployment script exits with non-zero code or verification fails.  
 **Action Steps**:
-1. `deploy/termux/deploy.sh` automatically executes `deploy/termux/rollback.sh` on failure.
-2. Verify rollback succeeded:
+1. Inspect deployment terminal output or backend error logs:
    ```bash
-   ./deploy/termux/status.sh
+   tail -n 100 ~/services/gusby/logs/backend-err.log
    ```
-3. Inspect deployment failure logs:
+2. Verify current service status:
    ```bash
-   tail -n 100 state/deployment-history.json.log
+   ~/apps/gusby/deploy/termux/status.sh
    ```
-4. Fix root cause locally, run CI, and re-deploy.
+3. If necessary, execute manual rollback by redeploying the previous CI-verified commit:
+   ```bash
+   cd ~/apps/gusby
+   ./deploy/termux/deploy.sh <previous_ci_verified_commit_sha>
+   ```
+4. Verify system health with `deploy/termux/verify.sh`.
 
 ---
 
 ### Runbook 8: Failed Database Migration
-**Symptoms**: `./scripts/migrate.sh up` failed during deployment.  
+**Symptoms**: Manual `./scripts/migrate.sh up` execution failed with an error.  
 **Action Steps**:
 1. Note the failing migration file name and error message from `migrate.sh` output.
 2. Inspect `gusby.schema_migrations`:

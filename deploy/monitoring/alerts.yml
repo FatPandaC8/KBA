@@ -85,7 +85,7 @@ groups:
         annotations:
           summary: "Low disk space on Xperia storage (< 15% available)"
           description: "Host file system has less than 15% remaining storage."
-          investigation: "1. Inspect backup directory ('du -sh ./backups'). 2. Prune old PM2 logs ('pm2 flush'). 3. Remove stale build artifacts in releases/."
+          investigation: "1. Inspect backup directory ('du -sh ~/backups'). 2. Prune old PM2 logs ('pm2 flush'). 3. Remove stale build artifacts in ~/apps/gusby."
 
       - alert: GusbyMemoryPressure
         expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 < 15

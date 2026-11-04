@@ -60,7 +60,14 @@ if [[ "$ready_resp" == *"server_lab"* ]]; then
     echo "CRITICAL ERROR: Backend is connected to 'server_lab'! Refusing verification." >&2
     exit 1
 fi
-echo "[OK] Database: Connected to dedicated database (server_lab protected)"
+
+EXPECTED_DB="${GUSBY_EXPECTED_DB:-gusby_db}"
+if [[ "$ready_resp" != *"\"database_name\":\"$EXPECTED_DB\""* ]]; then
+    echo "CRITICAL ERROR: Connected database does not match expected database '$EXPECTED_DB'!" >&2
+    echo "$ready_resp" >&2
+    exit 1
+fi
+echo "[OK] Database: Connected to '$EXPECTED_DB' (server_lab protected)"
 
 # 4. Frontend SPA through Nginx (:8080/)
 fe_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$TIMEOUT_SEC" "$NGINX_URL/" || true)

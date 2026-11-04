@@ -28,19 +28,19 @@ flowchart TD
         ParallelJobs --> Gate
     end
 
-    subgraph CD["Release & Deployment Gating (Termux VPS)"]
+    subgraph CD["Deployment Gating (Termux Host)"]
         Gating["Deployment Gating Contract\n- Query GitHub API for commit SHA\n- Require 'Gusby Production CI' == success\n- Reject failing/pending/unverified commits"]
-        Atomic["Atomic Symlink Deployment\n- Wake lock & flock mutex\n- Pre-migration backup snapshot\n- Incremental migration up\n- Atomic symlink switch\n- PM2 reload: gusby-backend"]
-        Verify["Multi-Tier Verification (verify.sh)\n- Tier 1: Liveness (:8081/api/health/live)\n- Tier 2: Readiness (:8081/api/health/ready)\n- Tier 3: Frontend SPA (:8080/)\n- Tier 4: Reverse Proxy Routing\n- Tier 5: Prometheus Telemetry\n- Tier 6: API Contract Smoke Test"]
-        Rollback["Automated Rollback (rollback.sh)\nTriggered if verify.sh fails"]
+        Direct["Direct Service Deployment (deploy.sh)\n- Wake lock & flock mutex\n- Build ARM64 Go backend\n- Build Nuxt static frontend\n- Replace bin/gusby & frontend/\n- Restart PM2 with --update-env"]
+        Verify["Mandatory Verification (verify.sh)\n- Liveness (:8081/api/health/live)\n- Readiness (:8081/api/health/ready)\n- Dedicated DB (gusby_db)\n- Frontend SPA (:8080/)\n- Nginx Reverse Proxy"]
+        Rollback["Manual Rollback\nRedeploy previous CI-verified commit"]
     end
 
     PR --> ParallelJobs
     Push --> ParallelJobs
     Gate --> Gating
-    Gating --> Atomic
-    Atomic --> Verify
-    Verify -- "Failure" --> Rollback
+    Gating --> Direct
+    Direct --> Verify
+    Verify -.->|On Failure| Rollback
 ```
 
 ---
@@ -107,9 +107,10 @@ The Android deployment agent in [`deploy/termux/deploy.sh`](file:///home/guts/P2
    - Acquires `flock` on `/tmp/gusby-deploy.lock` to prevent concurrent deployments.
    - Acquires `termux-wake-lock` to prevent Android OS doze throttling.
    - Enforces database URL safety check refusing any connection string pointing to `server_lab`.
-4. **Automated Verification & Rollback**:
-   - Executes multi-tier health verification suite (`verify.sh`).
-   - Automatically invokes `rollback.sh` on verification failure to restore the previous release symlink and restart PM2.
+4. **Mandatory Verification & Rollback Procedure**:
+   - Executes read-only health verification suite (`verify.sh`).
+   - If deployment fails or health checks fail, the previous CI-verified commit can be cleanly redeployed (`./deploy/termux/deploy.sh <previous_commit_sha>`).
+   - Normal application deployment never executes database migrations, restarts PostgreSQL, or mutates data.
 
 ---
 

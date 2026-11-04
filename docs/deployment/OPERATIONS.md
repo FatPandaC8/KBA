@@ -14,7 +14,7 @@ This document provides day-to-day operations, monitoring, maintenance, and emerg
 | **Live Backend Logs** | `pm2 logs gusby-backend` |
 | **Persistent Out Log** | `tail -f ~/services/gusby/logs/backend-out.log` |
 | **Persistent Error Log** | `tail -f ~/services/gusby/logs/backend-err.log` |
-| **Restart Backend Process** | `pm2 restart gusby-backend` |
+| **Restart Backend Process** | `pm2 restart gusby-backend --update-env` |
 | **Stop Backend Process** | `pm2 stop gusby-backend` |
 | **Start Nginx** | `nginx` |
 | **Test Nginx Config** | `nginx -t` |
@@ -30,7 +30,7 @@ This document provides day-to-day operations, monitoring, maintenance, and emerg
 
 ## 2. Service Startup Sequence
 
-Because database and reverse proxy lifecycles are decoupled from application releases, always start dependencies in logical order:
+Because database and reverse proxy lifecycles are decoupled from application deployment, always start dependencies in logical order:
 
 ```mermaid
 flowchart TD
@@ -104,7 +104,7 @@ LIMIT 10;
 
 ### Scenario 1: Backend process exceeding mobile memory limit
 - PM2 automatically restarts `gusby-backend` if memory exceeds `256M`.
-- Manual restart: `pm2 restart gusby-backend`.
+- Manual restart: `pm2 restart gusby-backend --update-env`.
 
 ### Scenario 2: Stale PostgreSQL lock after abrupt phone shutdown
 If the phone lost power, PostgreSQL may report `postmaster.pid` exists:

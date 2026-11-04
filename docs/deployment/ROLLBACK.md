@@ -21,11 +21,11 @@ To roll back to a previous known-good version:
    ```
 
 `deploy.sh` will:
-- Verify that the previous commit passed GitHub Actions CI.
-- Recompile the backend and copy it to `~/services/gusby/bin/gusby`.
-- Regenerate the frontend and sync it to `~/services/gusby/frontend/`.
-- Restart `gusby-backend` in PM2.
-- Verify that the service is running and healthy.
+- Verify that the previous commit passed GitHub Actions CI (`Gusby Production CI`).
+- Recompile the Go backend for ARM64 and replace `~/services/gusby/bin/gusby`.
+- Regenerate the static Nuxt frontend and copy to `~/services/gusby/frontend/`.
+- Restart `gusby-backend` in PM2 with `--update-env`.
+- Run mandatory verification (`deploy/termux/verify.sh`).
 
 ---
 

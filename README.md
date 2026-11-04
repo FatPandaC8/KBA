@@ -133,28 +133,31 @@ Gusby features a complete, battle-tested engineering lifecycle:
 - **[Software Development Life Cycle (SDLC)](file:///home/guts/P2/KBA/docs/engineering/SDLC.md)**: Branch strategies, PR requirements, code review, and Expand-and-Contract database migrations.
 - **[Continuous Integration & Delivery (CI/CD)](file:///home/guts/P2/KBA/docs/engineering/CI_CD.md)**: 4-tier automated GitHub Actions pipeline, status checks, and merge gates.
 - **[Release & Artifact Management](file:///home/guts/P2/KBA/docs/engineering/RELEASE_MANAGEMENT.md)**: Commit SHA anchoring, build info injection, artifact checksums, and release manifests.
-- **[Android Termux Deployment Automation](file:///home/guts/P2/KBA/docs/deployment/ANDROID_TERMUX.md)**: 14-step automated deployment on Sony Xperia 1 (ARM64), wake locks, PM2, and atomic releases.
-- **[Linux VPS Deployment Guide](file:///home/guts/P2/KBA/docs/deployment/VPS_DEPLOYMENT.md)**: Standard Linux server configuration, security hardening, and Nginx reverse proxy.
-- **[Application Rollback & Safety Guide](file:///home/guts/P2/KBA/docs/deployment/ROLLBACK.md)**: Zero-downtime atomic symlink rollback and database safety rules.
-- **[Observability Architecture](file:///home/guts/P2/KBA/docs/operations/OBSERVABILITY.md)**: Prometheus metrics (`/metrics`), structured `log/slog` JSON logging, and OpenTelemetry tracing.
-- **[Incident Response Runbooks](file:///home/guts/P2/KBA/docs/operations/INCIDENT_RESPONSE.md)**: 12 step-by-step runbooks for application, database, and hardware outages.
-- **[Backup & Restore Guide](file:///home/guts/P2/KBA/docs/operations/BACKUP_AND_RESTORE.md)**: Automated pre-migration snapshots, daily backups, retention policies, and restore drills.
-- **[Disaster Recovery Plan](file:///home/guts/P2/KBA/docs/operations/RECOVERY.md)**: Complete host replacement procedures and RPO/RTO recovery targets.
+- **[Android Termux Deployment Guide](docs/deployment/ANDROID_TERMUX.md)**: Simple, direct single-host deployment on Sony Xperia 1 (ARM64), wake locks, PM2, and static Nginx SPA.
+- **[Linux VPS Deployment Guide](docs/deployment/VPS_DEPLOYMENT.md)**: Standard Linux server configuration, security hardening, and Nginx reverse proxy.
+- **[Application Rollback & Safety Guide](docs/deployment/ROLLBACK.md)**: Manual CI-verified commit redeployment procedure and database safety rules.
+- **[Observability Architecture](docs/operations/OBSERVABILITY.md)**: Prometheus metrics (`/metrics`), structured `log/slog` JSON logging, and OpenTelemetry tracing.
+- **[Incident Response Runbooks](docs/operations/INCIDENT_RESPONSE.md)**: Step-by-step runbooks for application, database, and hardware outages.
+- **[Backup & Restore Guide](docs/operations/BACKUP_AND_RESTORE.md)**: Dedicated database backups, retention policies, and manual restore drills.
+- **[Disaster Recovery Plan](docs/operations/RECOVERY.md)**: Complete host replacement procedures and RPO/RTO recovery targets.
 
 ---
 
-## Android Termux 1-Command Deployment
+## Android Termux Production Deployment
 
-On the Sony Xperia 1 host:
+On the Sony Xperia 1 host (`~/apps/gusby`):
 ```bash
-# Deploys latest CI-verified commit on main branch with atomic activation:
+# Deploys latest CI-verified commit on main branch directly to ~/services/gusby:
 ./deploy/termux/deploy.sh
 
-# Inspect live production health, active release, and PM2 status:
+# Deploy a specific CI-verified commit SHA (also used for rollback):
+./deploy/termux/deploy.sh <commit_sha>
+
+# Inspect live production health and service status:
 ./deploy/termux/status.sh
 
-# Instant atomic rollback if ever required:
-./deploy/termux/rollback.sh
+# Run read-only verification suite:
+./deploy/termux/verify.sh
 ```
 
 ---

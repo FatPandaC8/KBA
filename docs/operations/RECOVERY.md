@@ -39,7 +39,7 @@ psql -d gusby_db -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
 
 ### Step 3: Clone Repository & Configure Runtime Environment
 ```bash
-mkdir -p ~/apps ~/services/gusby/bin ~/services/gusby/frontend ~/services/gusby/logs ~/services/gusby/backups
+mkdir -p ~/apps ~/services/gusby/bin ~/services/gusby/frontend ~/services/gusby/logs ~/backups/gusby
 git clone https://github.com/FatPandaC8/KBA.git ~/apps/gusby
 cd ~/apps/gusby
 
@@ -59,9 +59,9 @@ chmod 600 ~/services/gusby/.env
 ### Step 4: Restore Latest Database Backup
 Transfer the latest backup file from off-site storage or workstation:
 ```bash
-scp user@workstation:~/backups/gusby_latest.sql.gz ~/services/gusby/backups/
+scp user@workstation:~/backups/gusby_latest.sql.gz ~/backups/gusby/
 cd ~/apps/gusby
-./scripts/restore.sh ~/services/gusby/backups/gusby_latest.sql.gz --confirm-target-db=gusby_db
+./scripts/restore.sh ~/backups/gusby/gusby_latest.sql.gz --confirm-target-db=gusby_db
 ```
 
 ### Step 5: Execute Initial Deployment
@@ -88,7 +88,7 @@ nginx
 ## 3. Disaster Recovery Drill Checklist
 
 Maintainers should practice this drill periodically:
-- [ ] Confirm latest backup exists in `~/services/gusby/backups/` and is valid (`gzip -t`).
+- [ ] Confirm latest backup exists in `~/backups/gusby/` and is valid (`gzip -t`).
 - [ ] Spin up a temporary PostgreSQL instance on dev workstation.
 - [ ] Execute `./scripts/restore.sh <backup_file> --confirm-target-db=gusby_test` on test database.
 - [ ] Verify all tables and concept counts match expectations.

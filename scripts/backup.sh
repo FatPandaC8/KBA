@@ -7,7 +7,8 @@
 #
 # Environment variables:
 #   GUSBY_DATABASE_URL or DATABASE_URL (Required)
-#   GUSBY_BACKUP_DIR                   (Default: ~/services/gusby/backups)
+#   GUSBY_BACKUP_DIR                   (Default: ~/backups/gusby)
+#   GUSBY_EXPECTED_DB                  (Default: gusby_db)
 # ==============================================================================
 
 set -euo pipefail
@@ -53,8 +54,14 @@ if [[ "$ACTUAL_DB" == "server_lab" || -z "$ACTUAL_DB" ]]; then
     exit 1
 fi
 
+EXPECTED_DB="${GUSBY_EXPECTED_DB:-gusby_db}"
+if [[ "$ACTUAL_DB" != "$EXPECTED_DB" ]]; then
+    echo "CRITICAL SAFETY ERROR: Connected DB '$ACTUAL_DB' does not match expected database '$EXPECTED_DB'." >&2
+    exit 1
+fi
+
 BACKUP_TYPE="${1:-manual}"
-BACKUP_DIR="${GUSBY_BACKUP_DIR:-$HOME/services/gusby/backups}"
+BACKUP_DIR="${GUSBY_BACKUP_DIR:-$HOME/backups/gusby}"
 mkdir -p "$BACKUP_DIR"
 
 TIMESTAMP=$(date -u +%Y%m%d_%H%M%SZ)

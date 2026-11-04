@@ -13,7 +13,7 @@ module.exports = {
   apps: [
     {
       name: 'gusby-backend',
-      script: './bin/gusby',
+      script: path.join(serviceDir, 'bin/gusby'),
       cwd: serviceDir,
       exec_mode: 'fork',
       instances: 1,

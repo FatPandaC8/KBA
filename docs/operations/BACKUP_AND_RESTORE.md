@@ -38,8 +38,8 @@ cd ~/apps/gusby
 ./scripts/backup.sh manual
 ```
 
-### Pre-Migration Backup
-Triggered automatically by `scripts/migrate.sh up` or manually:
+### Pre-Migration Backup (Recommended Prior to Manual Migration)
+Run manually before executing `./scripts/migrate.sh up`:
 ```bash
 ./scripts/backup.sh pre-migrate
 ```
@@ -53,9 +53,9 @@ To configure automated daily backups at 03:00 AM:
 ```
 
 ### Backup Artifacts & Naming
-Backups are saved to `~/services/gusby/backups/`:
+Backups are saved to `~/backups/gusby/`:
 ```text
-~/services/gusby/backups/
+~/backups/gusby/
 ├── gusby_manual_20261104_120000Z.sql.gz
 ├── gusby_pre-migrate_20261104_140000Z.sql.gz
 └── gusby_scheduled_20261105_030000Z.sql.gz
@@ -79,10 +79,10 @@ To restore from a backup:
 cd ~/apps/gusby
 
 # Interactive restore (prompts to type the target database name to confirm):
-./scripts/restore.sh ~/services/gusby/backups/gusby_manual_20261104_120000Z.sql.gz
+./scripts/restore.sh ~/backups/gusby/gusby_manual_20261104_120000Z.sql.gz
 
 # Automated / Scripted restore (must provide matching target database name):
-./scripts/restore.sh ~/services/gusby/backups/gusby_manual_20261104_120000Z.sql.gz --confirm-target-db=gusby_db
+./scripts/restore.sh ~/backups/gusby/gusby_manual_20261104_120000Z.sql.gz --confirm-target-db=gusby_db
 ```
 
 ### Restore Execution Flow:

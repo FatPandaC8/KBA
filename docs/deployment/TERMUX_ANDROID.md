@@ -10,10 +10,11 @@ Tài liệu này được rút gọn tối đa, đồng bộ với [ANDROID_TERM
 - Thư mục runtime sản xuất duy nhất:
   ```text
   ~/services/gusby/
-  ├── bin/gusby       # File thực thi backend
+  ├── .env            # Cấu hình sản xuất (chmod 600)
+  ├── bin/
+  │   └── gusby       # File thực thi backend
   ├── frontend/       # File tĩnh Nuxt SPA
-  ├── logs/           # Log hệ thống
-  └── .env            # Cấu hình sản xuất
+  └── logs/           # Log hệ thống
   ```
 
 ---
@@ -31,6 +32,7 @@ psql -d gusby_db -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
 # 2. Tạo cấu hình môi trường
 mkdir -p ~/services/gusby/bin ~/services/gusby/frontend ~/services/gusby/logs
 cp ~/apps/gusby/.env.example ~/services/gusby/.env
+chmod 600 ~/services/gusby/.env
 
 # 3. Chạy migration ban đầu
 cd ~/apps/gusby

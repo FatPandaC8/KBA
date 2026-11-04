@@ -87,9 +87,9 @@ verify_target_db() {
         exit 1
     fi
 
-    local expected_db="${GUSBY_EXPECTED_DB:-}"
-    if [[ -n "$expected_db" && "$actual_db" != "$expected_db" ]]; then
-        echo "CRITICAL SAFETY ERROR: Connected DB '$actual_db' does not match GUSBY_EXPECTED_DB '$expected_db'." >&2
+    local expected_db="${GUSBY_EXPECTED_DB:-gusby_db}"
+    if [[ "$actual_db" != "$expected_db" ]]; then
+        echo "CRITICAL SAFETY ERROR: Connected DB '$actual_db' does not match expected database '$expected_db'." >&2
         exit 1
     fi
 }

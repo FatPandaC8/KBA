@@ -50,7 +50,7 @@ echo "Service Dir: $SERVICE_DIR"
 echo "Timestamp:   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "========================================================================"
 
-# 2. Check required commands
+# 1. Verify required tools
 for cmd in go node npm pm2 curl jq git; do
     if ! command -v "$cmd" &> /dev/null; then
         echo "Error: Required command '$cmd' is not found in PATH." >&2
@@ -58,33 +58,52 @@ for cmd in go node npm pm2 curl jq git; do
     fi
 done
 
-# Ensure production configuration exists
+# 2. Verify the production .env exists and has safe permissions
 if [[ ! -f "$SERVICE_DIR/.env" ]]; then
-    if [[ -f "$ROOT_DIR/.env" ]]; then
-        echo "Notice: Initializing $SERVICE_DIR/.env from repository .env..."
-        cp "$ROOT_DIR/.env" "$SERVICE_DIR/.env"
-        chmod 600 "$SERVICE_DIR/.env"
-    else
-        echo "Error: Production configuration missing at $SERVICE_DIR/.env." >&2
-        echo "Please create $SERVICE_DIR/.env with required production variables." >&2
-        exit 1
+    echo "Error: Production configuration missing at $SERVICE_DIR/.env." >&2
+    echo "Deployment requires an existing production environment file ($SERVICE_DIR/.env)." >&2
+    exit 1
+fi
+
+# Ensure safe permissions (deny group/world access)
+ENV_PERMS=$(stat -c "%a" "$SERVICE_DIR/.env" 2>/dev/null || stat -f "%Lp" "$SERVICE_DIR/.env" 2>/dev/null || echo "")
+if [[ -n "$ENV_PERMS" ]]; then
+    # In octal notation, safe permissions for secrets have 0 for group and other (e.g. 600, 400)
+    if [[ "$ENV_PERMS" =~ [1-7][0-7]$|[0-7][1-7]$ ]]; then
+        echo "Notice: Restricting permissions on $SERVICE_DIR/.env to 600 (was $ENV_PERMS)..."
+        chmod 600 "$SERVICE_DIR/.env" || {
+            echo "Error: Insecure permissions ($ENV_PERMS) on $SERVICE_DIR/.env and failed to restrict to 600." >&2
+            exit 1
+        }
     fi
 fi
 
-# Ensure database safety in .env
+# Ensure database safety in .env: Gusby must never point to 'server_lab'
 if grep -E "^(GUSBY_DATABASE_URL|DATABASE_URL)=.*server_lab" "$SERVICE_DIR/.env" &> /dev/null; then
     echo "CRITICAL SAFETY ERROR: $SERVICE_DIR/.env points to 'server_lab'! Refusing deployment." >&2
     exit 1
 fi
 
-# 3. Commit identification & GitHub Actions CI verification
+# Validate configured database name if explicitly set
+CONFIGURED_EXPECTED_DB=$(grep -E "^GUSBY_EXPECTED_DB=" "$SERVICE_DIR/.env" | cut -d'=' -f2- | tr -d ' "' || true)
+if [[ -n "$CONFIGURED_EXPECTED_DB" && "$CONFIGURED_EXPECTED_DB" != "gusby_db" ]]; then
+    echo "CRITICAL SAFETY ERROR: GUSBY_EXPECTED_DB in $SERVICE_DIR/.env is '$CONFIGURED_EXPECTED_DB' (must be 'gusby_db')." >&2
+    exit 1
+fi
+
+# 3. Verify the target commit passed the required GitHub Actions CI workflow
 TARGET_COMMIT="${1:-}"
 REPO_NAME="FatPandaC8/KBA"
 WORKFLOW_NAME="Gusby Production CI"
 
+AUTH_HEADER=()
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    AUTH_HEADER=(-H "Authorization: Bearer $GITHUB_TOKEN")
+fi
+
 if [[ -z "$TARGET_COMMIT" ]]; then
     echo "[CI Gating] Finding latest CI-verified commit on main branch..."
-    RUNS_JSON=$(curl -sSf -H "Accept: application/vnd.github.v3+json" --max-time 15 \
+    RUNS_JSON=$(curl -sSf "${AUTH_HEADER[@]}" -H "Accept: application/vnd.github.v3+json" --max-time 15 \
         "https://api.github.com/repos/$REPO_NAME/actions/runs?branch=main&status=completed&per_page=15" 2>/dev/null || true)
 
     TARGET_COMMIT=$(echo "$RUNS_JSON" | jq -r \
@@ -97,7 +116,7 @@ if [[ -z "$TARGET_COMMIT" ]]; then
     echo "[CI Gating] Verified commit from main: $TARGET_COMMIT"
 else
     echo "[CI Gating] Verifying requested commit $TARGET_COMMIT..."
-    RUNS_JSON=$(curl -sSf -H "Accept: application/vnd.github.v3+json" --max-time 15 \
+    RUNS_JSON=$(curl -sSf "${AUTH_HEADER[@]}" -H "Accept: application/vnd.github.v3+json" --max-time 15 \
         "https://api.github.com/repos/$REPO_NAME/actions/runs?head_sha=$TARGET_COMMIT" 2>/dev/null || true)
 
     MATCH_COUNT=$(echo "$RUNS_JSON" | jq -r \
@@ -119,17 +138,19 @@ if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree &> /dev/null; then
     fi
 fi
 
-# 4. Compile Go backend binary
+# 4. Build the Go backend for the Termux ARM64 host
 echo "[Build] Compiling Go backend binary for ARM64..."
+TMP_BIN="$ROOT_DIR/bin/gusby.build"
+mkdir -p "$ROOT_DIR/bin"
 (
     cd "$ROOT_DIR"
     CGO_ENABLED=0 go build \
         -ldflags="-s -w -X 'gusby/internal/config.GitCommit=$TARGET_COMMIT' -X 'gusby/internal/config.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)'" \
-        -o "$SERVICE_DIR/bin/gusby" ./cmd/gusby
-    chmod +x "$SERVICE_DIR/bin/gusby"
+        -o "$TMP_BIN" ./cmd/gusby
+    chmod +x "$TMP_BIN"
 )
 
-# 5. Build static Nuxt frontend SPA
+# 5. Generate the Nuxt static frontend
 echo "[Build] Generating Nuxt static SPA..."
 (
     cd "$ROOT_DIR/frontend"
@@ -137,26 +158,38 @@ echo "[Build] Generating Nuxt static SPA..."
     npm run generate
 )
 
-# 6. Copy frontend assets to production service directory
+# 6. Copy the generated frontend files into ~/services/gusby/frontend/
 echo "[Deploy] Copying frontend static assets to $SERVICE_DIR/frontend..."
 rm -rf "${SERVICE_DIR:?}/frontend"/*
 cp -R "$ROOT_DIR/frontend/.output/public"/* "$SERVICE_DIR/frontend/"
 
-# 7. Restart or start PM2 process
+# 7. Replace the backend binary in ~/services/gusby/bin/
+echo "[Deploy] Replacing backend binary in $SERVICE_DIR/bin/gusby..."
+mv -f "$TMP_BIN" "$SERVICE_DIR/bin/gusby"
+
+# 8. Restart the existing PM2 backend process, or start it if it does not exist
 echo "[Process] Updating PM2 process 'gusby-backend'..."
 if pm2 describe gusby-backend &> /dev/null; then
-    pm2 restart gusby-backend
+    pm2 restart gusby-backend --update-env
 else
     pm2 start "$ROOT_DIR/ecosystem.config.cjs" --only gusby-backend
 fi
 pm2 save || true
 
-# 8. Run deployment verification
-echo "[Verification] Running read-only deployment verification..."
-if [[ -x "$SCRIPT_DIR/verify.sh" ]]; then
-    "$SCRIPT_DIR/verify.sh"
+# 9. Run mandatory deployment verification
+echo "[Verification] Running mandatory read-only deployment verification..."
+VERIFY_SCRIPT="$SCRIPT_DIR/verify.sh"
+if [[ ! -f "$VERIFY_SCRIPT" ]]; then
+    echo "Error: Mandatory verification script missing at $VERIFY_SCRIPT." >&2
+    exit 1
 fi
+if [[ ! -x "$VERIFY_SCRIPT" ]]; then
+    echo "Error: Verification script at $VERIFY_SCRIPT is not executable." >&2
+    exit 1
+fi
+"$VERIFY_SCRIPT"
 
+# 10. Report the deployed commit
 echo "========================================================================"
 echo "Gusby Deployment Completed Successfully"
 echo "Commit:  ${TARGET_COMMIT:0:7} ($TARGET_COMMIT)"
