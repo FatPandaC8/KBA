@@ -111,6 +111,24 @@ func TestConfig_ValidateProduction(t *testing.T) {
 			},
 			wantError: true,
 		},
+		{
+			name: "reject server_lab database in production",
+			modify: func(c *config.Config) {
+				c.Env = "production"
+				c.DatabaseURL = "postgresql://gusby_user:super_secure_pw@127.0.0.1:5432/server_lab"
+				c.SessionSecret = "this-is-a-very-long-production-secret-key-32-chars-long"
+				c.GroqAPIKey = "gsk_valid_key"
+			},
+			wantError: true,
+		},
+		{
+			name: "reject server_lab database in development",
+			modify: func(c *config.Config) {
+				c.Env = "development"
+				c.DatabaseURL = "postgresql://postgres:postgres@127.0.0.1:5432/server_lab"
+			},
+			wantError: true,
+		},
 	}
 
 	for _, tt := range tests {

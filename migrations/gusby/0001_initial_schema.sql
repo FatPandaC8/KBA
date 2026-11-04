@@ -285,8 +285,3 @@ CREATE TABLE IF NOT EXISTS gusby.llm_usage (
     call_count INTEGER NOT NULL DEFAULT 0,
     CONSTRAINT uq_gusby_usage_user_date_model UNIQUE (user_id, usage_date, model)
 );
-
--- Record migration version
-INSERT INTO gusby.schema_migrations (version, applied_at)
-VALUES ('0001_initial_schema', now())
-ON CONFLICT (version) DO UPDATE SET applied_at = now();

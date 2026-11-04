@@ -1,6 +1,6 @@
 # Gusby Disaster Recovery (DR) Plan & Procedures
 
-This document provides end-to-end disaster recovery instructions in the event of catastrophic failure, complete device destruction, or host replacement.
+This document provides end-to-end disaster recovery instructions in the event of catastrophic failure, complete device destruction, or host replacement on Android Termux.
 
 ---
 
@@ -22,7 +22,7 @@ If the primary Sony Xperia 1 device suffers permanent hardware failure:
 2. Open Termux and install dependencies:
    ```bash
    pkg update && pkg upgrade -y
-   pkg install -y git golang nodejs-lts postgresql nginx openssl-tool curl
+   pkg install -y git golang nodejs-lts postgresql nginx openssl-tool curl jq tar gzip termux-tools
    npm install -g pm2
    termux-wake-lock
    ```
@@ -32,43 +32,49 @@ If the primary Sony Xperia 1 device suffers permanent hardware failure:
 initdb "$PREFIX/var/lib/postgresql"
 pg_ctl -D "$PREFIX/var/lib/postgresql" -l "$PREFIX/var/log/postgresql.log" start
 
-psql -d postgres -c "CREATE USER gusby WITH PASSWORD 'your_secure_password';"
-psql -d postgres -c "CREATE DATABASE gusby_db OWNER gusby;"
+psql -d postgres -c "CREATE USER gusby_user WITH PASSWORD 'YOUR_STRONG_PASSWORD';"
+psql -d postgres -c "CREATE DATABASE gusby_db OWNER gusby_user;"
 psql -d gusby_db -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
 ```
 
-### Step 3: Clone Repository & Configure Environment
+### Step 3: Clone Repository & Configure Runtime Environment
 ```bash
-git clone https://github.com/FatPandaC8/KBA.git ~/KBA
-cd ~/KBA
+mkdir -p ~/apps ~/services/gusby/shared/logs ~/services/gusby/backups ~/services/gusby/state
+git clone https://github.com/FatPandaC8/KBA.git ~/apps/gusby
+cd ~/apps/gusby
 
 # Create shared production environment
-mkdir -p shared
-cat <<EOF > shared/.env
+cat <<EOF > ~/services/gusby/shared/.env
 GUSBY_ENV=production
 GUSBY_HOST=127.0.0.1
 GUSBY_PORT=8081
-GUSBY_DATABASE_URL=postgresql://gusby:your_secure_password@127.0.0.1:5432/gusby_db
+GUSBY_DATABASE_URL=postgresql://gusby_user:YOUR_STRONG_PASSWORD@127.0.0.1:5432/gusby_db?sslmode=disable
+GUSBY_EXPECTED_DB=gusby_db
 GUSBY_SESSION_SECRET=$(openssl rand -base64 32)
 GROQ_API_KEY=your_groq_api_key_here
 EOF
+chmod 600 ~/services/gusby/shared/.env
 ```
 
 ### Step 4: Restore Latest Database Backup
-Transfer the latest backup file from off-site storage or dev machine:
+Transfer the latest backup file from off-site storage or workstation:
 ```bash
-scp user@fedora:~/backups/gusby_latest.sql.gz ~/KBA/backups/
-./scripts/restore.sh ~/KBA/backups/gusby_latest.sql.gz --force
+scp user@workstation:~/backups/gusby_latest.sql.gz ~/services/gusby/backups/
+cd ~/apps/gusby
+./scripts/restore.sh ~/services/gusby/backups/gusby_latest.sql.gz --confirm-target-db=gusby_db
 ```
 
 ### Step 5: Execute Initial Deployment
 ```bash
+cd ~/apps/gusby
 ./deploy/termux/deploy.sh
 ```
 
 ### Step 6: Configure & Start Nginx
 ```bash
-cp deploy/nginx/gusby-termux.conf $PREFIX/etc/nginx/conf.d/gusby.conf
+mkdir -p "$PREFIX/etc/nginx/conf.d"
+cp deploy/nginx/gusby-termux.conf "$PREFIX/etc/nginx/conf.d/gusby.conf"
+nginx -t
 nginx
 ```
 
@@ -81,9 +87,9 @@ nginx
 
 ## 3. Disaster Recovery Drill Checklist
 
-Maintainers should practice this drill quarterly:
-- [ ] Confirm latest backup exists in `backups/` and is valid (`gzip -t`).
+Maintainers should practice this drill periodically:
+- [ ] Confirm latest backup exists in `~/services/gusby/backups/` and is valid (`gzip -t`).
 - [ ] Spin up a temporary PostgreSQL instance on dev workstation.
-- [ ] Execute `./scripts/restore.sh <backup_file> --force` on test database.
+- [ ] Execute `./scripts/restore.sh <backup_file> --confirm-target-db=gusby_test` on test database.
 - [ ] Verify all tables and concept counts match expectations.
 - [ ] Record test results and sign off on disaster recovery readiness.

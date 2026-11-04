@@ -176,8 +176,9 @@ jobs:
         env:
           DB_URL: "postgresql://gusby_migrator:migrator_password_secure@127.0.0.1:5432/gusby_migration_test?sslmode=disable"
         run: |
-          # 1. Apply initial migration (0001)
+          # 1. Apply initial migration (0001) and record in tracker
           psql "$DB_URL" -v ON_ERROR_STOP=1 -f migrations/gusby/0001_initial_schema.sql
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO gusby.schema_migrations (version, applied_at) VALUES ('0001_initial_schema', now()) ON CONFLICT (version) DO NOTHING;"
           
           # 2. Insert representative live data into 0001 schema
           psql "$DB_URL" -v ON_ERROR_STOP=1 -c "

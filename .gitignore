@@ -43,3 +43,6 @@ releases/
 shared/
 state/
 *.lock
+
+# Agents
+.agents/

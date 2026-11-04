@@ -83,7 +83,7 @@ func LoadConfig() *Config {
 	if dbURL == "" {
 		dbURL = os.Getenv("DATABASE_URL")
 	}
-	if dbURL == "" {
+	if dbURL == "" && getEnvOrDefault("GUSBY_ENV", "development") != "production" {
 		dbURL = "postgresql://echo:echo_dev_password@127.0.0.1:5432/echo_kb"
 	}
 
@@ -162,6 +162,10 @@ func (c *Config) Validate() error {
 		return errors.New("host cannot be empty")
 	}
 
+	if strings.Contains(c.DatabaseURL, "/server_lab") {
+		return errors.New("critical safety violation: target database is 'server_lab'; Gusby is strictly prohibited from connecting to 'server_lab'")
+	}
+
 	if c.Env == "production" {
 		if c.DatabaseURL == "" {
 			return errors.New("GUSBY_DATABASE_URL (or DATABASE_URL) is required in production mode")
@@ -191,20 +195,25 @@ func getEnvOrDefault(key, fallback string) string {
 }
 
 func loadDotEnv(filepath string) {
-	paths := []string{filepath, "../" + filepath, "../../" + filepath}
-	var file *os.File
-	var err error
-	for _, p := range paths {
-		file, err = os.Open(p)
-		if err == nil {
-			break
+	if custom := os.Getenv("GUSBY_ENV_FILE"); custom != "" {
+		if f, err := os.Open(custom); err == nil {
+			defer f.Close()
+			parseEnvScanner(f)
+			return
 		}
 	}
-	if file == nil {
-		return
-	}
-	defer file.Close()
 
+	paths := []string{filepath, "../" + filepath, "../../" + filepath}
+	for _, p := range paths {
+		if f, err := os.Open(p); err == nil {
+			defer f.Close()
+			parseEnvScanner(f)
+			return
+		}
+	}
+}
+
+func parseEnvScanner(file *os.File) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())

@@ -16,7 +16,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-DEPLOY_ROOT="${GUSBY_DEPLOY_ROOT:-$ROOT_DIR}"
+DEPLOY_ROOT="${GUSBY_DEPLOY_ROOT:-$HOME/services/gusby}"
+if [[ ! -d "$DEPLOY_ROOT" && -d "$ROOT_DIR/releases" ]]; then
+    DEPLOY_ROOT="$ROOT_DIR"
+fi
 STATE_DIR="$DEPLOY_ROOT/state"
 ACTIVE_FILE="$STATE_DIR/active-release.json"
 HISTORY_LOG="$STATE_DIR/deployment-history.json.log"

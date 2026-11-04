@@ -5,10 +5,10 @@
 # Performs safe, atomic application rollback to the previous release.
 #
 # Rules:
-# - Reverts application symlink atomically.
+# - Reverts application symlink atomically to 'previous'.
 # - Explicitly restarts 'gusby-backend' in PM2 (never 'pm2 restart all').
-# - Runs production verification suite.
-# - DOES NOT perform unsafe automated database rollback.
+# - Runs read-only production verification suite.
+# - DOES NOT touch PostgreSQL or perform database rollbacks.
 # - Updates deployment history and active release metadata.
 # ==============================================================================
 
@@ -17,16 +17,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-DEPLOY_ROOT="${GUSBY_DEPLOY_ROOT:-$ROOT_DIR}"
+DEPLOY_ROOT="${GUSBY_DEPLOY_ROOT:-$HOME/services/gusby}"
 CURRENT_LINK="$DEPLOY_ROOT/current"
 PREVIOUS_LINK="$DEPLOY_ROOT/previous"
 STATE_DIR="$DEPLOY_ROOT/state"
-HISTORY_FILE="$STATE_DIR/deployment-history.json"
+HISTORY_LOG="$STATE_DIR/deployment-history.json.log"
 ACTIVE_FILE="$STATE_DIR/active-release.json"
 
 echo "========================================================================"
 echo "GUSBY APPLICATION ROLLBACK INITIATED"
 echo "Deploy Root: $DEPLOY_ROOT"
+echo "Timestamp:   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "========================================================================"
 
 # 1. Verify previous release exists
@@ -37,7 +38,7 @@ if [[ ! -L "$PREVIOUS_LINK" ]] && [[ ! -d "$PREVIOUS_LINK" ]]; then
 fi
 
 PREVIOUS_TARGET=$(readlink -f "$PREVIOUS_LINK")
-CURRENT_TARGET=$(readlink -f "$CURRENT_LINK" || echo "none")
+CURRENT_TARGET=$(readlink -f "$CURRENT_LINK" 2>/dev/null || echo "none")
 
 if [[ "$PREVIOUS_TARGET" == "$CURRENT_TARGET" ]]; then
     echo "Warning: 'previous' release is identical to 'current' release ($PREVIOUS_TARGET)." >&2
@@ -56,14 +57,20 @@ mv -Tf "$CURRENT_LINK.tmp" "$CURRENT_LINK"
 echo "[Rollback] Restarting 'gusby-backend' process in PM2..."
 if command -v pm2 &> /dev/null; then
     pm2 restart gusby-backend || pm2 start "$CURRENT_LINK/ecosystem.config.cjs" --only gusby-backend
+    pm2 save || true
 else
     echo "Notice: PM2 not in PATH; skipping process manager signal."
 fi
 
-# 4. Run verification suite
-echo "[Rollback] Running production verification suite on restored release..."
-if [[ -x "$SCRIPT_DIR/verify.sh" ]]; then
-    if ! "$SCRIPT_DIR/verify.sh"; then
+# 4. Run read-only verification suite
+echo "[Rollback] Running read-only verification suite on restored release..."
+VERIFY_SCRIPT="$CURRENT_LINK/deploy/termux/verify.sh"
+if [[ ! -x "$VERIFY_SCRIPT" ]]; then
+    VERIFY_SCRIPT="$SCRIPT_DIR/verify.sh"
+fi
+
+if [[ -x "$VERIFY_SCRIPT" ]]; then
+    if ! "$VERIFY_SCRIPT"; then
         echo "========================================================================" >&2
         echo "CRITICAL: Verification failed after rollback!" >&2
         echo "Manual operator intervention required immediately." >&2
@@ -71,32 +78,29 @@ if [[ -x "$SCRIPT_DIR/verify.sh" ]]; then
         exit 1
     fi
 else
-    echo "Notice: Verification script not found at $SCRIPT_DIR/verify.sh."
+    echo "Notice: Verification script not found at $VERIFY_SCRIPT."
 fi
 
 # 5. Record rollback in state history
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 mkdir -p "$STATE_DIR"
 
-if [[ -f "$HISTORY_FILE" ]]; then
-    TMP_HIST=$(mktemp)
-    # Append rollback record
-    cat <<EOF >> "$HISTORY_FILE.log"
+cat <<EOF >> "$HISTORY_LOG"
 {"timestamp": "$TIMESTAMP", "action": "rollback", "restored_release": "$PREVIOUS_TARGET", "previous_failed": "$CURRENT_TARGET", "status": "success"}
 EOF
-fi
 
 cat <<EOF > "$ACTIVE_FILE"
 {
   "active_release": "$PREVIOUS_TARGET",
   "active_since": "$TIMESTAMP",
-  "rollback_event": true
+  "rollback_event": true,
+  "status": "rolled_back"
 }
 EOF
 
 echo "========================================================================"
 echo "GUSBY ROLLBACK COMPLETED SUCCESSFULLY"
-echo "Active Release: $PREVIOUS_TARGET"
+echo "Active Release:  $PREVIOUS_TARGET"
 echo "Database Status: Unmodified (Preserving data integrity)"
 echo "========================================================================"
 exit 0

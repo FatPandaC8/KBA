@@ -121,8 +121,3 @@ CREATE TABLE IF NOT EXISTS gusby.eval_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_eval_runs_created ON gusby.eval_runs (created_at DESC);
-
--- Record migration version
-INSERT INTO gusby.schema_migrations (version, applied_at)
-VALUES ('0002_admin_and_ai_observability', now())
-ON CONFLICT (version) DO UPDATE SET applied_at = now();

@@ -88,7 +88,8 @@ func (s *Server) HandleReadiness(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 
-	if err := s.store.Pool().Ping(ctx); err != nil {
+	var dbName string
+	if err := s.store.Pool().QueryRow(ctx, "SELECT current_database()").Scan(&dbName); err != nil {
 		s.renderJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"status":     "not_ready",
 			"service":    "gusby",
@@ -100,6 +101,19 @@ func (s *Server) HandleReadiness(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if dbName == "server_lab" {
+		s.renderJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status":        "not_ready",
+			"service":       "gusby",
+			"version":       s.cfg.Version,
+			"commit_sha":    s.cfg.CommitSHA,
+			"database":      "forbidden",
+			"database_name": dbName,
+			"error":         "critical safety violation: connected to prohibited database 'server_lab'",
+		})
+		return
+	}
+
 	gateState, _ := s.gate.GetState(ctx)
 	gateVal := "enabled"
 	if gateState != nil {
@@ -107,14 +121,15 @@ func (s *Server) HandleReadiness(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.renderJSON(w, http.StatusOK, map[string]any{
-		"status":      "ready",
-		"service":     "gusby",
-		"version":     s.cfg.Version,
-		"commit_sha":  s.cfg.CommitSHA,
-		"build_time":  s.cfg.BuildTime,
-		"database":    "connected",
-		"ai_gate":     gateVal,
-		"ai_provider": s.llmClient.Describe().Kind,
+		"status":        "ready",
+		"service":       "gusby",
+		"version":       s.cfg.Version,
+		"commit_sha":    s.cfg.CommitSHA,
+		"build_time":    s.cfg.BuildTime,
+		"database":      "connected",
+		"database_name": dbName,
+		"ai_gate":       gateVal,
+		"ai_provider":   s.llmClient.Describe().Kind,
 	})
 }
 
