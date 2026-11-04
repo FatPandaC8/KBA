@@ -8,8 +8,8 @@ import (
 )
 
 type EvidenceSpan struct {
-	IsValid          bool
-	NormalizedQuote  string
+	IsValid           bool
+	NormalizedQuote   string
 	RelativeByteStart int
 	RelativeByteEnd   int
 	DocumentByteStart int

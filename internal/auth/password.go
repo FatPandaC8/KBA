@@ -20,7 +20,7 @@ const (
 )
 
 var (
-	ErrInvalidPassword = errors.New("invalid password")
+	ErrInvalidPassword  = errors.New("invalid password")
 	ErrPasswordTooShort = errors.New("password must be at least 8 characters long")
 )
 

@@ -384,12 +384,12 @@ func (s *Store) GetPipelineMetrics(ctx context.Context) (map[string]any, error) 
 
 	// Latencies (dummy/defaults if empty, or computed from finished jobs)
 	result["latencies"] = map[string]int{
-		"chunking_p50_ms":   12,
-		"chunking_p95_ms":   45,
-		"extracting_p50_ms": 1150,
-		"extracting_p95_ms": 2800,
-		"resolving_p50_ms":  75,
-		"resolving_p95_ms":  190,
+		"chunking_p50_ms":    12,
+		"chunking_p95_ms":    45,
+		"extracting_p50_ms":  1150,
+		"extracting_p95_ms":  2800,
+		"resolving_p50_ms":   75,
+		"resolving_p95_ms":   190,
 		"integrating_p50_ms": 40,
 		"integrating_p95_ms": 90,
 	}

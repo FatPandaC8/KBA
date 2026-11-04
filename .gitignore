@@ -34,3 +34,12 @@ Thumbs.db
 .vscode/
 *.sublime-project
 *.sublime-workspace
+
+# Runtime logs, backups, and deployments
+backups/
+*.sql.gz
+logs/
+releases/
+shared/
+state/
+*.lock

@@ -15,13 +15,13 @@ export default defineNuxtConfig({
   },
   routeRules: {
     '/api/**': {
-      proxy: 'http://127.0.0.1:8080/api/**'
+      proxy: `${process.env.GUSBY_BACKEND_URL || 'http://127.0.0.1:8081'}/api/**`
     }
   },
   nitro: {
     devProxy: {
       '/api': {
-        target: 'http://127.0.0.1:8080/api',
+        target: `${process.env.GUSBY_BACKEND_URL || 'http://127.0.0.1:8081'}/api`,
         changeOrigin: true
       }
     }

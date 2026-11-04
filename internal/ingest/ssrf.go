@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	ErrBlockedIPRange   = errors.New("access to private, loopback, or cloud metadata IP ranges is forbidden")
+	ErrBlockedIPRange    = errors.New("access to private, loopback, or cloud metadata IP ranges is forbidden")
 	ErrUnsupportedScheme = errors.New("only http and https schemes are supported")
-	ErrResponseTooLarge = errors.New("response payload exceeds maximum allowed size")
+	ErrResponseTooLarge  = errors.New("response payload exceeds maximum allowed size")
 )
 
 const MaxResponseBodyBytes = 2 * 1024 * 1024 // 2 MB
@@ -25,15 +25,15 @@ var privateIPBlocks []*net.IPNet
 
 func init() {
 	for _, cidr := range []string{
-		"127.0.0.0/8",          // IPv4 loopback
-		"10.0.0.0/8",           // RFC1918 private
-		"172.16.0.0/12",        // RFC1918 private
-		"192.168.0.0/16",       // RFC1918 private
-		"169.254.0.0/16",       // IPv4 link-local / cloud metadata (169.254.169.254)
-		"0.0.0.0/8",            // Current network
-		"::1/128",              // IPv6 loopback
-		"fc00::/7",             // IPv6 unique local address
-		"fe80::/10",            // IPv6 link-local
+		"127.0.0.0/8",    // IPv4 loopback
+		"10.0.0.0/8",     // RFC1918 private
+		"172.16.0.0/12",  // RFC1918 private
+		"192.168.0.0/16", // RFC1918 private
+		"169.254.0.0/16", // IPv4 link-local / cloud metadata (169.254.169.254)
+		"0.0.0.0/8",      // Current network
+		"::1/128",        // IPv6 loopback
+		"fc00::/7",       // IPv6 unique local address
+		"fe80::/10",      // IPv6 link-local
 	} {
 		_, block, err := net.ParseCIDR(cidr)
 		if err == nil {

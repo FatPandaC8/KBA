@@ -1,0 +1,239 @@
+name: Gusby Production CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================================
+  # 1. Backend CI: Formatter, Vet, Unit Tests, Race Detection, Build
+  # ============================================================================
+  backend-ci:
+    name: Backend CI (Go 1.27)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: gusby_test
+          POSTGRES_USER: gusby_test_user
+          POSTGRES_PASSWORD: test_secure_password_123
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+
+      - name: Verify Go Formatting (gofmt)
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "Error: The following Go files are not properly formatted:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+          echo "All Go files match gofmt standards."
+
+      - name: Run Go Vet
+        run: go vet ./...
+
+      - name: Apply Database Migrations for Integration Tests
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+          chmod +x ./scripts/migrate.sh
+          DATABASE_URL="postgresql://gusby_test_user:test_secure_password_123@127.0.0.1:5432/gusby_test?sslmode=disable" ./scripts/migrate.sh
+
+      - name: Run Go Unit & Integration Tests (with Race Detector)
+        env:
+          DATABASE_URL: "postgresql://gusby_test_user:test_secure_password_123@127.0.0.1:5432/gusby_test?sslmode=disable"
+          GUSBY_ENV: test
+          SKIP_LIVE_GROQ_TEST: "true"
+        run: |
+          go test -race -v -count=1 ./internal/... ./tests/admin/... ./eval/gusby/...
+
+      - name: Build Go Backend Binary
+        run: |
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X 'gusby/internal/config.GitCommit=${{ github.sha }}' -X 'gusby/internal/config.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)'" -o bin/gusby-linux-amd64 ./cmd/gusby
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X 'gusby/internal/config.GitCommit=${{ github.sha }}' -X 'gusby/internal/config.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)'" -o bin/gusby-linux-arm64 ./cmd/gusby
+          ls -lh bin/
+
+      - name: Upload Backend Binary Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gusby-backend-binaries
+          path: bin/
+          retention-days: 7
+
+  # ============================================================================
+  # 2. Frontend CI: Lint, Typecheck, Static SPA Build
+  # ============================================================================
+  frontend-ci:
+    name: Frontend CI (Nuxt 4 SPA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: TypeScript Static Typecheck
+        run: npm run typecheck
+
+      - name: Build Nuxt Static SPA Production Bundle
+        run: npm run generate
+
+      - name: Verify Static Build Artifacts
+        run: |
+          test -f .output/public/index.html || (echo "Missing .output/public/index.html" && exit 1)
+          test -d .output/public/_nuxt || (echo "Missing .output/public/_nuxt directory" && exit 1)
+          echo "Frontend static SPA generated successfully."
+          du -sh .output/public
+
+      - name: Upload Frontend Static Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gusby-frontend-spa
+          path: frontend/.output/public
+          retention-days: 7
+
+  # ============================================================================
+  # 3. Database Migration CI: Idempotency & Schema Validation
+  # ============================================================================
+  database-ci:
+    name: Database Migration Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: gusby_migration_test
+          POSTGRES_USER: gusby_migrator
+          POSTGRES_PASSWORD: migrator_password_secure
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL Client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Run Initial Database Migration
+        env:
+          DATABASE_URL: "postgresql://gusby_migrator:migrator_password_secure@127.0.0.1:5432/gusby_migration_test?sslmode=disable"
+        run: |
+          chmod +x ./scripts/migrate.sh
+          ./scripts/migrate.sh
+
+      - name: Verify Required Extensions & Schemas
+        env:
+          DB_URL: "postgresql://gusby_migrator:migrator_password_secure@127.0.0.1:5432/gusby_migration_test?sslmode=disable"
+        run: |
+          psql "$DB_URL" -c "SELECT extname FROM pg_extension WHERE extname = 'pg_trgm';" | grep -q "pg_trgm" || (echo "pg_trgm extension missing!" && exit 1)
+          psql "$DB_URL" -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'gusby';"
+
+      - name: Test Migration Idempotency (Second Execution Must Not Fail)
+        env:
+          DATABASE_URL: "postgresql://gusby_migrator:migrator_password_secure@127.0.0.1:5432/gusby_migration_test?sslmode=disable"
+        run: |
+          ./scripts/migrate.sh
+
+  # ============================================================================
+  # 4. Security & Vulnerability Audits
+  # ============================================================================
+  security-ci:
+    name: Security & Vulnerability Scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+
+      - name: Run Go Vulnerability Scanner (govulncheck)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Frontend Dependency Vulnerability Audit
+        working-directory: frontend
+        run: |
+          npm audit --audit-level=high
+
+      - name: Audit File Permissions & Dangerous Artifacts
+        run: |
+          # Verify no committed private keys or active secrets exist in tracked files
+          FOUND_KEYS=$(grep -rE --exclude-dir={.git,node_modules} "BEGIN (RSA|OPENSSH|EC) PRIVATE KEY" . || true)
+          if [ -n "$FOUND_KEYS" ]; then
+            echo "Critical Security Failure: Found embedded private keys!"
+            exit 1
+          fi
+          echo "File permission and secret baseline passed."
+
+  # ============================================================================
+  # 5. CI Merge Gate: Required status check for Protected Main Branch
+  # ============================================================================
+  ci-gate:
+    name: CI Passed / Merge Ready
+    needs: [backend-ci, frontend-ci, database-ci, security-ci]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm All Checks Passed
+        run: |
+          echo "=========================================================="
+          echo "All required Gusby CI checks passed successfully."
+          echo "Commit: ${{ github.sha }}"
+          echo "Ref:    ${{ github.ref }}"
+          echo "=========================================================="

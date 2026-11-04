@@ -13,11 +13,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"gusby/internal/observability"
 )
 
 var (
-	ErrEmptyAPIKey      = errors.New("GROQ_API_KEY is not configured")
-	ErrQuotaExceeded    = errors.New("groq rate limit or quota exceeded")
+	ErrEmptyAPIKey       = errors.New("GROQ_API_KEY is not configured")
+	ErrQuotaExceeded     = errors.New("groq rate limit or quota exceeded")
 	ErrMalformedResponse = errors.New("groq returned an invalid or empty JSON response")
 )
 
@@ -201,7 +203,11 @@ type chatResponse struct {
 }
 
 func (g *GroqClient) CompleteJSON(ctx context.Context, system, user string, maxTokens int, temperature float64) (string, int, int, error) {
+	callStart := time.Now()
 	if err := g.rateLimiter.Wait(ctx, 1, 500); err != nil {
+		if m := observability.GetMetrics(); m != nil {
+			m.RecordAICall("groq", g.model, "complete_json", time.Since(callStart), 0, 0, false)
+		}
 		return "", 0, 0, err
 	}
 
@@ -286,9 +292,15 @@ func (g *GroqClient) CompleteJSON(ctx context.Context, system, user string, maxT
 		}
 
 		content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+		if m := observability.GetMetrics(); m != nil {
+			m.RecordAICall("groq", g.model, "complete_json", time.Since(callStart), chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens, true)
+		}
 		return content, chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens, nil
 	}
 
+	if m := observability.GetMetrics(); m != nil {
+		m.RecordAICall("groq", g.model, "complete_json", time.Since(callStart), 0, 0, false)
+	}
 	return "", 0, 0, fmt.Errorf("exhausted retries: %w", lastErr)
 }
 
@@ -318,11 +330,11 @@ func backoffWithJitter(attempt int, maxWait time.Duration) time.Duration {
 // -----------------------------------------------------------------------------
 
 type RateLimiter struct {
-	mu          sync.Mutex
-	rpmLimit    int
-	tpmLimit    int
-	requests    []time.Time
-	tokens      []tokenRecord
+	mu       sync.Mutex
+	rpmLimit int
+	tpmLimit int
+	requests []time.Time
+	tokens   []tokenRecord
 }
 
 type tokenRecord struct {

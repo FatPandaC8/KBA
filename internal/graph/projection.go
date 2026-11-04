@@ -30,10 +30,10 @@ type GraphEdge struct {
 }
 
 type GraphProjectionResponse struct {
-	Zoom  string       `json:"zoom"`
-	Nodes []GraphNode  `json:"nodes"`
-	Edges []GraphEdge  `json:"edges"`
-	Total int          `json:"total"`
+	Zoom  string      `json:"zoom"`
+	Nodes []GraphNode `json:"nodes"`
+	Edges []GraphEdge `json:"edges"`
+	Total int         `json:"total"`
 }
 
 const (

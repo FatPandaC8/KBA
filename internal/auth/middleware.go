@@ -30,16 +30,37 @@ func RequireAuth(svc *Service) func(http.Handler) http.Handler {
 	}
 }
 
-func CSRFProtection() func(http.Handler) http.Handler {
+func CSRFProtection(extraAllowedOrigins ...[]string) func(http.Handler) http.Handler {
+	var allowed []string
+	if len(extraAllowedOrigins) > 0 {
+		allowed = extraAllowedOrigins[0]
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch {
 				origin := r.Header.Get("Origin")
 				if origin != "" {
 					host := r.Host
-					origin = strings.TrimPrefix(origin, "http://")
-					origin = strings.TrimPrefix(origin, "https://")
-					if !strings.HasPrefix(origin, host) && !strings.Contains(origin, "127.0.0.1") && !strings.Contains(origin, "localhost") {
+					trimmedOrigin := strings.TrimPrefix(origin, "http://")
+					trimmedOrigin = strings.TrimPrefix(trimmedOrigin, "https://")
+
+					matched := strings.HasPrefix(trimmedOrigin, host) ||
+						strings.Contains(origin, "127.0.0.1") ||
+						strings.Contains(origin, "localhost")
+
+					if !matched {
+						for _, ao := range allowed {
+							cleanAO := strings.TrimPrefix(ao, "http://")
+							cleanAO = strings.TrimPrefix(cleanAO, "https://")
+							if strings.HasPrefix(trimmedOrigin, cleanAO) {
+								matched = true
+								break
+							}
+						}
+					}
+
+					if !matched {
 						renderError(w, http.StatusForbidden, "CSRF_FORBIDDEN", "Cross-site request forgery protection triggered")
 						return
 					}

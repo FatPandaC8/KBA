@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -66,14 +68,53 @@ func (s *Server) renderError(w http.ResponseWriter, status int, code, message st
 }
 
 // -----------------------------------------------------------------------------
-// Health
+// Health & Readiness (Phase 8 Observability)
 // -----------------------------------------------------------------------------
 
+// HandleHealth serves as a lightweight liveness check (independent of external services)
 func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	s.renderJSON(w, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"service": "gusby",
-		"version": "1.0.0",
+		"status":     "ok",
+		"service":    "gusby",
+		"version":    s.cfg.Version,
+		"commit_sha": s.cfg.CommitSHA,
+		"build_time": s.cfg.BuildTime,
+		"env":        s.cfg.Env,
+	})
+}
+
+// HandleReadiness checks whether the service can actively process requests (PostgreSQL connectivity)
+func (s *Server) HandleReadiness(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	if err := s.store.Pool().Ping(ctx); err != nil {
+		s.renderJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status":     "not_ready",
+			"service":    "gusby",
+			"version":    s.cfg.Version,
+			"commit_sha": s.cfg.CommitSHA,
+			"database":   "unreachable",
+			"error":      err.Error(),
+		})
+		return
+	}
+
+	gateState, _ := s.gate.GetState(ctx)
+	gateVal := "enabled"
+	if gateState != nil {
+		gateVal = gateState.State
+	}
+
+	s.renderJSON(w, http.StatusOK, map[string]any{
+		"status":      "ready",
+		"service":     "gusby",
+		"version":     s.cfg.Version,
+		"commit_sha":  s.cfg.CommitSHA,
+		"build_time":  s.cfg.BuildTime,
+		"database":    "connected",
+		"ai_gate":     gateVal,
+		"ai_provider": s.llmClient.Describe().Kind,
 	})
 }
 
@@ -87,6 +128,7 @@ type authRequest struct {
 }
 
 func (s *Server) HandleSignUp(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // 64 KB limit for auth payload
 	var req authRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.renderError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid JSON payload")
@@ -124,6 +166,7 @@ func (s *Server) HandleSignUp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // 64 KB limit
 	var req authRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.renderError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid JSON payload")
@@ -229,6 +272,7 @@ func (s *Server) HandleIngestText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 10*1024*1024) // 10 MB limit for text payload
 	var req textIngestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.renderError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid JSON payload")
@@ -300,6 +344,7 @@ func (s *Server) HandleIngestURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // 64 KB limit for url request
 	var req urlIngestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.renderError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid JSON payload")

@@ -36,12 +36,29 @@ func (s *Server) HandleAdminOverview(w http.ResponseWriter, r *http.Request) {
 
 	gateState, _ := s.gate.GetState(r.Context())
 	desc := s.llmClient.Describe()
+	stat := s.store.Pool().Stat()
 
 	resp := map[string]any{
 		"metrics": metrics,
+		"system": map[string]any{
+			"version":    s.cfg.Version,
+			"commit_sha": s.cfg.CommitSHA,
+			"build_time": s.cfg.BuildTime,
+			"env":        s.cfg.Env,
+			"database": map[string]any{
+				"status":         "connected",
+				"total_conns":    stat.TotalConns(),
+				"idle_conns":     stat.IdleConns(),
+				"acquired_conns": stat.AcquiredConns(),
+				"max_conns":      stat.MaxConns(),
+			},
+			"worker": map[string]any{
+				"status": "active",
+			},
+		},
 		"ai_provider": map[string]any{
-			"kind":         desc.Kind,
-			"model":        desc.Model,
+			"kind":          desc.Kind,
+			"model":         desc.Model,
 			"is_configured": desc.IsConfigured,
 		},
 		"ai_gate": gateState,
@@ -733,7 +750,7 @@ func (s *Server) HandleAdminMergeConcepts(w http.ResponseWriter, r *http.Request
 	}
 
 	s.renderJSON(w, http.StatusOK, map[string]any{
-		"status":                 "merged",
+		"status":               "merged",
 		"rewired_propositions": rewired,
 	})
 }

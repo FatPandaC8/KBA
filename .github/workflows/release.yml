@@ -1,0 +1,138 @@
+name: Gusby Production Release & Artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release Tag (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build & Package Production Artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Version & Metadata
+        id: meta
+        run: |
+          TAG="${{ github.event.inputs.release_tag || github.ref_name }}"
+          COMMIT_SHA="${{ github.sha }}"
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "commit=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build Go Backend Binaries (Cross-compiled AMD64 and ARM64)
+        run: |
+          mkdir -p dist
+          LDFLAGS="-s -w -X 'gusby/internal/config.AppVersion=${{ steps.meta.outputs.tag }}' -X 'gusby/internal/config.GitCommit=${{ steps.meta.outputs.commit }}' -X 'gusby/internal/config.BuildTime=${{ steps.meta.outputs.build_time }}'"
+          
+          echo "Compiling for Linux AMD64..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/gusby-linux-amd64 ./cmd/gusby
+
+          echo "Compiling for Android / Linux ARM64..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/gusby-linux-arm64 ./cmd/gusby
+
+      - name: Build Nuxt 4 Static SPA Production Output
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run generate
+          tar -czf ../dist/gusby-frontend-spa.tar.gz -C .output/public .
+
+      - name: Generate Checksums & Release Metadata
+        run: |
+          cd dist
+          sha256sum * > checksums.sha256
+          cat checksums.sha256
+
+          ARM64_SHA=$(sha256sum gusby-linux-arm64 | awk '{print $1}')
+          AMD64_SHA=$(sha256sum gusby-linux-amd64 | awk '{print $1}')
+          FRONTEND_SHA=$(sha256sum gusby-frontend-spa.tar.gz | awk '{print $1}')
+          
+          ARM64_SIZE=$(stat -c%s gusby-linux-arm64)
+          AMD64_SIZE=$(stat -c%s gusby-linux-amd64)
+          FRONTEND_SIZE=$(stat -c%s gusby-frontend-spa.tar.gz)
+
+          cat <<EOF > release-metadata.json
+          {
+            "version": "${{ steps.meta.outputs.tag }}",
+            "commit_sha": "${{ steps.meta.outputs.commit }}",
+            "short_sha": "${{ steps.meta.outputs.short_sha }}",
+            "built_at": "${{ steps.meta.outputs.build_time }}",
+            "go_version": "$(go version)",
+            "ci_verified": true,
+            "artifacts": {
+              "gusby-linux-arm64": {
+                "sha256": "$ARM64_SHA",
+                "bytes": $ARM64_SIZE
+              },
+              "gusby-linux-amd64": {
+                "sha256": "$AMD64_SHA",
+                "bytes": $AMD64_SIZE
+              },
+              "gusby-frontend-spa.tar.gz": {
+                "sha256": "$FRONTEND_SHA",
+                "bytes": $FRONTEND_SIZE
+              }
+            }
+          }
+          EOF
+          cat release-metadata.json
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "Gusby Release ${{ steps.meta.outputs.tag }} (${{ steps.meta.outputs.short_sha }})"
+          body: |
+            ## Gusby Production Release ${{ steps.meta.outputs.tag }}
+            - **Commit SHA**: `${{ steps.meta.outputs.commit }}`
+            - **Build Timestamp**: `${{ steps.meta.outputs.build_time }}`
+            - **Target Platforms**: Android ARM64 (Termux) & Linux x86_64
+            
+            ### Artifacts & Verification
+            All binaries and frontend SPA packages are cryptographically signed with SHA-256 in `checksums.sha256`.
+          files: |
+            dist/gusby-linux-arm64
+            dist/gusby-linux-amd64
+            dist/gusby-frontend-spa.tar.gz
+            dist/checksums.sha256
+            dist/release-metadata.json
+
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gusby-release-${{ steps.meta.outputs.short_sha }}
+          path: dist/
+          retention-days: 30

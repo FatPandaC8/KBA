@@ -4,8 +4,10 @@ info:
   version: 1.0.0
   description: Gusby Text-to-Knowledge-Graph Platform REST API
 servers:
-  - url: http://127.0.0.1:8080/api
-    description: Local Development Server
+  - url: http://127.0.0.1:8081/api
+    description: Default Backend Direct API Server
+  - url: /api
+    description: Production Reverse Proxy (Nginx) Server
 
 paths:
   /auth/signup:

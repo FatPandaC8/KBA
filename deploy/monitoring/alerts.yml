@@ -1,0 +1,98 @@
+# ==============================================================================
+# Gusby Prometheus Alerting Rules
+# ==============================================================================
+
+groups:
+  - name: gusby_production_alerts
+    rules:
+      # ------------------------------------------------------------------------
+      # 1. Application Availability & Health
+      # ------------------------------------------------------------------------
+      - alert: GusbyApplicationDown
+        expr: up{job="gusby-app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gusby backend instance is unreachable"
+          description: "Gusby backend has been down for more than 1 minute on {{ $labels.instance }}."
+          investigation: "1. SSH into Xperia host. 2. Run 'pm2 status' and 'pm2 logs gusby-backend'. 3. Verify PostgreSQL is running with 'pg_ctl status'. 4. Run './deploy/termux/status.sh'."
+
+      - alert: GusbyElevatedHTTPErrorRate
+        expr: (sum(rate(gusby_http_errors_total[5m])) / sum(rate(gusby_http_requests_total[5m]))) * 100 > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated HTTP error rate detected (> 5%)"
+          description: "Gusby HTTP 4xx/5xx error rate is currently {{ $value | printf \"%.2f\" }}% over the last 5 minutes."
+          investigation: "1. Check recent error logs in 'pm2 logs gusby-backend --lines 100'. 2. Check Groq API quota or circuit breaker state at '/api/health/ready'. 3. Inspect recent client request patterns."
+
+      - alert: GusbyHighRequestLatency
+        expr: histogram_quantile(0.95, sum(rate(gusby_http_request_duration_seconds_bucket[5m])) by (le)) > 2.0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP 95th percentile latency (> 2s)"
+          description: "Gusby 95th percentile request latency has exceeded 2.0s (currently {{ $value | printf \"%.2f\" }}s)."
+          investigation: "1. Check database connection pool metrics. 2. Verify if Groq API rate limits or network latency is causing delays. 3. Check device CPU temperature and thermal throttling."
+
+      # ------------------------------------------------------------------------
+      # 2. Database Connectivity & Pool Health
+      # ------------------------------------------------------------------------
+      - alert: GusbyDatabasePoolExhaustion
+        expr: (gusby_db_pool_connections{state="acquired"} / gusby_db_pool_connections{state="max"}) * 100 > 80
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connection pool near exhaustion (> 80%)"
+          description: "Database connection pool acquired connections are at {{ $value | printf \"%.1f\" }}% of maximum allowed."
+          investigation: "1. Check for long-running transactions with 'SELECT pid, query, state, age(clock_timestamp(), query_start) FROM pg_stat_activity WHERE state <> 'idle';'. 2. Ensure connection leaks are not occurring in API handlers."
+
+      # ------------------------------------------------------------------------
+      # 3. Background Queue & Job Health
+      # ------------------------------------------------------------------------
+      - alert: GusbyQueueBacklogHigh
+        expr: gusby_queue_active_jobs > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue processing backlog elevated"
+          description: "Gusby background job queue has had more than 20 active/queued jobs for 5 minutes."
+          investigation: "1. Check AI circuit breaker state ('/api/health/ready'). If circuit is open, jobs cannot process. 2. Inspect 'gusby.processing_jobs' table for stuck locked jobs. 3. Check worker logs in PM2."
+
+      - alert: GusbyRepeatedJobFailures
+        expr: rate(gusby_queue_jobs_total{status="failed"}[10m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Repeated background job failures"
+          description: "Document ingestion jobs are failing repeatedly in the queue worker."
+          investigation: "1. Check 'last_error' column in 'gusby.processing_jobs'. 2. Verify external Groq API key validity and RPM/TPM limits. 3. Inspect document payload size and format."
+
+      # ------------------------------------------------------------------------
+      # 4. Host & Storage Constraints
+      # ------------------------------------------------------------------------
+      - alert: GusbyDiskSpacePressure
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 15
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space on Xperia storage (< 15% available)"
+          description: "Host file system has less than 15% remaining storage."
+          investigation: "1. Inspect backup directory ('du -sh ./backups'). 2. Prune old PM2 logs ('pm2 flush'). 3. Remove stale build artifacts in releases/."
+
+      - alert: GusbyMemoryPressure
+        expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 < 15
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low available host memory (< 15%)"
+          description: "System available RAM is below 15% on {{ $labels.instance }}."
+          investigation: "1. Check PM2 memory usage: 'pm2 monit'. 2. Verify PostgreSQL shared buffers. 3. Ensure no memory leaks in Go binary."

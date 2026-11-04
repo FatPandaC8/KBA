@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"gusby/internal/graph"
 	"gusby/internal/llm"
+	"gusby/internal/observability"
 	"gusby/internal/pipeline"
 	"gusby/internal/store"
 )
@@ -21,6 +23,9 @@ type Worker struct {
 	llmClient llm.LLMClient
 	gate      *llm.AIGate
 	interval  time.Duration
+	stopCh    chan struct{}
+	doneCh    chan struct{}
+	stopOnce  sync.Once
 }
 
 func NewWorker(id string, s *store.Store, client llm.LLMClient, gate ...*llm.AIGate) *Worker {
@@ -36,14 +41,19 @@ func NewWorker(id string, s *store.Store, client llm.LLMClient, gate ...*llm.AIG
 		llmClient: client,
 		gate:      g,
 		interval:  1 * time.Second,
+		stopCh:    make(chan struct{}),
+		doneCh:    make(chan struct{}),
 	}
 }
 
 func (w *Worker) Start(ctx context.Context) {
 	go func() {
+		defer close(w.doneCh)
 		for {
 			select {
 			case <-ctx.Done():
+				return
+			case <-w.stopCh:
 				return
 			default:
 				processed, err := w.ProcessNext(ctx)
@@ -51,11 +61,33 @@ func (w *Worker) Start(ctx context.Context) {
 					log.Printf("[worker %s] error processing job: %v", w.id, err)
 				}
 				if !processed {
-					time.Sleep(w.interval)
+					select {
+					case <-ctx.Done():
+						return
+					case <-w.stopCh:
+						return
+					case <-time.After(w.interval):
+					}
 				}
 			}
 		}
 	}()
+}
+
+// Stop initiates graceful worker shutdown and waits for any in-flight job processing to complete
+func (w *Worker) Stop(ctx context.Context) error {
+	w.stopOnce.Do(func() {
+		close(w.stopCh)
+	})
+
+	select {
+	case <-w.doneCh:
+		log.Printf("[worker %s] stopped gracefully", w.id)
+		return nil
+	case <-ctx.Done():
+		log.Printf("[worker %s] shutdown context timed out before worker finished", w.id)
+		return ctx.Err()
+	}
 }
 
 func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
@@ -67,9 +99,19 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 		return false, nil // No jobs available
 	}
 
+	jobStartTime := time.Now()
+	metrics := observability.GetMetrics()
+	if metrics != nil {
+		metrics.QueueActiveJobs.Inc()
+		defer metrics.QueueActiveJobs.Dec()
+	}
+
 	doc, err := w.store.GetDocumentByID(ctx, job.UserID, job.DocumentID)
 	if err != nil || doc == nil {
 		_ = w.store.FailJob(ctx, job.ID, "document not found")
+		if metrics != nil {
+			metrics.RecordJobEvent("failed", "init", time.Since(jobStartTime))
+		}
 		return true, fmt.Errorf("document %v not found", job.DocumentID)
 	}
 
@@ -228,6 +270,10 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 	// 5. Complete Job & Document
 	_ = w.store.CompleteJob(ctx, job.ID)
 	_ = w.store.UpdateDocumentStatus(ctx, job.UserID, doc.ID, "completed", nil)
+
+	if metrics != nil {
+		metrics.RecordJobEvent("completed", "pipeline", time.Since(jobStartTime))
+	}
 
 	log.Printf("[worker %s] document %s completed: %d canonical props, %d proposals, %d conflicts",
 		w.id, doc.ID, summary.CanonicalPropositions, summary.IntegrationProposals, summary.DetectedConflicts)

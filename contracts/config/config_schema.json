@@ -8,9 +8,14 @@
       "type": "string",
       "description": "PostgreSQL connection string (e.g. postgresql://echo:echo_dev_password@127.0.0.1:5432/echo_kb)"
     },
+    "host": {
+      "type": "string",
+      "default": "127.0.0.1",
+      "description": "Bind address on which the Go HTTP backend listens"
+    },
     "port": {
       "type": "integer",
-      "default": 8080,
+      "default": 8081,
       "description": "Port on which the Go HTTP backend listens"
     },
     "env": {

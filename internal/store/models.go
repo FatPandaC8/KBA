@@ -18,12 +18,12 @@ type User struct {
 }
 
 type Session struct {
-	ID        uuid.UUID `json:"id"`
-	UserID    uuid.UUID `json:"user_id"`
-	TokenHash string    `json:"-"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         uuid.UUID `json:"id"`
+	UserID     uuid.UUID `json:"user_id"`
+	TokenHash  string    `json:"-"`
+	CreatedAt  time.Time `json:"created_at"`
 	LastUsedAt time.Time `json:"last_used_at"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 type Document struct {
@@ -82,21 +82,21 @@ type ExtractedConcept struct {
 }
 
 type ExtractedProposition struct {
-	ID                 uuid.UUID `json:"id"`
-	UserID             uuid.UUID `json:"user_id"`
-	ExtractionRunID    uuid.UUID `json:"extraction_run_id"`
-	ChunkID            uuid.UUID `json:"chunk_id"`
-	SubjectRaw         string    `json:"subject_raw"`
-	Predicate          string    `json:"predicate"`
-	ObjectRaw          string    `json:"object_raw"`
-	EvidenceQuote      string    `json:"evidence_quote"`
-	ConfidenceScore    float64   `json:"confidence_score"`
-	IsValidEvidence    bool      `json:"is_valid_evidence"`
-	EvidenceByteStart  *int      `json:"evidence_byte_start,omitempty"`
-	EvidenceByteEnd    *int      `json:"evidence_byte_end,omitempty"`
-	EvidenceCharStart  *int      `json:"evidence_char_start,omitempty"`
-	EvidenceCharEnd    *int      `json:"evidence_char_end,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
+	ID                uuid.UUID `json:"id"`
+	UserID            uuid.UUID `json:"user_id"`
+	ExtractionRunID   uuid.UUID `json:"extraction_run_id"`
+	ChunkID           uuid.UUID `json:"chunk_id"`
+	SubjectRaw        string    `json:"subject_raw"`
+	Predicate         string    `json:"predicate"`
+	ObjectRaw         string    `json:"object_raw"`
+	EvidenceQuote     string    `json:"evidence_quote"`
+	ConfidenceScore   float64   `json:"confidence_score"`
+	IsValidEvidence   bool      `json:"is_valid_evidence"`
+	EvidenceByteStart *int      `json:"evidence_byte_start,omitempty"`
+	EvidenceByteEnd   *int      `json:"evidence_byte_end,omitempty"`
+	EvidenceCharStart *int      `json:"evidence_char_start,omitempty"`
+	EvidenceCharEnd   *int      `json:"evidence_char_end,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type Concept struct {
@@ -123,23 +123,23 @@ type ConceptAlias struct {
 }
 
 type Proposition struct {
-	ID                     uuid.UUID      `json:"id"`
-	UserID                 uuid.UUID      `json:"user_id"`
-	SubjectConceptID       uuid.UUID      `json:"subject_concept_id"`
-	Predicate              string         `json:"predicate"`
-	ObjectConceptID        uuid.UUID      `json:"object_concept_id"`
-	Qualifiers             map[string]any `json:"qualifiers"`
-	IsCanonical            bool           `json:"is_canonical"`
-	HasConflict            bool           `json:"has_conflict"`
-	Status                 string         `json:"status"` // active, retracted
-	RetractedAt            *time.Time     `json:"retracted_at,omitempty"`
-	RetractedReason        *string        `json:"retracted_reason,omitempty"`
-	ConfidenceExtraction   float64        `json:"confidence_extraction"`
-	ConfidenceEvidence     float64        `json:"confidence_evidence"`
-	ConfidenceResolution   float64        `json:"confidence_resolution"`
-	ConfidenceProposition  float64        `json:"confidence_proposition"`
-	CreatedAt              time.Time      `json:"created_at"`
-	UpdatedAt              time.Time      `json:"updated_at"`
+	ID                    uuid.UUID      `json:"id"`
+	UserID                uuid.UUID      `json:"user_id"`
+	SubjectConceptID      uuid.UUID      `json:"subject_concept_id"`
+	Predicate             string         `json:"predicate"`
+	ObjectConceptID       uuid.UUID      `json:"object_concept_id"`
+	Qualifiers            map[string]any `json:"qualifiers"`
+	IsCanonical           bool           `json:"is_canonical"`
+	HasConflict           bool           `json:"has_conflict"`
+	Status                string         `json:"status"` // active, retracted
+	RetractedAt           *time.Time     `json:"retracted_at,omitempty"`
+	RetractedReason       *string        `json:"retracted_reason,omitempty"`
+	ConfidenceExtraction  float64        `json:"confidence_extraction"`
+	ConfidenceEvidence    float64        `json:"confidence_evidence"`
+	ConfidenceResolution  float64        `json:"confidence_resolution"`
+	ConfidenceProposition float64        `json:"confidence_proposition"`
+	CreatedAt             time.Time      `json:"created_at"`
+	UpdatedAt             time.Time      `json:"updated_at"`
 }
 
 type PropositionEvidence struct {
@@ -179,20 +179,20 @@ type TopicMembership struct {
 }
 
 type IntegrationProposal struct {
-	ID                     uuid.UUID      `json:"id"`
-	UserID                 uuid.UUID      `json:"user_id"`
-	DocumentID             uuid.UUID      `json:"document_id"`
-	ItemType               string         `json:"item_type"` // concept, proposition, merge
-	Payload                map[string]any `json:"payload"`
-	ConfidenceExtraction   float64        `json:"confidence_extraction"`
-	ConfidenceEvidence     float64        `json:"confidence_evidence"`
-	ConfidenceResolution   float64        `json:"confidence_resolution"`
-	ConfidenceProposition  float64        `json:"confidence_proposition"`
-	Status                 string         `json:"status"` // pending, approved, rejected
-	ReviewerType           *string        `json:"reviewer_type,omitempty"`
-	ReviewNotes            *string        `json:"review_notes,omitempty"`
-	CreatedAt              time.Time      `json:"created_at"`
-	ResolvedAt             *time.Time     `json:"resolved_at,omitempty"`
+	ID                    uuid.UUID      `json:"id"`
+	UserID                uuid.UUID      `json:"user_id"`
+	DocumentID            uuid.UUID      `json:"document_id"`
+	ItemType              string         `json:"item_type"` // concept, proposition, merge
+	Payload               map[string]any `json:"payload"`
+	ConfidenceExtraction  float64        `json:"confidence_extraction"`
+	ConfidenceEvidence    float64        `json:"confidence_evidence"`
+	ConfidenceResolution  float64        `json:"confidence_resolution"`
+	ConfidenceProposition float64        `json:"confidence_proposition"`
+	Status                string         `json:"status"` // pending, approved, rejected
+	ReviewerType          *string        `json:"reviewer_type,omitempty"`
+	ReviewNotes           *string        `json:"review_notes,omitempty"`
+	CreatedAt             time.Time      `json:"created_at"`
+	ResolvedAt            *time.Time     `json:"resolved_at,omitempty"`
 }
 
 type PropositionConflict struct {
@@ -201,7 +201,7 @@ type PropositionConflict struct {
 	CanonicalPropositionID   uuid.UUID  `json:"canonical_proposition_id"`
 	ConflictingPropositionID uuid.UUID  `json:"conflicting_proposition_id"`
 	ConflictType             string     `json:"conflict_type"` // contradiction, contextual_difference, insufficient_evidence
-	Status                   string     `json:"status"` // open, resolved, acknowledged
+	Status                   string     `json:"status"`        // open, resolved, acknowledged
 	DetectedBy               string     `json:"detected_by"`
 	CreatedAt                time.Time  `json:"created_at"`
 	ResolvedAt               *time.Time `json:"resolved_at,omitempty"`
@@ -264,7 +264,7 @@ type AICallLog struct {
 	PipelineStage    string     `json:"pipeline_stage"`
 	PromptVersion    string     `json:"prompt_version"`
 	LatencyMs        int        `json:"latency_ms"`
-	Status           string     `json:"status"` // success, error
+	Status           string     `json:"status"`      // success, error
 	ErrorClass       string     `json:"error_class"` // none, rate_limited, timeout, server_error, invalid_json, schema_validation_failed, auth_error, budget_exceeded
 	TokensPrompt     int        `json:"tokens_prompt"`
 	TokensCompletion int        `json:"tokens_completion"`

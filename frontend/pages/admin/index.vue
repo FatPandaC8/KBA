@@ -23,6 +23,35 @@
         </div>
       </div>
 
+      <!-- Operational & Deployment Lifecycle Banner -->
+      <div class="p-4 bg-white rounded-xl border border-slate-200/80 shadow-2xs flex flex-wrap items-center justify-between gap-4 text-xs">
+        <div class="flex flex-wrap items-center gap-6">
+          <div class="flex items-center space-x-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span class="font-medium text-slate-500">Service:</span>
+            <span class="font-semibold text-slate-900">Gusby ({{ systemInfo.env || 'production' }})</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span class="font-medium text-slate-500">Version:</span>
+            <span class="font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-800 font-semibold">{{ systemInfo.version || 'v1.0.0' }}</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span class="font-medium text-slate-500">Commit:</span>
+            <span class="font-mono text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">{{ systemInfo.commit_sha ? systemInfo.commit_sha.slice(0, 7) : 'dev' }}</span>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-6">
+          <div class="flex items-center space-x-2">
+            <span class="font-medium text-slate-500">PostgreSQL:</span>
+            <span class="text-emerald-700 font-medium">Pool {{ systemInfo.database?.acquired_conns ?? 0 }}/{{ systemInfo.database?.max_conns ?? 20 }}</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span class="font-medium text-slate-500">Queue Worker:</span>
+            <span class="text-emerald-700 font-medium">Active (Poll 1s)</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Key Metrics 4-Col Grid -->
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <!-- Users Card -->
@@ -164,6 +193,7 @@ const loading = ref(false)
 const metrics = ref<any>({})
 const aiProvider = ref<any>({})
 const aiGate = ref<any>({})
+const systemInfo = ref<any>({})
 
 const stageList = computed(() => [
   { key: 'queued', label: 'Queued (Ready)', count: metrics.value.queue?.queued ?? 0 },
@@ -181,6 +211,7 @@ const fetchOverview = async () => {
     metrics.value = res.metrics || {}
     aiProvider.value = res.ai_provider || {}
     aiGate.value = res.ai_gate || {}
+    systemInfo.value = res.system || {}
   } catch (err) {
     console.error('Failed to load admin overview:', err)
   } finally {

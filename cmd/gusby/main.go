@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -14,14 +16,33 @@ import (
 	"gusby/internal/auth"
 	"gusby/internal/config"
 	"gusby/internal/llm"
+	"gusby/internal/observability"
 	"gusby/internal/queue"
 	"gusby/internal/store"
 )
 
 func main() {
 	cfg := config.LoadConfig()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("[Gusby] Configuration validation failed: %v", err)
+	}
 
-	log.Printf("[Gusby] Starting server (env: %s, port: %d, model: %s)...", cfg.Env, cfg.Port, cfg.GroqModel)
+	// 0. Initialize Observability (Structured Logger, Prometheus Metrics, OpenTelemetry Tracer)
+	logger := observability.InitLogger(cfg.Env, "gusby")
+	metrics := observability.InitMetrics(cfg.Version, cfg.CommitSHA, runtime.Version())
+	_, traceCleanup, err := observability.InitTracer("gusby", cfg.Env)
+	if err != nil {
+		logger.Warn("Failed to initialize OpenTelemetry tracer", slog.String("error", err.Error()))
+	}
+
+	logger.Info("Starting Gusby server",
+		slog.String("version", cfg.Version),
+		slog.String("commit", cfg.CommitSHA),
+		slog.String("env", cfg.Env),
+		slog.String("host", cfg.Host),
+		slog.Int("port", cfg.Port),
+		slog.String("model", cfg.GroqModel),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -29,10 +50,27 @@ func main() {
 	// 1. Initialize Database Store
 	dbStore, err := store.NewStore(ctx, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("[Gusby] Fatal: failed to connect to PostgreSQL: %v", err)
+		logger.Error("Fatal: failed to connect to PostgreSQL", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 	defer dbStore.Close()
-	log.Printf("[Gusby] Connected to PostgreSQL at %s", cfg.DatabaseURL)
+	logger.Info("Connected to PostgreSQL", slog.String("database", cfg.SanitizedDatabaseURL()))
+
+	// Periodic DB pool and uptime metrics updater
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				stat := dbStore.Pool().Stat()
+				metrics.UpdateDBPool(stat.TotalConns(), stat.IdleConns(), stat.AcquiredConns(), stat.MaxConns())
+				metrics.UpdateUptime()
+			}
+		}
+	}()
 
 	// Handle admin CLI commands before normal server startup
 	if len(os.Args) > 1 && os.Args[1] == "admin" {
@@ -78,11 +116,12 @@ func main() {
 	// 4. Initialize HTTP Server
 	server := api.NewServer(cfg, dbStore, llmClient)
 	httpServer := &http.Server{
-		Addr:         fmt.Sprintf("127.0.0.1:%d", cfg.Port),
-		Handler:      server.Routes(),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 45 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+		Handler:           server.Routes(),
+		ReadTimeout:       15 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      45 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	// Graceful shutdown channel
@@ -97,16 +136,28 @@ func main() {
 	}()
 
 	<-shutdownChan
-	log.Println("[Gusby] Shutting down gracefully...")
+	log.Println("[Gusby] Shutdown signal received, shutting down gracefully...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	cancel() // Stop background workers
+	// 1. Drain HTTP server connections
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("[Gusby] Shutdown error: %v", err)
+		log.Printf("[Gusby] HTTP server shutdown error: %v", err)
 	}
-	log.Println("[Gusby] Server stopped.")
+
+	// 2. Wait for background worker to complete any in-flight job
+	if err := worker.Stop(shutdownCtx); err != nil {
+		logger.Warn("Queue worker shutdown warning", slog.String("error", err.Error()))
+	}
+
+	// 3. Flush and clean up tracer provider
+	if traceCleanup != nil {
+		_ = traceCleanup(shutdownCtx)
+	}
+
+	cancel() // Cancel context
+	logger.Info("Server, tracer, and background worker stopped successfully.")
 }
 
 func handleAdminCLI(ctx context.Context, s *store.Store, args []string) {

@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/cors"
 
 	"gusby/internal/auth"
+	"gusby/internal/observability"
 )
 
 func (s *Server) Routes() http.Handler {
@@ -15,12 +16,13 @@ func (s *Server) Routes() http.Handler {
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(observability.HTTPMiddleware(observability.GetMetrics()))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	// CORS configuration for desktop frontend
+	// CORS configuration for desktop & web frontend
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://127.0.0.1:3000", "http://localhost:3000"},
+		AllowedOrigins:   s.cfg.CORSAllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
 		ExposedHeaders:   []string{"Link", "Set-Cookie"},
@@ -28,10 +30,15 @@ func (s *Server) Routes() http.Handler {
 		MaxAge:           300,
 	}))
 
-	r.Use(auth.CSRFProtection())
+	r.Use(auth.CSRFProtection(s.cfg.CORSAllowedOrigins))
+
+	// Observability & Metrics
+	r.Handle("/metrics", observability.HTTPHandler())
 
 	// Public APIs
 	r.Get("/api/health", s.HandleHealth)
+	r.Get("/api/health/live", s.HandleHealth)
+	r.Get("/api/health/ready", s.HandleReadiness)
 	r.Post("/api/auth/signup", s.HandleSignUp)
 	r.Post("/api/auth/login", s.HandleLogin)
 	r.Post("/api/auth/logout", s.HandleLogout)

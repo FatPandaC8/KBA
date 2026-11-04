@@ -35,6 +35,7 @@ func TestAPI_Health(t *testing.T) {
 	_, s, handler := setupTestServer(t)
 	defer s.Close()
 
+	// 1. Liveness endpoint /api/health
 	req := httptest.NewRequest("GET", "/api/health", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -47,8 +48,31 @@ func TestAPI_Health(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse JSON: %v", err)
 	}
-	if resp["service"] != "gusby" {
-		t.Errorf("expected service gusby, got %v", resp["service"])
+	if resp["service"] != "gusby" || resp["status"] != "ok" {
+		t.Errorf("unexpected health response: %v", resp)
+	}
+
+	// 2. Liveness alias /api/health/live
+	reqLive := httptest.NewRequest("GET", "/api/health/live", nil)
+	rrLive := httptest.NewRecorder()
+	handler.ServeHTTP(rrLive, reqLive)
+	if rrLive.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for /api/health/live, got %d", rrLive.Code)
+	}
+
+	// 3. Readiness endpoint /api/health/ready
+	reqReady := httptest.NewRequest("GET", "/api/health/ready", nil)
+	rrReady := httptest.NewRecorder()
+	handler.ServeHTTP(rrReady, reqReady)
+	if rrReady.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for /api/health/ready, got %d: %s", rrReady.Code, rrReady.Body.String())
+	}
+	var readyResp map[string]any
+	if err := json.Unmarshal(rrReady.Body.Bytes(), &readyResp); err != nil {
+		t.Fatalf("failed to parse ready JSON: %v", err)
+	}
+	if readyResp["status"] != "ready" || readyResp["database"] != "connected" {
+		t.Errorf("unexpected readiness response: %v", readyResp)
 	}
 }
 
