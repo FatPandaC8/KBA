@@ -9,7 +9,7 @@ This document provides a comprehensive reference of all environment variables re
 | Variable | Required (Prod) | Default Value | Description & Precedence |
 |---|---|---|---|
 | `GUSBY_ENV` | Optional | `development` | Runtime environment (`development`, `production`, `test`). In `production`, strict validation enforces non-default secrets and dedicated database URLs. |
-| `GUSBY_ENV_FILE` | Optional | `<empty>` | Explicit filesystem path to `.env` file (e.g. `~/services/gusby/shared/.env`). When set, loads environment variables directly from this file. |
+| `GUSBY_ENV_FILE` | Optional | `<empty>` | Explicit filesystem path to `.env` file (e.g. `~/services/gusby/.env`). When set, loads environment variables directly from this file. |
 | `GUSBY_HOST` | Optional | `127.0.0.1` | Loopback bind IP for HTTP server. Keep at `127.0.0.1` so backend is never directly exposed to internet. |
 | `HOST` | Optional | `127.0.0.1` | Fallback for `GUSBY_HOST`. |
 | `GUSBY_PORT` | Optional | `8081` | Network port for Go backend HTTP API. Port 8080 is reserved for Nginx. |
@@ -27,6 +27,10 @@ This document provides a comprehensive reference of all environment variables re
 | `GROQ_TPM` | Optional | `8000` | Token rate limit per minute. |
 | `GUSBY_DAILY_USER_TOKEN_BUDGET` | Optional | `40000` | Daily token budget per user to protect from quota exhaustion. |
 | `E2E_SEED_ENABLED` | Optional | `false` | Development seed accounts flag. **Must be false in production.** |
+| `E2E_ADMIN_EMAIL` | Optional | `<empty>` | Email for development/testing admin account (seeded when `E2E_SEED_ENABLED=true`). |
+| `E2E_ADMIN_PASSWORD` | Optional | `<empty>` | Password for development/testing admin account. |
+| `E2E_USER_1_EMAIL` .. `3` | Optional | `<empty>` | Emails for development/testing non-admin accounts. |
+| `E2E_USER_1_PASSWORD` .. `3` | Optional | `<empty>` | Passwords for development/testing non-admin accounts. |
 
 ---
 
@@ -43,10 +47,10 @@ This document provides a comprehensive reference of all environment variables re
 
 | Variable | Required | Default Value | Description |
 |---|---|---|---|
-| `GUSBY_DEPLOY_ROOT` | Optional | `$HOME/services/gusby` | Production runtime directory root containing `current`, `releases/`, `shared/`, `state/`, and `backups/`. |
+| `GUSBY_DEPLOY_ROOT` | Optional | `$HOME/services/gusby` | Production runtime directory root containing `bin/`, `frontend/`, `logs/`, and `.env`. |
 | `GUSBY_BACKEND_URL` | Optional | `http://127.0.0.1:8081` | Backend health check URL used by `deploy/termux/verify.sh`. |
 | `GUSBY_NGINX_URL` | Optional | `http://127.0.0.1:8080` | Nginx endpoint used by `deploy/termux/verify.sh`. |
-| `GUSBY_BACKUP_DIR` | Optional | `$DEPLOY_ROOT/backups` | Destination directory for `.sql.gz` database backup archives. |
+| `GUSBY_BACKUP_DIR` | Optional | `$HOME/backups/gusby` | Destination directory for `.sql.gz` database backup archives. |
 | `GUSBY_BACKUP_RETENTION_COUNT` | Optional | `10` | Minimum number of backup archives to keep. |
 | `GUSBY_BACKUP_RETENTION_DAYS` | Optional | `7` | Days after which older backups exceeding the retention count are pruned. |
 
@@ -60,4 +64,4 @@ On your target host (Sony Xperia Termux), generate a cryptographically secure se
 openssl rand -base64 32
 ```
 
-Add the resulting 32+ character string into `~/services/gusby/shared/.env`. Never commit this file or print its contents into logs.
+Add the resulting 32+ character string into `~/services/gusby/.env`. Never commit this file or print its contents into logs.

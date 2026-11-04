@@ -39,12 +39,12 @@ psql -d gusby_db -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
 
 ### Step 3: Clone Repository & Configure Runtime Environment
 ```bash
-mkdir -p ~/apps ~/services/gusby/shared/logs ~/services/gusby/backups ~/services/gusby/state
+mkdir -p ~/apps ~/services/gusby/bin ~/services/gusby/frontend ~/services/gusby/logs ~/services/gusby/backups
 git clone https://github.com/FatPandaC8/KBA.git ~/apps/gusby
 cd ~/apps/gusby
 
-# Create shared production environment
-cat <<EOF > ~/services/gusby/shared/.env
+# Create production environment configuration
+cat <<EOF > ~/services/gusby/.env
 GUSBY_ENV=production
 GUSBY_HOST=127.0.0.1
 GUSBY_PORT=8081
@@ -53,7 +53,7 @@ GUSBY_EXPECTED_DB=gusby_db
 GUSBY_SESSION_SECRET=$(openssl rand -base64 32)
 GROQ_API_KEY=your_groq_api_key_here
 EOF
-chmod 600 ~/services/gusby/shared/.env
+chmod 600 ~/services/gusby/.env
 ```
 
 ### Step 4: Restore Latest Database Backup

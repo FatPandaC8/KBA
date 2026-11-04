@@ -12,8 +12,8 @@ This document provides day-to-day operations, monitoring, maintenance, and emerg
 | **Inspect System Health (Read-Only)** | `~/apps/gusby/deploy/termux/verify.sh` |
 | **View System Overview** | `~/apps/gusby/deploy/termux/status.sh` |
 | **Live Backend Logs** | `pm2 logs gusby-backend` |
-| **Persistent Out Log** | `tail -f ~/services/gusby/shared/logs/backend-out.log` |
-| **Persistent Error Log** | `tail -f ~/services/gusby/shared/logs/backend-err.log` |
+| **Persistent Out Log** | `tail -f ~/services/gusby/logs/backend-out.log` |
+| **Persistent Error Log** | `tail -f ~/services/gusby/logs/backend-err.log` |
 | **Restart Backend Process** | `pm2 restart gusby-backend` |
 | **Stop Backend Process** | `pm2 stop gusby-backend` |
 | **Start Nginx** | `nginx` |
@@ -53,7 +53,7 @@ flowchart TD
 Gusby includes built-in admin CLI subcommands in the Go binary:
 
 ```bash
-cd ~/services/gusby/current
+cd ~/services/gusby
 
 # List all admin users
 ./bin/gusby admin list
@@ -117,5 +117,5 @@ pg_ctl -D "$PREFIX/var/lib/postgresql" -l "$PREFIX/var/log/postgresql.log" start
 
 ### Scenario 3: Database target verification error
 If a script warns about `server_lab`:
-- Inspect `~/services/gusby/shared/.env` and verify `GUSBY_DATABASE_URL` targets `gusby_db`.
+- Inspect `~/services/gusby/.env` and verify `GUSBY_DATABASE_URL` targets `gusby_db`.
 - Gusby scripts will unconditionally abort before touching `server_lab`.

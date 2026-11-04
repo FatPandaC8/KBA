@@ -49,7 +49,7 @@ To configure automated daily backups at 03:00 AM:
 
 ```bash
 # In Termux: crontab -e
-0 3 * * * cd /data/data/com.termux/files/home/apps/gusby && ./scripts/backup.sh scheduled >> /data/data/com.termux/files/home/services/gusby/shared/logs/backup.log 2>&1
+0 3 * * * cd /data/data/com.termux/files/home/apps/gusby && ./scripts/backup.sh scheduled >> /data/data/com.termux/files/home/services/gusby/logs/backup.log 2>&1
 ```
 
 ### Backup Artifacts & Naming
